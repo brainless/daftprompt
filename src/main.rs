@@ -12,25 +12,76 @@ use renderer::Renderer;
 use input::InputHandler;
 use ui::UIManager;
 use ui::container::Container;
+use sugacode_indexer::{Indexer, IndexerConfig, CommitData};
 
 #[derive(Parser)]
 #[command(name = "text-explorer", about = "A text repository explorer")]
 struct Args {
-    /// Path to git repository to read log from
     #[arg(short, long, default_value = ".")]
     repo: PathBuf,
 
-    /// Number of commits to display (default: all)
     #[arg(short, long)]
     count: Option<usize>,
+
+    #[arg(long)]
+    index: bool,
+
+    #[arg(long)]
+    reindex: bool,
+
+    #[arg(long)]
+    no_index: bool,
+
+    #[arg(long)]
+    search: Option<String>,
 }
 
-fn main() {
+impl From<&git_log::CommitInfo> for CommitData {
+    fn from(c: &git_log::CommitInfo) -> Self {
+        CommitData {
+            sha: c.sha.clone(),
+            short_hash: c.short_hash.clone(),
+            author_name: c.author_name.clone(),
+            time: c.time.clone(),
+            message_title: c.message_title.clone(),
+            message_body: c.message_body.clone(),
+        }
+    }
+}
+
+fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     let args = Args::parse();
 
-    // Read git log
+    let indexer_config = IndexerConfig::default();
+
+    if args.index || args.reindex {
+        let mut commits = git_log::read_log_all_branches(&args.repo)?;
+        if let Some(count) = args.count {
+            commits.truncate(count);
+        }
+        let commit_data: Vec<CommitData> = commits.iter().map(Into::into).collect();
+        let mut indexer = Indexer::new(&args.repo, &indexer_config)?;
+        let n = if args.reindex {
+            indexer.reindex_commits(&commit_data)?
+        } else {
+            indexer.index_commits(&commit_data)?
+        };
+        println!("Indexed {} commits", n);
+    }
+
+    if let Some(query) = &args.search {
+        let indexer = Indexer::new(&args.repo, &indexer_config)?;
+        let results = indexer.search_hybrid(query, 10)?;
+        for r in &results {
+            let id = r.short_hash.as_str();
+            let title = r.text.lines().next().unwrap_or("");
+            println!("[{:.3}] {:<7} {} — {}", r.score, id, r.author.as_deref().unwrap_or(""), title);
+        }
+        return Ok(());
+    }
+
     let commits = match git_log::read_log(&args.repo) {
         Ok(mut commits) => {
             if let Some(count) = args.count {
@@ -56,6 +107,8 @@ fn main() {
             commits,
         })
         .unwrap();
+
+    Ok(())
 }
 
 struct Application {
