@@ -132,8 +132,8 @@ Use the *position* in the result list, **not** FTS5's `rank` column (which is a 
 ### Task 1: Spike — Verify sqlite-vec Load on Bundled rusqlite
 
 **Priority:** High (blocker)
-**Status:** ⬜ Not Started
-**Estimated Time:** 0.5 hours
+**Status:** ✅ Completed
+**Actual Time:** 0.5 hours
 
 **Description:** `sqlite-vec` is an alpha crate (0.0.1-alpha.7) and the `sqlite3_auto_extension` registration incantation has changed across releases. Verify the exact load incantation against the pinned versions in a throwaway binary **before** writing any DB code, since everything downstream depends on it.
 
@@ -174,8 +174,8 @@ Use the *position* in the result list, **not** FTS5's `rank` column (which is a 
 ### Task 2: Workspace Setup and Dependencies
 
 **Priority:** High
-**Status:** ⬜ Not Started
-**Estimated Time:** 1 hour
+**Status:** ✅ Completed
+**Actual Time:** 0.5 hours
 
 **Description:** Convert the project to a Cargo workspace and create the `sugacode-indexer` crate with all dependencies.
 
@@ -220,8 +220,8 @@ Use the *position* in the result list, **not** FTS5's `rank` column (which is a 
 ### Task 3: Update `git_log.rs` — Multi-Branch, Full SHA, Message Body
 
 **Priority:** High
-**Status:** ⬜ Not Started
-**Estimated Time:** 2 hours
+**Status:** ✅ Completed
+**Actual Time:** 1 hour
 
 **Description:** Extend the existing git log reader to support all local branches, full SHA extraction, and commit message body. Existing `read_log` is updated (not left stale) so it also produces the new fields.
 
@@ -269,8 +269,8 @@ Use the *position* in the result list, **not** FTS5's `rank` column (which is a 
 ### Task 4: `embed.rs` — model2vec-rs Wrapper
 
 **Priority:** High
-**Status:** ⬜ Not Started
-**Estimated Time:** 2 hours
+**Status:** ✅ Completed
+**Actual Time:** 0.5 hours
 
 **Description:** Create a wrapper around model2vec-rs that loads the model and provides batch encoding.
 
@@ -321,8 +321,8 @@ Use the *position* in the result list, **not** FTS5's `rank` column (which is a 
 ### Task 5: `db.rs` — SQLite Schema and Core Operations
 
 **Priority:** High
-**Status:** ⬜ Not Started
-**Estimated Time:** 3 hours
+**Status:** ✅ Completed
+**Actual Time:** 2 hours
 
 **Description:** Implement SQLite schema creation (per-repo DB file, external-content FTS5 with triggers, vec0), plus insert/query operations for FTS5 and vec0.
 
@@ -380,8 +380,8 @@ Use the *position* in the result list, **not** FTS5's `rank` column (which is a 
 ### Task 6: `lib.rs` — Indexer Public API
 
 **Priority:** High
-**Status:** ⬜ Not Started
-**Estimated Time:** 2 hours
+**Status:** ✅ Completed
+**Actual Time:** 1.5 hours
 
 **Description:** Wire together `db.rs` and `embed.rs` into the `Indexer` struct with the public API.
 
@@ -482,8 +482,8 @@ Use the *position* in the result list, **not** FTS5's `rank` column (which is a 
 ### Task 7: CLI Integration — `--index`, `--reindex`, `--search`, `--no-index`
 
 **Priority:** Medium
-**Status:** ⬜ Not Started
-**Estimated Time:** 1.5 hours
+**Status:** ✅ Completed
+**Actual Time:** 1 hour
 
 **Description:** Wire the indexer into the main binary's CLI with index and search commands, kept as a testing/diagnostic surface alongside the GUI search path (Task 8).
 
@@ -565,8 +565,8 @@ Use the *position* in the result list, **not** FTS5's `rank` column (which is a 
 ### Task 8: UI Integration — Cmd+K Hybrid Search with Result Cards
 
 **Priority:** High
-**Status:** ⬜ Not Started
-**Estimated Time:** 3 hours
+**Status:** ✅ Completed
+**Actual Time:** 2 hours
 
 **Description:** Replace the placeholder substring search behind Cmd+K with hybrid search via the indexer. Match results are commit cards rendered on the canvas; the existing non-matching-dim behaviour is retained (otherwise cards brighten normally).
 
@@ -605,8 +605,8 @@ Use the *position* in the result list, **not** FTS5's `rank` column (which is a 
 ### Task 9: Testing and Validation
 
 **Priority:** Medium
-**Status:** ⬜ Not Started
-**Estimated Time:** 2 hours
+**Status:** ✅ Completed
+**Actual Time:** 1 hour
 
 **Description:** Test the full pipeline end-to-end with real repositories, both CLI and GUI.
 
