@@ -23,43 +23,38 @@ impl SearchBox {
             cursor_timer: 0.0,
         }
     }
-    
+
     pub fn update(&mut self, state: &mut AppState, _input: &InputHandler) {
-        // Update position to be centered at bottom
         self.position = Vec2::new(
             (state.window_size.x - self.size.x) / 2.0,
             state.window_size.y - self.size.y - 20.0,
         );
-        
-        // Check if search is active
+
         self.is_focused = state.search_active;
-        
-        // Blink cursor
+
         self.cursor_timer += 1.0;
         if self.cursor_timer >= 30.0 {
             self.cursor_visible = !self.cursor_visible;
             self.cursor_timer = 0.0;
         }
-        
-        // Reset cursor visibility when typing
+
         if !state.search_query.is_empty() {
             self.cursor_visible = true;
         }
     }
-    
+
     pub fn render(
         &self,
         state: &AppState,
         text_areas: &mut Vec<TextAreaData>,
         font_system: &mut FontSystem,
     ) {
-        // Search box background
         let bg_color = if self.is_focused {
             Color::rgba(50, 50, 50, 240)
         } else {
             Color::rgba(40, 40, 40, 220)
         };
-        
+
         let bg_text = " ".repeat((self.size.x * self.size.y / 100.0) as usize);
         let bg_buffer = create_text_buffer(
             font_system,
@@ -69,7 +64,7 @@ impl SearchBox {
             Some(self.size.x),
             Some(self.size.y),
         );
-        
+
         text_areas.push(TextAreaData {
             buffer: bg_buffer,
             left: self.position.x,
@@ -83,14 +78,13 @@ impl SearchBox {
             },
             color: bg_color,
         });
-        
-        // Border
+
         let border_color = if self.is_focused {
             Color::rgba(0, 122, 255, 200)
         } else {
             Color::rgba(80, 80, 80, 150)
         };
-        
+
         let border_text = " ".repeat(self.size.x as usize);
         let border_buffer = create_text_buffer(
             font_system,
@@ -100,7 +94,7 @@ impl SearchBox {
             Some(self.size.x),
             Some(2.0),
         );
-        
+
         text_areas.push(TextAreaData {
             buffer: border_buffer,
             left: self.position.x,
@@ -114,8 +108,7 @@ impl SearchBox {
             },
             color: border_color,
         });
-        
-        // Search icon
+
         let icon_buffer = create_text_buffer(
             font_system,
             "🔍",
@@ -124,7 +117,7 @@ impl SearchBox {
             Some(20.0),
             Some(self.size.y),
         );
-        
+
         text_areas.push(TextAreaData {
             buffer: icon_buffer,
             left: self.position.x + 15.0,
@@ -138,13 +131,11 @@ impl SearchBox {
             },
             color: Color::rgb(150, 150, 150),
         });
-        
-        // Search text or placeholder
+
         let text_x = self.position.x + 45.0;
         let text_width = self.size.x - 90.0;
-        
+
         if state.search_query.is_empty() {
-            // Placeholder text
             let placeholder_text = "Search documents... (⌘K)";
             let placeholder_buffer = create_text_buffer(
                 font_system,
@@ -154,7 +145,7 @@ impl SearchBox {
                 Some(text_width),
                 Some(self.size.y),
             );
-            
+
             text_areas.push(TextAreaData {
                 buffer: placeholder_buffer,
                 left: text_x,
@@ -169,7 +160,6 @@ impl SearchBox {
                 color: Color::rgba(120, 120, 120, 200),
             });
         } else {
-            // Search query text
             let query_buffer = create_text_buffer(
                 font_system,
                 &state.search_query,
@@ -178,7 +168,7 @@ impl SearchBox {
                 Some(text_width),
                 Some(self.size.y),
             );
-            
+
             text_areas.push(TextAreaData {
                 buffer: query_buffer,
                 left: text_x,
@@ -192,8 +182,7 @@ impl SearchBox {
                 },
                 color: Color::rgb(240, 240, 240),
             });
-            
-            // Cursor
+
             if self.is_focused && self.cursor_visible {
                 let cursor_text = "│";
                 let cursor_buffer = create_text_buffer(
@@ -204,11 +193,10 @@ impl SearchBox {
                     Some(10.0),
                     Some(self.size.y),
                 );
-                
-                // Estimate cursor position (simplified)
+
                 let char_width = 8.0;
                 let cursor_x = text_x + state.search_query.len() as f32 * char_width;
-                
+
                 text_areas.push(TextAreaData {
                     buffer: cursor_buffer,
                     left: cursor_x,
@@ -223,8 +211,7 @@ impl SearchBox {
                     color: Color::rgb(0, 122, 255),
                 });
             }
-            
-            // Clear button
+
             let clear_x = self.position.x + self.size.x - 40.0;
             let clear_buffer = create_text_buffer(
                 font_system,
@@ -234,7 +221,7 @@ impl SearchBox {
                 Some(20.0),
                 Some(self.size.y),
             );
-            
+
             text_areas.push(TextAreaData {
                 buffer: clear_buffer,
                 left: clear_x,
@@ -249,8 +236,7 @@ impl SearchBox {
                 color: Color::rgb(150, 150, 150),
             });
         }
-        
-        // Result count
+
         if !state.search_query.is_empty() {
             let matching_count = self.count_matching_cards(state);
             let result_text = format!("{} results", matching_count);
@@ -262,7 +248,7 @@ impl SearchBox {
                 Some(80.0),
                 Some(16.0),
             );
-            
+
             text_areas.push(TextAreaData {
                 buffer: result_buffer,
                 left: self.position.x + self.size.x + 10.0,
@@ -278,20 +264,16 @@ impl SearchBox {
             });
         }
     }
-    
+
     fn count_matching_cards(&self, state: &AppState) -> usize {
         if state.search_query.is_empty() {
-            return state.cards.len();
+            return state.containers.iter().map(|c| c.cards.len()).sum();
         }
-        
+
         let query = state.search_query.to_lowercase();
-        state.cards.iter().filter(|card| {
-            if let Some(doc) = state.documents.get(card.document_id) {
-                doc.title.to_lowercase().contains(&query) ||
-                doc.content.to_lowercase().contains(&query)
-            } else {
-                false
-            }
+        state.containers.iter().flat_map(|c| c.documents.iter()).filter(|doc| {
+            doc.title.to_lowercase().contains(&query) ||
+            doc.content.to_lowercase().contains(&query)
         }).count()
     }
 }

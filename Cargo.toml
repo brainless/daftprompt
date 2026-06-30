@@ -12,3 +12,5 @@ pollster = "0.4"
 log = "0.4"
 env_logger = "0.11"
 bytemuck = "1.19"
+gix = { path = "../gitoxide/gix", default-features = false, features = ["basic", "sha1"] }
+clap = { version = "4", features = ["derive"] }
