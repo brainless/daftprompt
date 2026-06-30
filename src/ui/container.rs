@@ -2,11 +2,13 @@ use glam::Vec2;
 
 use crate::git_log::CommitInfo;
 use crate::state::{CardData, DocumentData};
+use sugacode_indexer::SearchResult;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ContainerType {
     DocumentGrid,
     GitLogColumn,
+    SearchResults,
 }
 
 pub struct Container {
@@ -101,6 +103,62 @@ impl Container {
         }
     }
 
+    pub fn new_search_results(
+        id: usize,
+        position: Vec2,
+        width: f32,
+        viewport_height: f32,
+        results: Vec<SearchResult>,
+    ) -> Self {
+        let card_min_height = 80.0;
+        let card_max_height = 200.0;
+        let card_padding = 8.0;
+        let card_width = width - 16.0;
+
+        let mut cards = Vec::new();
+        let mut documents = Vec::new();
+        let mut y_offset = 0.0;
+
+        for (i, result) in results.iter().enumerate() {
+            let title = result.text.lines().next().unwrap_or("").to_string();
+            let author = result.author.as_deref().unwrap_or("");
+            let content = format!("{}\nAuthor: {}\nDate: ", result.short_hash, author);
+
+            let height = calculate_search_card_height(&title, card_width, card_min_height, card_max_height);
+
+            cards.push(CardData {
+                id: i,
+                position: Vec2::new(8.0, y_offset),
+                size: Vec2::new(card_width, height),
+                document_id: i,
+                is_selected: false,
+                is_hovered: false,
+            });
+
+            documents.push(DocumentData {
+                title,
+                content,
+                file_type: crate::state::IconType::Code,
+                folder_id: 0,
+            });
+
+            y_offset += height + card_padding;
+        }
+
+        let content_height = y_offset.max(viewport_height);
+
+        Self {
+            id,
+            position,
+            size: Vec2::new(width, viewport_height),
+            content_height,
+            scroll_offset: 0.0,
+            container_type: ContainerType::SearchResults,
+            cards,
+            documents,
+        }
+    }
+
     pub fn scroll(&mut self, delta: f32) {
         let max_scroll = (self.content_height - self.size.y).max(0.0);
         self.scroll_offset = (self.scroll_offset + delta).clamp(0.0, max_scroll);
@@ -148,6 +206,23 @@ fn calculate_card_height(
     let message_lines = (commit.message_title.len() as f32 / chars_per_line).ceil().max(1.0);
     let message_height = message_lines * 18.0;
     // Padding
+    let padding = 24.0;
+
+    let total = header_height + separator_height + message_height + padding;
+    total.clamp(min, max)
+}
+
+fn calculate_search_card_height(
+    title: &str,
+    card_width: f32,
+    min: f32,
+    max: f32,
+) -> f32 {
+    let header_height = 24.0;
+    let separator_height = 16.0;
+    let chars_per_line = ((card_width - 20.0) / 7.5).max(1.0);
+    let message_lines = (title.len() as f32 / chars_per_line).ceil().max(1.0);
+    let message_height = message_lines * 18.0;
     let padding = 24.0;
 
     let total = header_height + separator_height + message_height + padding;

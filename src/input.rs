@@ -1,6 +1,7 @@
 use glam::Vec2;
 use winit::event::{WindowEvent, MouseButton, ElementState, MouseScrollDelta};
 use crate::state::AppState;
+use crate::ui::container::ContainerType;
 
 pub struct InputHandler {
     pub mouse_position: Vec2,
@@ -83,6 +84,8 @@ impl InputHandler {
                             if state.search_active {
                                 state.search_active = false;
                                 state.search_query.clear();
+                                state.search_results.clear();
+                                state.containers.retain(|c| c.container_type != ContainerType::SearchResults);
                             } else {
                                 state.selected_folder = None;
                                 for container in &mut state.containers {
@@ -97,6 +100,10 @@ impl InputHandler {
                                 state.search_active = !state.search_active;
                                 if state.search_active {
                                     state.search_query.clear();
+                                } else {
+                                    state.search_query.clear();
+                                    state.search_results.clear();
+                                    state.containers.retain(|c| c.container_type != ContainerType::SearchResults);
                                 }
                             }
                         }

@@ -28,6 +28,10 @@ pub struct AppState {
     // Data state
     pub folders: Vec<FolderData>,
     pub containers: Vec<Container>,
+
+    // Indexer state
+    pub indexer: Option<sugacode_indexer::Indexer>,
+    pub search_results: Vec<sugacode_indexer::SearchResult>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +93,9 @@ impl AppState {
 
             folders: Self::create_sample_folders(),
             containers: Vec::new(),
+
+            indexer: None,
+            search_results: Vec::new(),
         }
     }
 

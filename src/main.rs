@@ -96,6 +96,30 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
+    let indexer = if !args.no_index {
+        match Indexer::new(&args.repo, &indexer_config) {
+            Ok(mut indexer) => {
+                match git_log::read_log_all_branches(&args.repo) {
+                    Ok(all_commits) => {
+                        let commit_data: Vec<CommitData> = all_commits.iter().map(Into::into).collect();
+                        match indexer.index_commits(&commit_data) {
+                            Ok(n) => log::info!("Indexed {n} new commits"),
+                            Err(e) => log::warn!("Failed to index commits: {e}"),
+                        }
+                    }
+                    Err(e) => log::warn!("Failed to read all branches: {e}"),
+                }
+                Some(indexer)
+            }
+            Err(e) => {
+                log::warn!("Failed to create indexer: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
     event_loop
         .run_app(&mut Application {
@@ -105,6 +129,7 @@ fn main() -> anyhow::Result<()> {
             ui_manager: None,
             window: None,
             commits,
+            indexer,
         })
         .unwrap();
 
@@ -118,6 +143,7 @@ struct Application {
     ui_manager: Option<UIManager>,
     window: Option<std::sync::Arc<winit::window::Window>>,
     commits: Vec<git_log::CommitInfo>,
+    indexer: Option<Indexer>,
 }
 
 impl winit::application::ApplicationHandler for Application {
@@ -136,6 +162,8 @@ impl winit::application::ApplicationHandler for Application {
         );
 
         let mut state = AppState::new(window.inner_size().into());
+
+        state.indexer = self.indexer.take();
 
         // Create git log container
         if !self.commits.is_empty() {

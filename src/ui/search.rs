@@ -2,6 +2,7 @@ use crate::state::AppState;
 use crate::input::InputHandler;
 use crate::renderer::TextAreaData;
 use crate::ui::create_text_buffer;
+use crate::ui::container::{Container, ContainerType};
 use glam::Vec2;
 use glyphon::{Color, FontSystem, TextBounds};
 
@@ -11,6 +12,7 @@ pub struct SearchBox {
     pub is_focused: bool,
     pub cursor_visible: bool,
     pub cursor_timer: f32,
+    pub last_searched_query: String,
 }
 
 impl SearchBox {
@@ -21,6 +23,7 @@ impl SearchBox {
             is_focused: false,
             cursor_visible: true,
             cursor_timer: 0.0,
+            last_searched_query: String::new(),
         }
     }
 
@@ -40,6 +43,47 @@ impl SearchBox {
 
         if !state.search_query.is_empty() {
             self.cursor_visible = true;
+        }
+
+        if state.search_active && state.search_query != self.last_searched_query {
+            if state.search_query.is_empty() {
+                state.search_results.clear();
+                state.containers.retain(|c| c.container_type != ContainerType::SearchResults);
+                self.last_searched_query.clear();
+            } else if state.indexer.is_some() {
+                let query = state.search_query.clone();
+                if let Some(ref indexer) = state.indexer {
+                    match indexer.search_hybrid(&query, 20) {
+                        Ok(results) => {
+                            state.containers.retain(|c| c.container_type != ContainerType::SearchResults);
+                            if !results.is_empty() {
+                                let container_width = 500.0;
+                                let container_height = state.window_size.y - 40.0;
+                                let container = Container::new_search_results(
+                                    9999,
+                                    Vec2::new(620.0, 20.0),
+                                    container_width,
+                                    container_height,
+                                    results,
+                                );
+                                state.containers.push(container);
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("Search failed: {e}");
+                        }
+                    }
+                }
+                self.last_searched_query = query;
+            } else {
+                self.last_searched_query = state.search_query.clone();
+            }
+        }
+
+        if !state.search_active && !self.last_searched_query.is_empty() {
+            state.search_results.clear();
+            state.containers.retain(|c| c.container_type != ContainerType::SearchResults);
+            self.last_searched_query.clear();
         }
     }
 
@@ -268,6 +312,13 @@ impl SearchBox {
     fn count_matching_cards(&self, state: &AppState) -> usize {
         if state.search_query.is_empty() {
             return state.containers.iter().map(|c| c.cards.len()).sum();
+        }
+
+        if state.indexer.is_some() {
+            return state.containers.iter()
+                .filter(|c| c.container_type == ContainerType::SearchResults)
+                .map(|c| c.cards.len())
+                .sum();
         }
 
         let query = state.search_query.to_lowercase();
