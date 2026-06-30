@@ -69,6 +69,9 @@ fn main() -> anyhow::Result<()> {
             indexer.index_commits(&commit_data)?
         };
         println!("Indexed {} commits", n);
+        if args.search.is_none() {
+            return Ok(());
+        }
     }
 
     if let Some(query) = &args.search {
