@@ -565,7 +565,7 @@ Separate search mode activated by `Cmd+Shift+K` (vs `Cmd+K` for commits). The se
 ### Task 7: CLI Integration — `--index-code` and `--search-code`
 
 **Priority:** Medium
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 **Estimated Time:** 1 hour
 
 **Description:** Add CLI flags for code indexing and searching, separate from the existing commit flags.

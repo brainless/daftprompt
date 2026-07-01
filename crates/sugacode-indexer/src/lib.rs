@@ -2,6 +2,8 @@ pub mod code;
 pub mod db;
 pub mod embed;
 
+pub use code::SymbolKind;
+
 use std::path::{Path, PathBuf};
 use std::sync::Once;
 

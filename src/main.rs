@@ -12,7 +12,7 @@ use renderer::Renderer;
 use input::InputHandler;
 use ui::UIManager;
 use ui::container::Container;
-use sugacode_indexer::{Indexer, IndexerConfig, CommitData};
+use sugacode_indexer::{Indexer, IndexerConfig, CommitData, SymbolKind};
 
 #[derive(Parser)]
 #[command(name = "text-explorer", about = "A text repository explorer")]
@@ -34,6 +34,15 @@ struct Args {
 
     #[arg(long)]
     search: Option<String>,
+
+    #[arg(long)]
+    index_code: bool,
+
+    #[arg(long)]
+    reindex_code: bool,
+
+    #[arg(long)]
+    search_code: Option<String>,
 }
 
 impl From<&git_log::CommitInfo> for CommitData {
@@ -55,6 +64,48 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let indexer_config = IndexerConfig::default();
+
+    if args.index_code || args.reindex_code {
+        let mut indexer = Indexer::new(&args.repo, &indexer_config)?;
+        let report = if args.reindex_code {
+            indexer.reindex_code()?
+        } else {
+            indexer.index_code()?
+        };
+        println!("Code index: {} files scanned, {} changed, {} deleted, {} symbols indexed",
+            report.files_scanned, report.files_changed, report.files_deleted, report.symbols_indexed);
+        if args.search_code.is_none() {
+            return Ok(());
+        }
+    }
+
+    if let Some(query) = &args.search_code {
+        let indexer = Indexer::new(&args.repo, &indexer_config)?;
+        let results = indexer.search_code_hybrid(query, 10)?;
+        for r in &results {
+            let _kind = format!("{:?}", r.symbol_kind).to_lowercase();
+            let kind_abbr = match r.symbol_kind {
+                SymbolKind::Function => "fn",
+                SymbolKind::Struct => "struct",
+                SymbolKind::Enum => "enum",
+                SymbolKind::Trait => "trait",
+                SymbolKind::ImplMethod => "fn",
+                SymbolKind::TraitMethod => "fn",
+                SymbolKind::TypeAlias => "type",
+                SymbolKind::Const => "const",
+                SymbolKind::Static => "static",
+                SymbolKind::Module => "mod",
+                SymbolKind::Macro => "macro",
+                SymbolKind::Comments => "comments",
+                SymbolKind::Imports => "imports",
+            };
+            println!("[{:.3}] {:<8} {}:{}       {} — {}",
+                r.score, kind_abbr, r.file_path, r.line_start,
+                r.identifier.split("::").last().unwrap_or(""),
+                r.text.lines().next().unwrap_or(""));
+        }
+        return Ok(());
+    }
 
     if args.index || args.reindex {
         let mut commits = git_log::read_log_all_branches(&args.repo)?;
@@ -111,6 +162,10 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                     Err(e) => log::warn!("Failed to read all branches: {e}"),
+                }
+                match indexer.index_code() {
+                    Ok(report) => log::info!("Indexed {} code symbols from {} files", report.symbols_indexed, report.files_changed),
+                    Err(e) => log::warn!("Failed to index code: {e}"),
                 }
                 Some(indexer)
             }
