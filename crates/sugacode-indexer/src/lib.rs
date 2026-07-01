@@ -51,6 +51,17 @@ pub struct SearchResult {
     pub match_type: MatchType,
 }
 
+pub struct CodeSearchResult {
+    pub identifier: String,
+    pub symbol_kind: code::SymbolKind,
+    pub file_path: String,
+    pub line_start: usize,
+    pub line_end: usize,
+    pub text: String,
+    pub score: f32,
+    pub match_type: MatchType,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MatchType {
     Fts,
@@ -98,6 +109,51 @@ fn extract_short_hash(metadata: &Option<String>) -> String {
                 .and_then(|v| v.get("short_hash")?.as_str().map(String::from))
         })
         .unwrap_or_default()
+}
+
+fn parse_symbol_kind(s: &str) -> code::SymbolKind {
+    match s {
+        "function" => code::SymbolKind::Function,
+        "struct" => code::SymbolKind::Struct,
+        "enum" => code::SymbolKind::Enum,
+        "trait" => code::SymbolKind::Trait,
+        "implmethod" => code::SymbolKind::ImplMethod,
+        "traitmethod" => code::SymbolKind::TraitMethod,
+        "typealias" => code::SymbolKind::TypeAlias,
+        "const" => code::SymbolKind::Const,
+        "static" => code::SymbolKind::Static,
+        "module" => code::SymbolKind::Module,
+        "macro" => code::SymbolKind::Macro,
+        "comments" => code::SymbolKind::Comments,
+        "imports" => code::SymbolKind::Imports,
+        _ => code::SymbolKind::Function,
+    }
+}
+
+fn parse_code_search_result(detail: &ItemDetail, score: f32, match_type: MatchType) -> CodeSearchResult {
+    let (file_path, line_start, line_end, symbol_kind) = match &detail.metadata {
+        Some(m) => {
+            let v: serde_json::Value = serde_json::from_str(m).unwrap_or_default();
+            let file_path = v.get("file_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let line_start = v.get("line_start").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let line_end = v.get("line_end").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let kind_str = v.get("symbol_kind").and_then(|v| v.as_str()).unwrap_or("function");
+            let symbol_kind = parse_symbol_kind(kind_str);
+            (file_path, line_start, line_end, symbol_kind)
+        }
+        None => (String::new(), 0, 0, code::SymbolKind::Function),
+    };
+
+    CodeSearchResult {
+        identifier: detail.identifier.clone(),
+        symbol_kind,
+        file_path,
+        line_start,
+        line_end,
+        text: detail.text.clone(),
+        score,
+        match_type,
+    }
 }
 
 impl Indexer {
@@ -448,6 +504,86 @@ impl Indexer {
                     score: score as f32,
                     match_type: MatchType::Hybrid,
                 });
+            }
+        }
+        Ok(results)
+    }
+
+    pub fn search_code_text(&self, query: &str, limit: usize) -> anyhow::Result<Vec<CodeSearchResult>> {
+        let hits = db::search_fts_filtered(&self.db, query, "code", limit)?;
+        let mut results = Vec::new();
+        for (id, score) in hits {
+            if let Some(detail) = lookup_item(&self.db, id)? {
+                results.push(parse_code_search_result(&detail, score as f32, MatchType::Fts));
+            }
+        }
+        Ok(results)
+    }
+
+    pub fn search_code_similar(&self, query: &str, limit: usize) -> anyhow::Result<Vec<CodeSearchResult>> {
+        let embedder = match &self.embedder {
+            Some(e) => e,
+            None => return Ok(Vec::new()),
+        };
+
+        let query_embedding = embedder.encode_single(query);
+        let hits = db::search_vec_code(&self.db, &query_embedding, limit)?;
+
+        let mut results = Vec::new();
+        for (id, score) in hits {
+            if let Some(detail) = lookup_item(&self.db, id)? {
+                results.push(parse_code_search_result(&detail, score as f32, MatchType::Vector));
+            }
+        }
+        Ok(results)
+    }
+
+    pub fn search_code_hybrid(&self, query: &str, limit: usize) -> anyhow::Result<Vec<CodeSearchResult>> {
+        let fts_hits = db::search_fts_filtered(&self.db, query, "code", limit)?;
+
+        let vec_hits = if let Some(ref embedder) = self.embedder {
+            let query_embedding = embedder.encode_single(query);
+            db::search_vec_code(&self.db, &query_embedding, limit)?
+        } else {
+            Vec::new()
+        };
+
+        if vec_hits.is_empty() {
+            let mut results = Vec::new();
+            for (id, score) in &fts_hits {
+                if let Some(detail) = lookup_item(&self.db, *id)? {
+                    results.push(parse_code_search_result(&detail, *score as f32, MatchType::Fts));
+                }
+            }
+            return Ok(results);
+        }
+
+        let k: f64 = 60.0;
+        let w_fts: f64 = 1.0;
+        let w_vec: f64 = 1.0;
+
+        let mut scores: std::collections::HashMap<i64, f64> = std::collections::HashMap::new();
+
+        for (pos, (id, _)) in fts_hits.iter().enumerate() {
+            let rank = (pos + 1) as f64;
+            let entry = scores.entry(*id).or_insert(0.0);
+            *entry += w_fts / (k + rank);
+        }
+
+        for (pos, (id, _)) in vec_hits.iter().enumerate() {
+            let rank = (pos + 1) as f64;
+            let entry = scores.entry(*id).or_insert(0.0);
+            *entry += w_vec / (k + rank);
+        }
+
+        let mut ranked: Vec<(i64, f64)> = scores.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        ranked.truncate(limit);
+
+        let mut results = Vec::new();
+        for (id, score) in ranked {
+            if let Some(detail) = lookup_item(&self.db, id)? {
+                results.push(parse_code_search_result(&detail, score as f32, MatchType::Hybrid));
             }
         }
         Ok(results)

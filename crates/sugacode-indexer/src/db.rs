@@ -144,6 +144,50 @@ pub fn search_vec(db: &Connection, query_embedding: &[f32], limit: usize) -> any
     Ok(results)
 }
 
+pub fn search_fts_filtered(db: &Connection, query: &str, source_type: &str, limit: usize) -> anyhow::Result<Vec<(i64, f64)>> {
+    let mut stmt = db.prepare(
+        "SELECT items.id, items_fts.rank \
+         FROM items_fts \
+         JOIN items ON items.id = items_fts.rowid \
+         WHERE items_fts MATCH ? AND items.source_type = ? \
+         ORDER BY items_fts.rank LIMIT ?",
+    )?;
+    let rows = stmt.query_map(
+        rusqlite::params![query, source_type, limit as i64],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)),
+    )?;
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
+}
+
+pub fn search_vec_code(db: &Connection, query_embedding: &[f32], limit: usize) -> anyhow::Result<Vec<(i64, f64)>> {
+    // Partitioning approach: vec_code is a separate vec0 table scoped to code items,
+    // so no post-filter is needed — every row is already a code item.
+    //
+    // Rejected alternative — over-fetch from vec_items and filter by source_type:
+    //   SELECT item_id, distance FROM vec_items WHERE embedding MATCH ? AND k = ? ORDER BY distance
+    // Then look up each item's source_type in a loop and discard non-"code" rows.
+    // This was rejected because: (a) vec_items contains commit embeddings that dominate
+    // the index, so for a query about code most of the k results would be wasted;
+    // (b) filtering after the fact means the effective result count is unpredictable;
+    // (c) a dedicated vec_code table keeps the cosine-distance index small and focused.
+    let mut stmt = db.prepare(
+        "SELECT item_id, distance FROM vec_code WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+    )?;
+    let rows = stmt.query_map(
+        rusqlite::params![query_embedding.as_bytes(), limit as i64],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)),
+    )?;
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
+}
+
 pub fn delete_source(db: &Connection, source_type: &str) -> anyhow::Result<()> {
     let mut stmt = db.prepare("SELECT id FROM items WHERE source_type = ?")?;
     let ids: Vec<i64> = stmt

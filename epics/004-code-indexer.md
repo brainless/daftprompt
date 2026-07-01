@@ -497,7 +497,7 @@ Separate search mode activated by `Cmd+Shift+K` (vs `Cmd+K` for commits). The se
 ### Task 6: Code Search API — `search_code_hybrid()`
 
 **Priority:** High
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 **Estimated Time:** 1.5 hours
 
 **Description:** Add code-specific search methods to `Indexer` that filter results to `source_type = 'code'`.
