@@ -1,3 +1,4 @@
+pub mod code;
 pub mod db;
 pub mod embed;
 

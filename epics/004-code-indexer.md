@@ -255,7 +255,7 @@ Separate search mode activated by `Cmd+Shift+K` (vs `Cmd+K` for commits). The se
 ### Task 1: Add tree-sitter Dependencies
 
 **Priority:** High
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 **Estimated Time:** 0.5 hours
 
 **Description:** Add tree-sitter and tree-sitter-rust as dependencies to the `sugacode-indexer` crate, plus `xxhash-rust` for stable content hashing.
