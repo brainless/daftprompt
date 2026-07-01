@@ -87,6 +87,9 @@ impl UIManager {
             crate::ui::container::ContainerType::SearchResults => {
                 Color::rgba(20, 20, 35, 230)
             }
+            crate::ui::container::ContainerType::CodeSearchResults => {
+                Color::rgba(20, 30, 25, 230)
+            }
         };
 
         let bg_text = " ".repeat((scaled_size.x * scaled_size.y / 100.0) as usize);
@@ -167,9 +170,10 @@ impl UIManager {
             );
         }
 
-        // Scroll indicator for GitLogColumn and SearchResults
+        // Scroll indicator for GitLogColumn, SearchResults, and CodeSearchResults
         if (container.container_type == crate::ui::container::ContainerType::GitLogColumn
-            || container.container_type == crate::ui::container::ContainerType::SearchResults)
+            || container.container_type == crate::ui::container::ContainerType::SearchResults
+            || container.container_type == crate::ui::container::ContainerType::CodeSearchResults)
             && container.content_height > container.size.y
         {
             let scroll_ratio = container.scroll_offset / (container.content_height - container.size.y);
@@ -227,7 +231,8 @@ impl UIManager {
         // Card background
         let bg_color = match container_type {
             crate::ui::container::ContainerType::GitLogColumn |
-            crate::ui::container::ContainerType::SearchResults => {
+            crate::ui::container::ContainerType::SearchResults |
+            crate::ui::container::ContainerType::CodeSearchResults => {
                 if card.is_hovered {
                     Color::rgba(50, 50, 58, 240)
                 } else {
@@ -271,7 +276,8 @@ impl UIManager {
 
         match container_type {
             crate::ui::container::ContainerType::GitLogColumn |
-            crate::ui::container::ContainerType::SearchResults => {
+            crate::ui::container::ContainerType::SearchResults |
+            crate::ui::container::ContainerType::CodeSearchResults => {
                 self.render_git_card_content(
                     card, doc, screen_pos, scaled_size, clip_top, clip_bottom, clipped_top_offset,
                     state, text_areas, font_system,

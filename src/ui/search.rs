@@ -33,7 +33,7 @@ impl SearchBox {
             state.window_size.y - self.size.y - 20.0,
         );
 
-        self.is_focused = state.search_active;
+        self.is_focused = state.search_active || state.code_search_active;
 
         self.cursor_timer += 1.0;
         if self.cursor_timer >= 30.0 {
@@ -41,21 +41,66 @@ impl SearchBox {
             self.cursor_timer = 0.0;
         }
 
-        if !state.search_query.is_empty() {
+        if !state.search_query.is_empty() || !state.code_search_query.is_empty() {
             self.cursor_visible = true;
         }
 
+        // Handle code search
+        if state.code_search_active && state.code_search_query != self.last_searched_query {
+            if state.code_search_query.is_empty() {
+                state.code_search_results.clear();
+                state
+                    .containers
+                    .retain(|c| c.container_type != ContainerType::CodeSearchResults);
+                self.last_searched_query.clear();
+            } else if state.indexer.is_some() {
+                let query = state.code_search_query.clone();
+                if let Some(ref indexer) = state.indexer {
+                    match indexer.search_code_hybrid(&query, 20) {
+                        Ok(results) => {
+                            state
+                                .containers
+                                .retain(|c| c.container_type != ContainerType::CodeSearchResults);
+                            if !results.is_empty() {
+                                let container_width = 500.0;
+                                let container_height = state.window_size.y - 40.0;
+                                let container = Container::new_code_search_results(
+                                    9998,
+                                    Vec2::new(620.0, 20.0),
+                                    container_width,
+                                    container_height,
+                                    results,
+                                );
+                                state.containers.push(container);
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("Code search failed: {e}");
+                        }
+                    }
+                }
+                self.last_searched_query = query;
+            } else {
+                self.last_searched_query = state.code_search_query.clone();
+            }
+        }
+
+        // Handle commit search
         if state.search_active && state.search_query != self.last_searched_query {
             if state.search_query.is_empty() {
                 state.search_results.clear();
-                state.containers.retain(|c| c.container_type != ContainerType::SearchResults);
+                state
+                    .containers
+                    .retain(|c| c.container_type != ContainerType::SearchResults);
                 self.last_searched_query.clear();
             } else if state.indexer.is_some() {
                 let query = state.search_query.clone();
                 if let Some(ref indexer) = state.indexer {
                     match indexer.search_hybrid(&query, 20) {
                         Ok(results) => {
-                            state.containers.retain(|c| c.container_type != ContainerType::SearchResults);
+                            state
+                                .containers
+                                .retain(|c| c.container_type != ContainerType::SearchResults);
                             if !results.is_empty() {
                                 let container_width = 500.0;
                                 let container_height = state.window_size.y - 40.0;
@@ -80,9 +125,16 @@ impl SearchBox {
             }
         }
 
-        if !state.search_active && !self.last_searched_query.is_empty() {
+        // Clear results when search deactivated
+        if !state.search_active && !state.code_search_active && !self.last_searched_query.is_empty() {
             state.search_results.clear();
-            state.containers.retain(|c| c.container_type != ContainerType::SearchResults);
+            state.code_search_results.clear();
+            state
+                .containers
+                .retain(|c| c.container_type != ContainerType::SearchResults);
+            state
+                .containers
+                .retain(|c| c.container_type != ContainerType::CodeSearchResults);
             self.last_searched_query.clear();
         }
     }
@@ -93,6 +145,8 @@ impl SearchBox {
         text_areas: &mut Vec<TextAreaData>,
         font_system: &mut FontSystem,
     ) {
+        let is_code_search = state.code_search_active;
+
         let bg_color = if self.is_focused {
             Color::rgba(50, 50, 50, 240)
         } else {
@@ -124,7 +178,11 @@ impl SearchBox {
         });
 
         let border_color = if self.is_focused {
-            Color::rgba(0, 122, 255, 200)
+            if is_code_search {
+                Color::rgba(0, 200, 100, 200)
+            } else {
+                Color::rgba(0, 122, 255, 200)
+            }
         } else {
             Color::rgba(80, 80, 80, 150)
         };
@@ -179,8 +237,18 @@ impl SearchBox {
         let text_x = self.position.x + 45.0;
         let text_width = self.size.x - 90.0;
 
-        if state.search_query.is_empty() {
-            let placeholder_text = "Search documents... (⌘K)";
+        let query = if is_code_search {
+            &state.code_search_query
+        } else {
+            &state.search_query
+        };
+
+        if query.is_empty() {
+            let placeholder_text = if is_code_search {
+                "Search code... (⌘⇧K)"
+            } else {
+                "Search documents... (⌘K)"
+            };
             let placeholder_buffer = create_text_buffer(
                 font_system,
                 placeholder_text,
@@ -206,7 +274,7 @@ impl SearchBox {
         } else {
             let query_buffer = create_text_buffer(
                 font_system,
-                &state.search_query,
+                query,
                 14.0,
                 18.0,
                 Some(text_width),
@@ -239,7 +307,13 @@ impl SearchBox {
                 );
 
                 let char_width = 8.0;
-                let cursor_x = text_x + state.search_query.len() as f32 * char_width;
+                let cursor_x = text_x + query.len() as f32 * char_width;
+
+                let cursor_color = if is_code_search {
+                    Color::rgb(0, 200, 100)
+                } else {
+                    Color::rgb(0, 122, 255)
+                };
 
                 text_areas.push(TextAreaData {
                     buffer: cursor_buffer,
@@ -252,7 +326,7 @@ impl SearchBox {
                         right: (cursor_x + 10.0) as i32,
                         bottom: (self.position.y + self.size.y) as i32,
                     },
-                    color: Color::rgb(0, 122, 255),
+                    color: cursor_color,
                 });
             }
 
@@ -281,7 +355,13 @@ impl SearchBox {
             });
         }
 
-        if !state.search_query.is_empty() {
+        let active_query = if is_code_search {
+            &state.code_search_query
+        } else {
+            &state.search_query
+        };
+
+        if !active_query.is_empty() {
             let matching_count = self.count_matching_cards(state);
             let result_text = format!("{} results", matching_count);
             let result_buffer = create_text_buffer(
@@ -310,21 +390,40 @@ impl SearchBox {
     }
 
     fn count_matching_cards(&self, state: &AppState) -> usize {
+        if state.code_search_active {
+            if state.code_search_query.is_empty() {
+                return state.containers.iter().map(|c| c.cards.len()).sum();
+            }
+            return state
+                .containers
+                .iter()
+                .filter(|c| c.container_type == ContainerType::CodeSearchResults)
+                .map(|c| c.cards.len())
+                .sum();
+        }
+
         if state.search_query.is_empty() {
             return state.containers.iter().map(|c| c.cards.len()).sum();
         }
 
         if state.indexer.is_some() {
-            return state.containers.iter()
+            return state
+                .containers
+                .iter()
                 .filter(|c| c.container_type == ContainerType::SearchResults)
                 .map(|c| c.cards.len())
                 .sum();
         }
 
         let query = state.search_query.to_lowercase();
-        state.containers.iter().flat_map(|c| c.documents.iter()).filter(|doc| {
-            doc.title.to_lowercase().contains(&query) ||
-            doc.content.to_lowercase().contains(&query)
-        }).count()
+        state
+            .containers
+            .iter()
+            .flat_map(|c| c.documents.iter())
+            .filter(|doc| {
+                doc.title.to_lowercase().contains(&query)
+                    || doc.content.to_lowercase().contains(&query)
+            })
+            .count()
     }
 }

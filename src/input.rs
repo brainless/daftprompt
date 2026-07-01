@@ -81,7 +81,12 @@ impl InputHandler {
                 if key_event.state == ElementState::Pressed {
                     match &key_event.logical_key {
                         winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
-                            if state.search_active {
+                            if state.code_search_active {
+                                state.code_search_active = false;
+                                state.code_search_query.clear();
+                                state.code_search_results.clear();
+                                state.containers.retain(|c| c.container_type != ContainerType::CodeSearchResults);
+                            } else if state.search_active {
                                 state.search_active = false;
                                 state.search_query.clear();
                                 state.search_results.clear();
@@ -96,9 +101,29 @@ impl InputHandler {
                             }
                         }
                         winit::keyboard::Key::Character(c) => {
-                            if c.as_ref() == "k" && self.modifiers.super_key() {
+                            if c.as_ref() == "k" && self.modifiers.super_key() && self.modifiers.shift_key() {
+                                // Code search mode (Cmd+Shift+K)
+                                state.code_search_active = !state.code_search_active;
+                                if state.code_search_active {
+                                    state.search_active = false;
+                                    state.search_query.clear();
+                                    state.search_results.clear();
+                                    state.code_search_query.clear();
+                                    state.containers.retain(|c| c.container_type != ContainerType::SearchResults);
+                                    state.containers.retain(|c| c.container_type != ContainerType::CodeSearchResults);
+                                } else {
+                                    state.code_search_query.clear();
+                                    state.code_search_results.clear();
+                                    state.containers.retain(|c| c.container_type != ContainerType::CodeSearchResults);
+                                }
+                            } else if c.as_ref() == "k" && self.modifiers.super_key() && !self.modifiers.shift_key() {
+                                // Commit search mode (Cmd+K)
                                 state.search_active = !state.search_active;
                                 if state.search_active {
+                                    state.code_search_active = false;
+                                    state.code_search_query.clear();
+                                    state.code_search_results.clear();
+                                    state.containers.retain(|c| c.container_type != ContainerType::CodeSearchResults);
                                     state.search_query.clear();
                                 } else {
                                     state.search_query.clear();

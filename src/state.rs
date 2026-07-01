@@ -32,6 +32,12 @@ pub struct AppState {
     // Indexer state
     pub indexer: Option<sugacode_indexer::Indexer>,
     pub search_results: Vec<sugacode_indexer::SearchResult>,
+
+    // Code search state
+    pub code_search_active: bool,
+    pub code_search_query: String,
+    pub code_search_results: Vec<sugacode_indexer::CodeSearchResult>,
+    pub code_indexing_in_progress: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +102,11 @@ impl AppState {
 
             indexer: None,
             search_results: Vec::new(),
+
+            code_search_active: false,
+            code_search_query: String::new(),
+            code_search_results: Vec::new(),
+            code_indexing_in_progress: false,
         }
     }
 

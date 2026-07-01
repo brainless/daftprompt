@@ -2,13 +2,14 @@ use glam::Vec2;
 
 use crate::git_log::CommitInfo;
 use crate::state::{CardData, DocumentData};
-use sugacode_indexer::SearchResult;
+use sugacode_indexer::{CodeSearchResult, SearchResult};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ContainerType {
     DocumentGrid,
     GitLogColumn,
     SearchResults,
+    CodeSearchResults,
 }
 
 pub struct Container {
@@ -154,6 +155,74 @@ impl Container {
             content_height,
             scroll_offset: 0.0,
             container_type: ContainerType::SearchResults,
+            cards,
+            documents,
+        }
+    }
+
+    pub fn new_code_search_results(
+        id: usize,
+        position: Vec2,
+        width: f32,
+        viewport_height: f32,
+        results: Vec<CodeSearchResult>,
+    ) -> Self {
+        let card_min_height = 80.0;
+        let card_max_height = 200.0;
+        let card_padding = 8.0;
+        let card_width = width - 16.0;
+
+        let mut cards = Vec::new();
+        let mut documents = Vec::new();
+        let mut y_offset = 0.0;
+
+        for (i, result) in results.iter().enumerate() {
+            let title = result
+                .identifier
+                .split("::")
+                .last()
+                .unwrap_or(&result.identifier)
+                .to_string();
+            let content = format!(
+                "{}\n{}:{}",
+                result.file_path, result.line_start, result.line_end
+            );
+
+            let height = calculate_search_card_height(
+                &title,
+                card_width,
+                card_min_height,
+                card_max_height,
+            );
+
+            cards.push(CardData {
+                id: i,
+                position: Vec2::new(8.0, y_offset),
+                size: Vec2::new(card_width, height),
+                document_id: i,
+                is_selected: false,
+                is_hovered: false,
+            });
+
+            documents.push(DocumentData {
+                title,
+                content,
+                file_type: crate::state::IconType::Code,
+                folder_id: 0,
+            });
+
+            y_offset += height + card_padding;
+        }
+
+        let content_height = y_offset.max(viewport_height);
+
+        Self {
+            id,
+            position,
+            size: Vec2::new(width, viewport_height),
+            content_height,
+            scroll_offset: 0.0,
+            container_type: ContainerType::CodeSearchResults,
             cards,
             documents,
         }
