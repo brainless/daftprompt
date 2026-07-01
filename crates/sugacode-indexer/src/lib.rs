@@ -198,7 +198,8 @@ impl Indexer {
         Ok(Self {
             db,
             embedder,
-            repo_path: repo_path.to_path_buf(),
+            repo_path: std::fs::canonicalize(repo_path)
+                .unwrap_or_else(|_| repo_path.to_path_buf()),
         })
     }
 
@@ -398,8 +399,15 @@ impl Indexer {
     }
 
     pub fn reindex_code(&mut self) -> anyhow::Result<CodeIndexReport> {
-        db::delete_source(&self.db, "code")?;
+        // Delete vec_code rows FIRST (before items), since delete_source_vec
+        // looks up item IDs from the items table.
         db::delete_source_vec(&self.db, "vec_code", "code")?;
+        db::delete_source(&self.db, "code")?;
+        // Also clean up code_files tracking table
+        let tracked = db::code_files_all(&self.db)?;
+        for path in tracked {
+            db::code_file_delete(&self.db, &path)?;
+        }
         self.index_code()
     }
 

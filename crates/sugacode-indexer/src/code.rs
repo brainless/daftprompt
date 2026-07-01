@@ -169,6 +169,11 @@ pub fn extract_symbols(file_path: &Path, source: &str) -> anyhow::Result<Vec<Cod
         });
 
         if let (Some(kind), Some(name), Some(node)) = (symbol_kind, symbol_name, definition_node) {
+            // Skip generic function_item matches for nodes inside impl/trait blocks,
+            // since those are also matched by the more specific impl_method/trait_method patterns.
+            if kind == SymbolKind::Function && is_inside_impl_or_trait(node) {
+                continue;
+            }
             let doc_comment = extract_doc_comment(node, source);
             let signature = extract_signature(node, source);
             let body_excerpt = extract_body_excerpt(node, source);
@@ -233,6 +238,9 @@ fn build_identifier(
     source: &str,
 ) -> String {
     let mut mod_path: Vec<String> = Vec::new();
+    // For impl methods, detect if this is a trait impl by checking if the
+    // impl_item ancestor has a 'trait' child.
+    let mut impl_trait_name: Option<String> = None;
     let mut current = node.parent();
 
     while let Some(parent) = current {
@@ -240,6 +248,14 @@ fn build_identifier(
             if let Some(mod_name) = parent.child_by_field_name("name") {
                 if let Ok(text) = mod_name.utf8_text(source.as_bytes()) {
                     mod_path.push(text.to_string());
+                }
+            }
+        }
+        if parent.kind() == "impl_item" && impl_trait_name.is_none() {
+            // Check if this impl has a trait: impl Trait for Type
+            if let Some(trait_node) = parent.child_by_field_name("trait") {
+                if let Ok(text) = trait_node.utf8_text(source.as_bytes()) {
+                    impl_trait_name = Some(text.to_string());
                 }
             }
         }
@@ -251,7 +267,12 @@ fn build_identifier(
     let mut parts = vec![file_path.to_string()];
     parts.extend(mod_path);
 
-    if let Some(impl_type) = impl_type {
+    // For trait impls: file_path::TraitName::method
+    // For inherent impls: file_path::ImplType::method
+    // For trait default methods: file_path::TraitName::method
+    if let (Some(impl_type), Some(ref impl_trait)) = (impl_type, &impl_trait_name) {
+        parts.push(format!("{}<{}>", impl_trait, impl_type));
+    } else if let Some(impl_type) = impl_type {
         parts.push(impl_type.to_string());
     } else if let Some(trait_type) = trait_type {
         parts.push(trait_type.to_string());
@@ -394,6 +415,17 @@ fn collect_imports(source: &str, import_rows: &[usize]) -> String {
         }
     }
     result.join("\n")
+}
+
+fn is_inside_impl_or_trait(node: tree_sitter::Node) -> bool {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if parent.kind() == "impl_item" || parent.kind() == "trait_item" {
+            return true;
+        }
+        current = parent.parent();
+    }
+    false
 }
 
 pub fn canonicalize_file_path(repo_path: &Path, file_path: &Path) -> String {
