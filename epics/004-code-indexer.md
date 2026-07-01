@@ -20,15 +20,40 @@ This epic adds source code indexing and search to sugacode. Using tree-sitter, w
 **Technology Stack:**
 - **tree-sitter** (v0.25) — Incremental parsing engine
 - **tree-sitter-rust** (v0.24) — Rust grammar for tree-sitter
+- **xxhash-rust** (`xxhash-rust = { version = "0.8", features = ["xxh3"] }`) — Stable, fast non-cryptographic hash for `content_hash` (see Design Decisions)
 - Existing **sugacode-indexer** stack (rusqlite, sqlite-vec, model2vec-rs)
 
 **Design Principles:**
-- Reuse the existing `items` / `items_fts` / `vec_items` schema — no new search tables
+- Reuse the existing `items` / `items_fts` schema — no new search tables for keyword search
+- **Per-`source_type` partitioned `vec0` tables** — `vec_items` for commits, new `vec_code` for code. KNN isolation is free (no over-fetch-and-filter), and each source type can evolve independently (e.g. different embedding dimensions or quantization later). This diverges from Epic 003's single-`vec_items` design; see **Search Isolation** below for the migration note.
 - Per-symbol rows for definitions (fn, struct, enum, trait, impl methods, type alias, const, module)
 - Per-file rows for comments and use/import declarations
-- Methods inside `impl` blocks are indexed individually (the impl block itself is not a separate item)
+- Methods inside `impl` blocks **and default methods inside `trait` blocks** are indexed individually (the impl/trait block itself is not a separate item)
+- **Full canonical namespaces** in `identifier` — include module path and enclosing type so `src/foo.rs::module::TypeName::method` is unambiguous; see **Symbol Extraction**
 - Code search is a **separate** API and UI from commit search
 - Rust first; TypeScript and other languages in follow-up epics
+
+---
+
+## Design Decisions
+
+These decisions resolve ambiguity surfaced during epic review. When implementing, keep the **rejected alternatives as comments in the code** so we can revisit during tuning:
+
+1. **Content hash: xxhash (xxh3), not `DefaultHasher`.** `std::collections::hash_map::DefaultHasher` has no stability guarantee across Rust versions — a toolchain bump would silently invalidate every hash and trigger a full reindex. xxh3 is stable, fast, and purpose-built. *Code comment:* note that `simple_hash` (if any) in `db.rs` must not be reused here unless it is also documented as stable.
+
+2. **Vector KNN: partitioned `vec0` tables per `source_type`, not over-fetch-and-filter.** The original Epic 003 design used a single `vec_items` table and filtered by `source_type` after KNN. For code search this is fragile (if code is a minority of rows, `k = limit * 3` may return too few code rows, and no adaptive fallback was specified). Partitioned tables make isolation exact and free. *Code comment:* keep the over-fetch SQL pattern commented in `db.rs` as a fallback if partitioning ever proves costly.
+
+3. **Body excerpt in embeddings: keep for now, flag for tuning.** Embedding the 10-line body excerpt skews semantic search for large functions (a 500-line function's vector is dominated by its first 10 lines). We keep the body excerpt in the embedded text for v1 to maximize signal on small/medium functions, but the implementation must isolate the text-composition step into one function (`compose_symbol_text`) so the excerpt length / inclusion can be tuned without touching parsing. *Code comment:* list the alternatives (signature+doc-only; rolling-window mean of chunked embeddings; body-FTS5-only) so we can A/B them.
+
+4. **`comments` and `imports` items: FTS5-only, no vector insert.** Concatenated standalone comments and `use` declarations produce low-signal embeddings (TODOs, license headers, stale notes). They go into `items` + `items_fts` for keyword search only; the `vec_code` insert is skipped for these rows. *Code comment:* note that if semantic search over comments becomes useful, we can enable vectors here without schema changes.
+
+5. **Per-file transactions, not one transaction for the whole `index_code()` run.** A single bad file (parse error, non-UTF-8, OOM on a 10k-line file) must not roll back the entire run. Each file's delete+insert+embed+vec-insert is its own transaction. *Code comment:* note that batch-level atomicity is rejected because embeddings are the dominant cost and a partial batch on retry is acceptable.
+
+6. **Validate tree-sitter queries once at startup.** `Query::new` failures would otherwise fail mid-run. The Rust query is compiled once in `Indexer::new` (or lazily cached) and reused for every file; a compile error is a startup error, not a per-file error.
+
+7. **Background auto-index on GUI startup.** Epic 003 already auto-indexes commits on startup; doing both commits and code synchronously for a large repo (the test matrix includes gitoxide/wgpu) would stall the GUI for tens of seconds. Code indexing runs on a background thread; the UI shows a "Indexing code…" indicator and enables `Cmd+Shift+K` results when ready. *Code comment:* note the simpler inline path as a fallback if threading proves messy.
+
+8. **Trait default methods are indexed individually.** Symmetric with `impl` methods. Default method bodies inside `trait_item` are captured the same way as impl methods, producing `file_path::TraitName::method`. Non-default trait method *signatures* are folded into the trait item's text (they have no body to excerpt).
 
 ---
 
@@ -41,12 +66,19 @@ Code items reuse the existing `items` table with `source_type = 'code'`:
 | Column | Value | Example |
 |--------|-------|---------|
 | `source_type` | `'code'` | — |
-| `identifier` | `{file_path}::{symbol_name}` | `src/ui/card.rs::render_card` |
+| `identifier` | `{file_path}::{module_path}::{symbol_name}` (and `::{TypeName}::{method}` for methods) | `src/ui/card.rs::render_card` (top-level fn) or `src/ui/mod.rs::ui::Card::render` (method) |
 | `text` | doc comment + signature + body excerpt | `/// Renders a card...\nfn render_card(&self, card: &CardData) {\n    let pos = ...` |
 | `author` | `NULL` | — |
 | `metadata` | JSON blob | `{"file_path":"src/ui/card.rs","line_start":42,"line_end":58,"symbol_kind":"function","language":"rust","content_hash":"a1b2c3"}` |
 
-For per-file items (comments, imports):
+**Identifier canonical form** (see Design Decisions):
+- `file_path` is normalized to forward slashes, repo-relative, no leading `./`
+- Module path segments are joined with `::` and derived from the tree-sitter `mod_item` ancestors of the symbol
+- Impl methods: `{file_path}::{ImplType}::{method}`
+- Trait default methods: `{file_path}::{TraitName}::{method}`
+- Per-file pseudo-symbols: `{file_path}::__comments`, `{file_path}::__imports`
+
+For per-file items (comments, imports): **FTS5-only, no vector insert** (see Design Decisions):
 
 | Column | Value |
 |--------|-------|
@@ -60,9 +92,9 @@ New table `code_files` tracks which files have been indexed and their change sta
 
 ```sql
 CREATE TABLE IF NOT EXISTS code_files (
-    file_path TEXT PRIMARY KEY,
+    file_path TEXT PRIMARY KEY,   -- canonical form: forward slashes, repo-relative, no leading ./
     mtime INTEGER NOT NULL,
-    content_hash TEXT NOT NULL,
+    content_hash TEXT NOT NULL,   -- xxh3 hex of file bytes (stable across Rust versions)
     indexed_at TEXT NOT NULL
 );
 ```
@@ -71,27 +103,32 @@ CREATE TABLE IF NOT EXISTS code_files (
 1. List tracked `.rs` files from gitoxide (respects `.gitignore`)
 2. For each file, stat the mtime
 3. If mtime matches `code_files.mtime`, skip (fast path)
-4. If mtime differs, hash the file content
+4. If mtime differs, hash the file content with **xxh3**
 5. If hash matches `code_files.content_hash`, update mtime only (touch/git-checkout case)
 6. If hash differs, delete old items for this file, re-parse, re-index
 
+**Hash stability note:** xxh3 output is stable across Rust toolchain versions, unlike `std::collections::hash_map::DefaultHasher`. Do not reuse `simple_hash` (if present in `db.rs`) unless it is also documented as stable — keep a code comment recording this.
+
 ### Symbol Extraction
 
-**Per-symbol items** (one row per definition):
+**Per-symbol items** (one row per definition). `identifier` carries the full canonical namespace (see Data Model) so collisions between nested modules and between top-level and method names are impossible:
 
 | Symbol Kind | Tree-sitter Node | Captured Fields |
 |-------------|-----------------|-----------------|
-| `function` | `function_item` | name, parameters, return type, doc comment, body excerpt |
+| `function` | `function_item` | name, parameters, return type, doc comment, body excerpt; module path from `mod_item` ancestors |
 | `struct` | `struct_item` | name, fields or tuple, doc comment |
 | `enum` | `enum_item` | name, variants, doc comment |
-| `trait` | `trait_item` | name, methods (signatures only), doc comment |
+| `trait` | `trait_item` | name, non-default method signatures (folded into trait text), doc comment |
 | `impl_method` | `function_item` inside `impl_item` | method name, impl type, parameters, doc comment, body excerpt |
+| `trait_method` | `function_item` inside `trait_item` **with a body** | method name, trait name, parameters, doc comment, body excerpt (default methods only — signature-only methods stay folded into the trait item) |
 | `type_alias` | `type_item` | name, aliased type, doc comment |
 | `const` | `const_item`, `static_item` | name, type, value, doc comment |
 | `module` | `mod_item` | name, doc comment |
 | `macro` | `macro_definition` | name, rules excerpt, doc comment |
 
-**Per-file items** (one row per file):
+**Namespace construction:** while walking matches, track the chain of enclosing `mod_item` names (and `impl_item`/`trait_item` type names) to build `{file_path}::{mod1}::{mod2}::{TypeName}::{method}`. This replaces the v1 `file_path::symbol_name` scheme that flattened nested modules.
+
+**Per-file items** (one row per file) — **FTS5-only, no vector insert**:
 
 | Symbol Kind | Content |
 |-------------|---------|
@@ -123,6 +160,16 @@ Queries are stored as `.scm` files (or inline strings) and organized per-languag
     (function_item
       name: (identifier) @name) @definition.impl_method))
 
+;; Trait default methods (methods with bodies inside trait_item).
+;; Signature-only trait methods are NOT captured here — they stay folded
+;; into the trait item's text.
+(trait_item
+  name: (type_identifier) @trait_type
+  body: (declaration_list
+    (function_item
+      body: (block_expression)
+      name: (identifier) @name) @definition.trait_method))
+
 (type_item
   name: (type_identifier) @name) @definition.type_alias
 
@@ -146,14 +193,41 @@ Queries are stored as `.scm` files (or inline strings) and organized per-languag
 
 ### Search Isolation
 
-Code search and commit search are **separate** at both the API and UI level:
+Code search and commit search are **separate** at both the API and UI level. Isolation is achieved by **partitioning vectors into per-`source_type` `vec0` tables**, not by over-fetch-and-filter.
 
-**API level:** New methods on `Indexer` that filter to `source_type = 'code'`:
+#### Schema: partitioned vec0 tables
+
+Epic 003 uses a single `vec_items` virtual table for commit vectors. This epic introduces a sibling `vec_code` table for code vectors. KNN over `vec_code` only ever returns code rows — no filtering, no over-fetching, no probabilistic `k` multiplier.
+
+```sql
+-- Existing (Epic 003) — commit vectors only:
+CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(
+    item_id INTEGER PRIMARY KEY,
+    embedding FLOAT[{dim}]
+);
+
+-- New (Epic 004) — code vectors only:
+CREATE VIRTUAL TABLE IF NOT EXISTS vec_code USING vec0(
+    item_id INTEGER PRIMARY KEY,
+    embedding FLOAT[{dim}]
+);
+```
+
+`{dim}` is read from the loaded model at init time (same as Epic 003). `item_id` references `items.id`; deletes in `items` must cascade to `vec_code` (same trigger/cleanup pattern Epic 003 uses for `vec_items`).
+
+**Migration note for existing DBs:** `vec_code` is created lazily on first code index if absent. Existing `vec_items` rows remain commit-only by convention — no data migration. If a DB was previously polluted with code rows in `vec_items` (only possible from an in-progress Epic 004 build), a `--reindex-code` cleans `vec_code`; stray commit rows are untouched.
+
+*Code comment (in `db.rs`):* keep the rejected over-fetch-and-filter SQL pattern commented out, with a note explaining why partitioning was chosen (exact isolation, free KNN scoping, independent evolution per source type) and when to revisit (if per-source-type tables proliferate beyond 2–3, consider a single partitioned table with a `source_type` column indexed via vec0 metadata if/when sqlite-vec supports it).
+
+#### API level
+
+New methods on `Indexer` that read only from `vec_code` + code-filtered `items_fts`:
+
 - `search_code_text(query, limit)` — FTS5 only, filtered to code items
-- `search_code_similar(query, limit)` — Vector KNN only, filtered to code items
-- `search_code_hybrid(query, limit)` — RRF-combined, filtered to code items
+- `search_code_similar(query, limit)` — Vector KNN over `vec_code` only
+- `search_code_hybrid(query, limit)` — RRF-combined
 
-FTS5 filtering: JOIN back to `items` table and filter by `source_type`:
+**FTS5 filtering** (FTS5 is shared across source types, so a filter JOIN is still required):
 ```sql
 SELECT items.id, items_fts.rank
 FROM items_fts
@@ -162,16 +236,17 @@ WHERE items_fts MATCH ? AND items.source_type = 'code'
 ORDER BY items_fts.rank LIMIT ?
 ```
 
-Vector KNN filtering: over-fetch from `vec0` (e.g. `k = limit * 3`), then filter in application code by `source_type`:
+**Vector KNN** (no filtering needed — `vec_code` is code-only by construction):
 ```sql
-SELECT vec_items.item_id, vec_items.distance
-FROM vec_items
-WHERE vec_items.embedding MATCH ? AND k = ?
-ORDER BY vec_items.distance
+SELECT item_id, distance
+FROM vec_code
+WHERE embedding MATCH ? AND k = ?
+ORDER BY distance
 ```
-Then in Rust: lookup each `item_id` in `items`, discard non-code rows, take top `limit`.
 
-**UI level:** Separate search mode activated by `Cmd+Shift+K` (vs `Cmd+K` for commits). The search box shows a different placeholder ("Search code... (⌘⇧K)") and results render in a `CodeSearchResults` container with code-specific card styling.
+#### UI level
+
+Separate search mode activated by `Cmd+Shift+K` (vs `Cmd+K` for commits). The search box shows a different placeholder ("Search code... (⌘⇧K)") and results render in a `CodeSearchResults` container with code-specific card styling.
 
 ---
 
@@ -183,21 +258,24 @@ Then in Rust: lookup each `item_id` in `items`, discard non-code rows, take top 
 **Status:** ⬜ Not Started
 **Estimated Time:** 0.5 hours
 
-**Description:** Add tree-sitter and tree-sitter-rust as dependencies to the `sugacode-indexer` crate.
+**Description:** Add tree-sitter and tree-sitter-rust as dependencies to the `sugacode-indexer` crate, plus `xxhash-rust` for stable content hashing.
 
 **Details:**
 - Add to `crates/sugacode-indexer/Cargo.toml`:
   ```toml
   tree-sitter = "0.25"
   tree-sitter-rust = "0.24"
+  xxhash-rust = { version = "0.8", features = ["xxh3"] }
   ```
 - Verify `cargo check --workspace` passes
 - Write a minimal smoke test: parse a trivial Rust snippet, assert the tree has a `source_file` root node
+- Write a second smoke test: `xxh3::xxh3_64(b"hello")` is stable across runs (sanity check, not a cross-version guarantee)
 
 **Acceptance Criteria:**
 - [ ] Dependencies resolve and compile
 - [ ] Workspace compiles with `cargo check --workspace`
 - [ ] Smoke test parses Rust code successfully
+- [ ] xxh3 hash function returns a stable, non-`DefaultHasher` value
 
 ---
 
@@ -262,7 +340,7 @@ Then in Rust: lookup each `item_id` in `items`, discard non-code rows, take top 
   pub fn code_files_all(db: &Connection) -> anyhow::Result<Vec<String>>;
   // Returns all tracked file paths (for cleanup of deleted files)
   ```
-- Content hash: use a fast non-cryptographic hash (e.g. `std::collections::hash_map::DefaultHasher` on file bytes, or the existing `simple_hash` function in `db.rs`)
+- Content hash: **xxh3** via `xxhash-rust`. Do not use `std::collections::hash_map::DefaultHasher` (no stability guarantee across Rust versions — would silently trigger full reindexes on toolchain bumps). Keep a code comment recording why `DefaultHasher`/`simple_hash` were rejected.
 
 **Acceptance Criteria:**
 - [ ] `code_files` table created on schema init
@@ -284,12 +362,13 @@ Then in Rust: lookup each `item_id` in `items`, discard non-code rows, take top 
 - Core types:
   ```rust
   pub struct CodeSymbol {
-      pub identifier: String,        // file_path::symbol_name
+      pub identifier: String,        // {file_path}::{module_path}::{symbol_name} (and ::{TypeName}::{method} for methods)
       pub text: String,              // doc comment + signature + body excerpt
       pub symbol_kind: SymbolKind,
-      pub file_path: String,
+      pub file_path: String,         // canonical: forward slashes, repo-relative, no leading ./
       pub line_start: usize,
       pub line_end: usize,
+      pub embed: bool,               // false for Comments/Imports (FTS5-only — see Design Decisions)
   }
 
   pub enum SymbolKind {
@@ -298,6 +377,7 @@ Then in Rust: lookup each `item_id` in `items`, discard non-code rows, take top 
       Enum,
       Trait,
       ImplMethod,
+      TraitMethod,   // default methods with bodies inside trait_item
       TypeAlias,
       Const,
       Static,
@@ -314,31 +394,39 @@ Then in Rust: lookup each `item_id` in `items`, discard non-code rows, take top 
 - Implementation:
   1. Create `Parser`, set language to `tree_sitter_rust::LANGUAGE`
   2. Parse source into a `Tree`
-  3. Create `Query` from the Rust query patterns (see Architecture section)
+  3. Create `Query` from the Rust query patterns (see Architecture section) — **compiled once and reused across files**, not per-file (see Design Decisions)
   4. Execute query with `QueryCursor`, iterate over matches
   5. For each match, extract:
      - Symbol name from `@name` capture
      - Full node text for signature
      - Doc comment: walk preceding siblings for `line_comment` starting with `///` or `//!`, or `block_comment` starting with `/**`
      - Body excerpt: first 10 lines of the function/impl body (or full body if shorter)
-  6. For impl methods: capture the `@impl_type` to build identifier like `file.rs::TypeName::method_name`
-  7. Collect standalone comments (not doc comments) into a single `Comments` symbol per file
-  8. Collect all `use` declarations into a single `Imports` symbol per file
-- Text composition for each symbol:
+  6. **Build the canonical namespace** while walking: track enclosing `mod_item` names plus the `impl_type`/`trait_type` of any enclosing `impl_item`/`trait_item`, joined with `::`. For impl methods: `{file_path}::{ImplType}::{method}`. For trait default methods: `{file_path}::{TraitName}::{method}`. For free items: `{file_path}::{mod_path}::{name}` (empty `mod_path` collapses). See Data Model for the canonical form.
+  7. **Trait default methods**: emitted as `TraitMethod` rows with their own `identifier` and body excerpt. Trait methods *without* bodies (signatures only) are folded into the parent `Trait` symbol's `text` and not emitted separately.
+  8. Collect standalone comments (not doc comments) into a single `Comments` symbol per file, `embed = false`
+  9. Collect all `use` declarations into a single `Imports` symbol per file, `embed = false`
+- **Text composition is isolated into one function:**
+  ```rust
+  fn compose_symbol_text(doc_comment: &str, signature: &str, body_excerpt: &str) -> String
   ```
-  {doc_comment}
-  {signature_line}
-  {body_excerpt}  // first 10 lines, prefixed with "..." if truncated
-  ```
+  This is the single tuning knob for what gets embedded. Keep alternatives as code comments so we can A/B them later:
+  - signature + doc-comment only (drop body excerpt from embeddings — helps large fns)
+  - rolling-window mean of chunked embeddings for long bodies
+  - body-terms-via-FTS5-only (vectors over signature/doc only)
+  Current v1 choice: include the 10-line excerpt in the embedded text.
 - Body excerpt extraction: use the node's byte range to slice source, take first N lines
 
 **Acceptance Criteria:**
-- [ ] Parses a Rust file and extracts all functions, structs, enums, traits, impl methods, type aliases, consts, modules, macros
+- [ ] Parses a Rust file and extracts all functions, structs, enums, traits, impl methods, **trait default methods**, type aliases, consts, modules, macros
 - [ ] Doc comments are correctly associated with their symbols
 - [ ] Impl methods include the impl type in their identifier
+- [ ] Trait default methods include the trait name in their identifier; signature-only trait methods are folded into the trait item
+- [ ] Nested module path is reflected in `identifier` (e.g. `src/lib.rs::outer::inner::fn_name`)
 - [ ] Body excerpts are truncated to ~10 lines with "..." indicator
-- [ ] Standalone comments grouped into one per-file item
-- [ ] Use declarations grouped into one per-file item
+- [ ] Standalone comments grouped into one per-file item with `embed = false`
+- [ ] Use declarations grouped into one per-file item with `embed = false`
+- [ ] `file_path` is canonicalized (forward slashes, repo-relative, no leading `./`)
+- [ ] `compose_symbol_text` is a standalone function with the alternative strategies listed in a comment
 - [ ] Handles files with parse errors gracefully (extract what it can, log warnings)
 
 ---
@@ -371,24 +459,30 @@ Then in Rust: lookup each `item_id` in `items`, discard non-code rows, take top 
      a. Stat mtime
      b. `code_file_get(path)` → compare mtime
      c. If mtime matches → skip
-     d. If mtime differs → read file, compute content hash
+     d. If mtime differs → read file, compute content hash with **xxh3**
      e. If hash matches → `code_file_upsert(path, new_mtime, hash)` (touch case)
-     f. If hash differs → full re-index of this file:
-        - `delete_items_for_identifier_prefix(db, "code", file_path)` — delete all items where identifier starts with `{file_path}::`
+     f. If hash differs → full re-index of this file, **in its own transaction** (see Design Decisions):
+        - `delete_code_file_items(db, file_path)` — delete all items where `source_type='code'` AND `identifier` starts with the canonical `{file_path}::` (exact-prefix match on the normalized form; see helper below)
         - `extract_symbols(path, source)` → `Vec<CodeSymbol>`
         - Build `ItemRow` vec from symbols
         - `insert_items(db, "code", &items)` → item_ids
-        - `encode_batch(texts)` → embeddings
-        - `insert_vectors(db, &item_ids, &embeddings)`
+        - For symbols with `embed == true`: `encode_batch(texts)` → embeddings, then `insert_vectors(db, "code", &item_ids, &embeddings)` writing into **`vec_code`** (not `vec_items`)
+        - Skip the vec insert for `Comments`/`Imports` (`embed == false`) — they are FTS5-only
         - `code_file_upsert(path, mtime, hash)`
   5. Return `CodeIndexReport`
-- All DB operations within a single transaction for atomicity
+- **One transaction per file**, not one for the whole run. A parse error, non-UTF-8 file, or OOM on a 10k-line file must roll back only that file, not the entire batch. Keep a code comment noting why batch-level atomicity was rejected (embeddings are the dominant cost; partial progress on retry is acceptable).
 - Helper function to delete all items for a file:
   ```rust
   fn delete_code_file_items(db: &Connection, file_path: &str) -> anyhow::Result<()>
-  // DELETE FROM items WHERE source_type='code' AND identifier LIKE '{file_path}::%'
-  // (with explicit vec_items cleanup, same pattern as delete_source)
+  // file_path is already canonical (forward slashes, repo-relative, no leading ./).
+  // Delete items where source_type='code' AND identifier = '{file_path}::' || suffix
+  // for any suffix — implemented as identifier LIKE '{file_path}::%' ESCAPE '\'.
+  // IMPORTANT: file_path must not contain LIKE wildcards; escape '%' and '_'.
+  // (Alternative: a separate code_items table keyed by file_path — heavier migration,
+  //  revisit if identifier-prefix matching ever proves slow. Keep as code comment.)
+  // Also delete matching rows from vec_code (same identifier set).
   ```
+- `insert_vectors` is parameterized by the target vec table (`vec_items` for commits, `vec_code` for code) — see Search Isolation.
 
 **Acceptance Criteria:**
 - [ ] First run indexes all tracked `.rs` files
@@ -418,7 +512,7 @@ Then in Rust: lookup each `item_id` in `items`, discard non-code rows, take top 
 - New result type (richer than `SearchResult` for code-specific metadata):
   ```rust
   pub struct CodeSearchResult {
-      pub identifier: String,        // file_path::symbol_name
+      pub identifier: String,        // {file_path}::{module_path}::{symbol_name} (or ::{TypeName}::{method})
       pub symbol_kind: SymbolKind,
       pub file_path: String,
       pub line_start: usize,
@@ -428,7 +522,7 @@ Then in Rust: lookup each `item_id` in `items`, discard non-code rows, take top 
       pub match_type: MatchType,
   }
   ```
-- FTS5 filtering — new DB function:
+- FTS5 filtering — new DB function (FTS5 is shared across source types, so the filter JOIN is still required):
   ```rust
   pub fn search_fts_filtered(db: &Connection, query: &str, source_type: &str, limit: usize)
       -> anyhow::Result<Vec<(i64, f64)>>
@@ -441,22 +535,30 @@ Then in Rust: lookup each `item_id` in `items`, discard non-code rows, take top 
   WHERE items_fts MATCH ? AND items.source_type = ?
   ORDER BY items_fts.rank LIMIT ?
   ```
-- Vector KNN filtering — over-fetch then filter:
+- **Vector KNN over the partitioned `vec_code` table** — no over-fetch, no application-level filtering (see Search Isolation):
   ```rust
-  pub fn search_vec_filtered(db: &Connection, embedding: &[f32], source_type: &str, limit: usize)
+  pub fn search_vec_code(db: &Connection, embedding: &[f32], limit: usize)
       -> anyhow::Result<Vec<(i64, f64)>>
   ```
-  Fetch `k = limit * 3` from vec0, lookup each in `items`, discard non-matching, take top `limit`.
-- RRF combination: same algorithm as existing `search_hybrid` but using the filtered result sets
+  SQL:
+  ```sql
+  SELECT item_id, distance
+  FROM vec_code
+  WHERE embedding MATCH ? AND k = ?
+  ORDER BY distance
+  ```
+  *Code comment:* keep the rejected over-fetch-and-filter pattern (`k = limit * 3` against `vec_items`, then filter by `source_type` in Rust) commented out, with a note on why partitioning replaced it (exact isolation, no probabilistic `k`) and when to revisit (if many `source_type`s make per-type tables proliferate).
+- RRF combination: same algorithm as existing `search_hybrid` but combining the FTS5-filtered set with the `vec_code` KNN set
 - Parse `metadata` JSON to populate `CodeSearchResult` fields
 
 **Acceptance Criteria:**
 - [ ] `search_code_text` returns only code items (no commits)
-- [ ] `search_code_similar` returns only code items
+- [ ] `search_code_similar` reads only from `vec_code` and returns only code items
 - [ ] `search_code_hybrid` combines both with RRF, only code items
 - [ ] Results include file path, line numbers, symbol kind
 - [ ] Empty index returns empty results (no errors)
 - [ ] Queries with no matches return empty results
+- [ ] Commit search (`search_hybrid` etc.) is unaffected — still reads from `vec_items`
 
 ---
 
@@ -497,8 +599,8 @@ Then in Rust: lookup each `item_id` in `items`, discard non-code rows, take top 
   [0.028] struct src/state.rs:10          AppState — Main application state...
   [0.015] fn     src/ui/card.rs:88        render_card — Renders a single document card...
   ```
-- `--reindex-code` drops all code items and re-indexes from scratch
-- GUI startup also auto-indexes code (unless `--no-index`), alongside commit auto-indexing
+- `--reindex-code` drops all code items (and `vec_code` rows) and re-indexes from scratch
+- GUI startup also auto-indexes code (unless `--no-index`), alongside commit auto-indexing — **on a background thread** so the event loop is not blocked (see Design Decisions). The UI shows an "Indexing code…" indicator and enables `Cmd+Shift+K` results when the background index completes. *Code comment:* keep the simpler inline path noted as a fallback if threading proves messy.
 
 **Acceptance Criteria:**
 - [ ] `--index-code` indexes all tracked `.rs` files and prints report
@@ -546,6 +648,7 @@ Then in Rust: lookup each `item_id` in `items`, discard non-code rows, take top 
     - Signature/doc excerpt as body
   - Card colors: slightly different tint from commit cards (e.g. green-ish accent vs blue)
 - **Mutual exclusivity**: Only one search mode active at a time. Opening code search closes commit search and vice versa.
+- **Indexing-in-progress state**: if code indexing is still running in the background when `Cmd+Shift+K` is opened, the search box shows "Indexing code… results will appear shortly" and queries are debounced but not executed until indexing finishes. *Code comment:* note the alternative of running queries against a partial index (already supported by the schema) — acceptable, just needs a UI hint that results may be incomplete.
 
 **Acceptance Criteria:**
 - [ ] `Cmd+Shift+K` opens code search mode
@@ -592,9 +695,12 @@ Then in Rust: lookup each `item_id` in `items`, discard non-code rows, take top 
 - Edge cases:
   - File with syntax errors → extract what tree-sitter can parse, log warnings
   - Empty file → no symbols, no crash
-  - File with only comments → one `comments` item
-  - Very large file (>10k lines) → parses without OOM
+  - File with only comments → one `comments` item, FTS5-indexed only (no `vec_code` row)
+  - Very large file (>10k lines) → parses without OOM; one-file transaction means other files survive a failure here
   - Non-UTF-8 file → skip with warning
+  - Trait with default methods → each default method is its own `TraitMethod` row with `file_path::TraitName::method` identifier; signature-only methods fold into the trait item
+  - Nested modules → `identifier` reflects full module path (`src/lib.rs::outer::inner::fn`)
+  - `touch` (mtime change, no content change) → no re-index; xxh3 hash unchanged
 
 **Acceptance Criteria:**
 - [ ] End-to-end CLI index + search works on sugacode repo
@@ -628,15 +734,15 @@ Then in Rust: lookup each `item_id` in `items`, discard non-code rows, take top 
 
 | File | Action | Description |
 |------|--------|-------------|
-| `crates/sugacode-indexer/Cargo.toml` | Modify | Add `tree-sitter`, `tree-sitter-rust` |
-| `crates/sugacode-indexer/src/schema.sql` | Modify | Add `code_files` table |
-| `crates/sugacode-indexer/src/db.rs` | Modify | Add `code_files` CRUD, `search_fts_filtered`, `search_vec_filtered`, `delete_code_file_items` |
-| `crates/sugacode-indexer/src/code.rs` | **New** | File discovery, tree-sitter parsing, symbol extraction |
-| `crates/sugacode-indexer/src/lib.rs` | Modify | Add `index_code()`, `search_code_*()`, `CodeSearchResult`, `CodeIndexReport`, `SymbolKind` |
-| `src/main.rs` | Modify | Add `--index-code`, `--reindex-code`, `--search-code` CLI args, auto-index code on GUI startup |
-| `src/state.rs` | Modify | Add `code_search_active`, `code_search_query`, `code_search_results` |
+| `crates/sugacode-indexer/Cargo.toml` | Modify | Add `tree-sitter`, `tree-sitter-rust`, `xxhash-rust` |
+| `crates/sugacode-indexer/src/schema.sql` | Modify | Add `code_files` table; add partitioned `vec_code` virtual table (sibling of `vec_items`) |
+| `crates/sugacode-indexer/src/db.rs` | Modify | Add `code_files` CRUD, `search_fts_filtered`, `search_vec_code`, `delete_code_file_items`; parameterize `insert_vectors` by vec-table target. Keep rejected over-fetch-and-filter SQL + `DefaultHasher`/`simple_hash` notes as comments. |
+| `crates/sugacode-indexer/src/code.rs` | **New** | File discovery, tree-sitter parsing, symbol extraction, `compose_symbol_text` (with tuning alternatives in comments), canonical namespace construction |
+| `crates/sugacode-indexer/src/lib.rs` | Modify | Add `index_code()`, `search_code_*()`, `CodeSearchResult`, `CodeIndexReport`, `SymbolKind` (incl. `TraitMethod`); compile tree-sitter `Query` once at construction; thread `embed: bool` through the pipeline |
+| `src/main.rs` | Modify | Add `--index-code`, `--reindex-code`, `--search-code` CLI args; spawn background code index on GUI startup |
+| `src/state.rs` | Modify | Add `code_search_active`, `code_search_query`, `code_search_results`, `code_indexing_in_progress` |
 | `src/input.rs` | Modify | Add `Cmd+Shift+K` shortcut, route input to code search |
-| `src/ui/search.rs` | Modify | Add code search mode with different placeholder/color |
+| `src/ui/search.rs` | Modify | Add code search mode with different placeholder/color; show "Indexing code…" state |
 | `src/ui/container.rs` | Modify | Add `CodeSearchResults` container type and constructor |
 
 ---
@@ -644,16 +750,18 @@ Then in Rust: lookup each `item_id` in `items`, discard non-code rows, take top 
 ## Success Criteria
 
 The feature is complete when:
-1. `cargo run -- --repo . --index-code` indexes all tracked `.rs` files into the existing SQLite DB
+1. `cargo run -- --repo . --index-code` indexes all tracked `.rs` files into the existing `items`/`items_fts` tables and the new `vec_code` table
 2. `cargo run -- --repo . --search-code "query"` returns relevant code symbols and exits
 3. **In the GUI, `Cmd+Shift+K` opens code search and renders result cards on the canvas**
 4. Code search results show symbol kind, file path, line number, and text excerpt
-5. Code search is **separate** from commit search (different API, different UI mode)
-6. Incremental indexing skips unchanged files (mtime + content hash)
-7. `--reindex-code` drops and rebuilds cleanly
-8. GUI startup auto-indexes code alongside commits (unless `--no-index`)
+5. Code search is **separate** from commit search (different API, different UI mode, partitioned `vec_code` table)
+6. Incremental indexing skips unchanged files (mtime + **xxh3** content hash, stable across Rust versions)
+7. `--reindex-code` drops and rebuilds cleanly (clears `items` code rows + `vec_code` rows)
+8. GUI startup auto-indexes code on a **background thread** alongside commits (unless `--no-index`)
 9. Tree-sitter queries are structured for easy addition of new languages
 10. Code compiles without warnings across the workspace
+11. `Comments`/`Imports` items are FTS5-only (no `vec_code` rows)
+12. Trait default methods are indexed individually; nested-module paths are reflected in `identifier`
 
 ---
 
