@@ -352,7 +352,7 @@ Separate search mode activated by `Cmd+Shift+K` (vs `Cmd+K` for commits). The se
 ### Task 4: Tree-sitter Symbol Extraction for Rust
 
 **Priority:** High
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 **Estimated Time:** 3 hours
 
 **Description:** Implement the core parsing logic that extracts symbols from a Rust file using tree-sitter queries.
