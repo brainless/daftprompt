@@ -434,7 +434,7 @@ Separate search mode activated by `Cmd+Shift+K` (vs `Cmd+K` for commits). The se
 ### Task 5: Code Indexing — `index_code()` on Indexer
 
 **Priority:** High
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 **Estimated Time:** 2 hours
 
 **Description:** Wire together file discovery, symbol extraction, and the existing DB/embedding pipeline into `Indexer::index_code()`.

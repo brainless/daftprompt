@@ -53,6 +53,13 @@ pub fn init_schema(db: &Connection, dim: usize) -> anyhow::Result<()> {
         ),
         [],
     )?;
+    db.execute(
+        &format!(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS vec_code USING vec0(\
+                item_id INTEGER PRIMARY KEY, embedding float[{dim}] distance_metric=cosine)"
+        ),
+        [],
+    )?;
     Ok(())
 }
 
@@ -93,6 +100,15 @@ pub fn insert_items(db: &Connection, source_type: &str, items: &[ItemRow]) -> an
 
 pub fn insert_vectors(db: &Connection, item_ids: &[i64], embeddings: &[Vec<f32>]) -> anyhow::Result<()> {
     let mut stmt = db.prepare("INSERT INTO vec_items(item_id, embedding) VALUES (?, ?)")?;
+    for (id, emb) in item_ids.iter().zip(embeddings.iter()) {
+        stmt.execute(rusqlite::params![id, emb.as_bytes()])?;
+    }
+    Ok(())
+}
+
+pub fn insert_vectors_into(db: &Connection, table: &str, item_ids: &[i64], embeddings: &[Vec<f32>]) -> anyhow::Result<()> {
+    let sql = format!("INSERT INTO {}(item_id, embedding) VALUES (?, ?)", table);
+    let mut stmt = db.prepare(&sql)?;
     for (id, emb) in item_ids.iter().zip(embeddings.iter()) {
         stmt.execute(rusqlite::params![id, emb.as_bytes()])?;
     }
@@ -213,6 +229,63 @@ pub fn code_files_all(db: &Connection) -> anyhow::Result<Vec<String>> {
 pub fn content_hash(data: &[u8]) -> String {
     use xxhash_rust::xxh3::xxh3_64;
     format!("{:016x}", xxh3_64(data))
+}
+
+fn escape_like_pattern(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+pub fn delete_code_file_items(db: &Connection, file_path: &str) -> anyhow::Result<()> {
+    let escaped = escape_like_pattern(file_path);
+    let pattern = format!("{}::%", escaped);
+
+    let mut stmt = db.prepare("SELECT id FROM items WHERE source_type = 'code' AND identifier LIKE ? ESCAPE '\\'")?;
+    let ids: Vec<i64> = stmt
+        .query_map([&pattern], |row| row.get::<_, i64>(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    for chunk in ids.chunks(500) {
+        let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
+        let sql = format!(
+            "DELETE FROM vec_code WHERE item_id IN ({})",
+            placeholders.join(",")
+        );
+        let mut stmt = db.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            chunk.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        stmt.execute(params.as_slice())?;
+    }
+
+    db.execute(
+        "DELETE FROM items WHERE source_type = 'code' AND identifier LIKE ? ESCAPE '\\'",
+        [&pattern],
+    )?;
+    Ok(())
+}
+
+pub fn delete_source_vec(db: &Connection, source_table: &str, source_type: &str) -> anyhow::Result<()> {
+    let mut stmt = db.prepare("SELECT id FROM items WHERE source_type = ?")?;
+    let ids: Vec<i64> = stmt
+        .query_map([source_type], |row| row.get::<_, i64>(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    for chunk in ids.chunks(500) {
+        let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
+        let sql = format!(
+            "DELETE FROM {} WHERE item_id IN ({})",
+            source_table,
+            placeholders.join(",")
+        );
+        let mut stmt = db.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            chunk.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        stmt.execute(params.as_slice())?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

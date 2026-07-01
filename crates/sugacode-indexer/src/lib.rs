@@ -26,6 +26,13 @@ impl Default for IndexerConfig {
     }
 }
 
+pub struct CodeIndexReport {
+    pub files_scanned: usize,
+    pub files_changed: usize,
+    pub files_deleted: usize,
+    pub symbols_indexed: usize,
+}
+
 pub struct CommitData {
     pub sha: String,
     pub short_hash: String,
@@ -192,6 +199,150 @@ impl Indexer {
     pub fn reindex_commits(&mut self, commits: &[CommitData]) -> anyhow::Result<usize> {
         db::delete_source(&self.db, "commit")?;
         self.index_commits(commits)
+    }
+
+    pub fn index_code(&mut self) -> anyhow::Result<CodeIndexReport> {
+        let current_files = code::list_tracked_rust_files(&self.repo_path)?;
+        let indexed_files = db::code_files_all(&self.db)?;
+
+        let current_set: std::collections::HashSet<String> = current_files
+            .iter()
+            .filter_map(|p| {
+                let rel = p.strip_prefix(&self.repo_path).ok()?;
+                Some(code::canonicalize_file_path(&self.repo_path, rel))
+            })
+            .collect();
+
+        let mut files_deleted = 0usize;
+        for indexed_path in &indexed_files {
+            if !current_set.contains(indexed_path) {
+                db::delete_code_file_items(&self.db, indexed_path)?;
+                db::code_file_delete(&self.db, indexed_path)?;
+                files_deleted += 1;
+            }
+        }
+
+        let mut files_changed = 0usize;
+        let mut symbols_indexed = 0usize;
+
+        for file_path in &current_files {
+            let canonical = {
+                let rel = file_path.strip_prefix(&self.repo_path).unwrap_or(file_path);
+                code::canonicalize_file_path(&self.repo_path, rel)
+            };
+
+            let metadata = match std::fs::metadata(file_path) {
+                Ok(m) => m,
+                Err(e) => {
+                    log::warn!("Failed to stat {}: {}", file_path.display(), e);
+                    continue;
+                }
+            };
+            let mtime = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+
+            if let Some((stored_mtime, _stored_hash)) = db::code_file_get(&self.db, &canonical)? {
+                if stored_mtime == mtime {
+                    continue;
+                }
+            }
+
+            let source = match std::fs::read_to_string(file_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::warn!("Failed to read {}: {}", file_path.display(), e);
+                    continue;
+                }
+            };
+
+            let hash = db::content_hash(source.as_bytes());
+
+            if let Some((_stored_mtime, stored_hash)) = db::code_file_get(&self.db, &canonical)? {
+                if stored_hash == hash {
+                    db::code_file_upsert(&self.db, &canonical, mtime, &hash)?;
+                    continue;
+                }
+            }
+
+            let tx = self.db.transaction()?;
+
+            db::delete_code_file_items(&tx, &canonical)?;
+
+            let symbols = match code::extract_symbols(file_path, &source) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::warn!("Failed to parse {}: {}", file_path.display(), e);
+                    tx.rollback()?;
+                    continue;
+                }
+            };
+
+            let symbol_count = symbols.len();
+
+            let items: Vec<db::ItemRow> = symbols
+                .iter()
+                .map(|s| {
+                    let metadata = serde_json::json!({
+                        "file_path": s.file_path,
+                        "line_start": s.line_start,
+                        "line_end": s.line_end,
+                        "symbol_kind": format!("{:?}", s.symbol_kind).to_lowercase(),
+                        "language": "rust",
+                        "content_hash": hash,
+                    })
+                    .to_string();
+                    db::ItemRow {
+                        identifier: s.identifier.clone(),
+                        text: s.text.clone(),
+                        author: None,
+                        metadata: Some(metadata),
+                    }
+                })
+                .collect();
+
+            let item_ids = db::insert_items(&tx, "code", &items)?;
+
+            if let Some(ref embedder) = self.embedder {
+                let embed_pairs: Vec<(usize, &str)> = symbols
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| s.embed)
+                    .map(|(i, s)| (i, s.text.as_str()))
+                    .collect();
+
+                if !embed_pairs.is_empty() {
+                    let texts: Vec<String> =
+                        embed_pairs.iter().map(|(_, t)| t.to_string()).collect();
+                    let embeddings = embedder.encode_batch(&texts);
+                    let ids: Vec<i64> =
+                        embed_pairs.iter().map(|(i, _)| item_ids[*i]).collect();
+                    db::insert_vectors_into(&tx, "vec_code", &ids, &embeddings)?;
+                }
+            }
+
+            db::code_file_upsert(&tx, &canonical, mtime, &hash)?;
+
+            tx.commit()?;
+            files_changed += 1;
+            symbols_indexed += symbol_count;
+        }
+
+        Ok(CodeIndexReport {
+            files_scanned: current_files.len(),
+            files_changed,
+            files_deleted,
+            symbols_indexed,
+        })
+    }
+
+    pub fn reindex_code(&mut self) -> anyhow::Result<CodeIndexReport> {
+        db::delete_source(&self.db, "code")?;
+        db::delete_source_vec(&self.db, "vec_code", "code")?;
+        self.index_code()
     }
 
     pub fn search_text(&self, query: &str, limit: usize) -> anyhow::Result<Vec<SearchResult>> {
