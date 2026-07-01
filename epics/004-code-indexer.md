@@ -282,7 +282,7 @@ Separate search mode activated by `Cmd+Shift+K` (vs `Cmd+K` for commits). The se
 ### Task 2: File Discovery — List Tracked Rust Files
 
 **Priority:** High
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 **Estimated Time:** 1 hour
 
 **Description:** Create a function that uses gitoxide to list all tracked `.rs` files in the repository, respecting `.gitignore`.
