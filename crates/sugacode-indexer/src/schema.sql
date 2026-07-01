@@ -30,3 +30,10 @@ CREATE TRIGGER IF NOT EXISTS items_au AFTER UPDATE ON items BEGIN
     INSERT INTO items_fts(items_fts, rowid, text, author) VALUES('delete', old.id, old.text, old.author);
     INSERT INTO items_fts(rowid, text, author) VALUES (new.id, new.text, new.author);
 END;
+
+CREATE TABLE IF NOT EXISTS code_files (
+    file_path TEXT PRIMARY KEY,
+    mtime INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,
+    indexed_at TEXT NOT NULL
+);

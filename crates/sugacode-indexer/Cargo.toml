@@ -15,4 +15,5 @@ log = "0.4"
 tree-sitter = "0.25"
 tree-sitter-rust = "0.24"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+chrono = "0.4"
 gix = { path = "../../../gitoxide/gix", default-features = false, features = ["basic", "sha1"] }

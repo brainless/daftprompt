@@ -313,7 +313,7 @@ Separate search mode activated by `Cmd+Shift+K` (vs `Cmd+K` for commits). The se
 ### Task 3: File Tracking Table (`code_files`)
 
 **Priority:** High
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 **Estimated Time:** 0.5 hours
 
 **Description:** Add the `code_files` table to the schema and implement tracking operations.

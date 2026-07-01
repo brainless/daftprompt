@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use chrono::Utc;
 use rusqlite::Connection;
 use zerocopy::AsBytes;
 
@@ -166,4 +167,115 @@ pub fn repo_meta_set(db: &Connection, key: &str, value: &str) -> anyhow::Result<
         [key, value],
     )?;
     Ok(())
+}
+
+pub fn code_file_get(db: &Connection, file_path: &str) -> anyhow::Result<Option<(i64, String)>> {
+    let mut stmt = db.prepare("SELECT mtime, content_hash FROM code_files WHERE file_path = ?")?;
+    let mut rows = stmt.query_map([file_path], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })?;
+    match rows.next() {
+        Some(Ok(v)) => Ok(Some(v)),
+        Some(Err(e)) => Err(e.into()),
+        None => Ok(None),
+    }
+}
+
+pub fn code_file_upsert(db: &Connection, file_path: &str, mtime: i64, content_hash: &str) -> anyhow::Result<()> {
+    let indexed_at = Utc::now().to_rfc3339();
+    db.execute(
+        "INSERT INTO code_files(file_path, mtime, content_hash, indexed_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(file_path) DO UPDATE SET mtime = excluded.mtime, content_hash = excluded.content_hash, indexed_at = excluded.indexed_at",
+        rusqlite::params![file_path, mtime, content_hash, indexed_at],
+    )?;
+    Ok(())
+}
+
+pub fn code_file_delete(db: &Connection, file_path: &str) -> anyhow::Result<()> {
+    db.execute("DELETE FROM code_files WHERE file_path = ?", [file_path])?;
+    Ok(())
+}
+
+pub fn code_files_all(db: &Connection) -> anyhow::Result<Vec<String>> {
+    let mut stmt = db.prepare("SELECT file_path FROM code_files")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut paths = Vec::new();
+    for row in rows {
+        paths.push(row?);
+    }
+    Ok(paths)
+}
+
+/// Hash content bytes into a stable hex string using xxh3.
+///
+/// We use xxh3_64 instead of `simple_hash` / `DefaultHasher` because those
+/// are not guaranteed to produce the same output across Rust toolchain versions.
+pub fn content_hash(data: &[u8]) -> String {
+    use xxhash_rust::xxh3::xxh3_64;
+    format!("{:016x}", xxh3_64(data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_db() -> Connection {
+        register_sqlite_vec();
+        let db = Connection::open_in_memory().unwrap();
+        init_schema(&db, 384).unwrap();
+        db
+    }
+
+    #[test]
+    fn test_code_file_upsert_and_get() {
+        let db = test_db();
+        code_file_upsert(&db, "src/main.rs", 1000, "abc123").unwrap();
+        let result = code_file_get(&db, "src/main.rs").unwrap();
+        assert_eq!(result, Some((1000, "abc123".to_string())));
+    }
+
+    #[test]
+    fn test_code_file_get_missing() {
+        let db = test_db();
+        let result = code_file_get(&db, "nope.rs").unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_code_file_upsert_updates() {
+        let db = test_db();
+        code_file_upsert(&db, "src/main.rs", 1000, "hash_old").unwrap();
+        code_file_upsert(&db, "src/main.rs", 2000, "hash_new").unwrap();
+        let result = code_file_get(&db, "src/main.rs").unwrap();
+        assert_eq!(result, Some((2000, "hash_new".to_string())));
+    }
+
+    #[test]
+    fn test_code_file_delete() {
+        let db = test_db();
+        code_file_upsert(&db, "src/main.rs", 1000, "abc").unwrap();
+        code_file_delete(&db, "src/main.rs").unwrap();
+        let result = code_file_get(&db, "src/main.rs").unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_code_files_all() {
+        let db = test_db();
+        code_file_upsert(&db, "src/a.rs", 1, "h1").unwrap();
+        code_file_upsert(&db, "src/b.rs", 2, "h2").unwrap();
+        code_file_upsert(&db, "src/c.rs", 3, "h3").unwrap();
+        let mut paths = code_files_all(&db).unwrap();
+        paths.sort();
+        assert_eq!(paths, vec!["src/a.rs", "src/b.rs", "src/c.rs"]);
+    }
+
+    #[test]
+    fn test_content_hash_stable() {
+        let data = b"hello world";
+        let h1 = content_hash(data);
+        let h2 = content_hash(data);
+        assert_eq!(h1, h2);
+        assert_eq!(h1.len(), 16);
+    }
 }
