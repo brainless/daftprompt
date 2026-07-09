@@ -107,7 +107,99 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 
 ---
 
-### Task 2: Migrate Canvas — Grid and Zoom/Pan
+### Task 2: Migrate Application Shell and Render Loop
+
+**Priority:** High
+**Status:** ⬜ Not Started
+**Estimated Time:** 3 hours
+
+**Description:** Restructure `main.rs` to use akar's frame lifecycle and layout system. Replace the custom `UIManager` orchestration with a flat immediate-mode render function.
+
+**Details:**
+
+1. Restructure the `RedrawRequested` handler:
+    ```rust
+    fn handle_redraw(&mut self) {
+        let core = self.core.as_mut().unwrap();
+        let state = &mut self.state;
+
+        core.begin_frame(
+            state.window_size.x,
+            state.window_size.y,
+            state.scale_factor,
+        );
+
+        // Build layout tree for this frame
+        let mut layout = Layout::new();
+
+        // 1. Canvas (full window)
+        let canvas_node = layout.new_leaf(full_screen_style());
+        layout.compute(canvas_node, (state.window_size.x, state.window_size.y), None);
+
+        // 2. Canvas rendering (grid, containers, cards)
+        render_canvas(&mut core, &mut layout, canvas_node, state);
+
+        // 3. Drawer (overlays on left)
+        if state.drawer_open {
+            render_drawer(&mut core, &mut layout, state);
+        }
+
+        // 4. Search box (overlays at bottom)
+        if state.search_active || state.code_search_active {
+            render_search(&mut core, &mut layout, state);
+        }
+
+        // End frame — flush draw list to GPU
+        let mut surface = self.surface.get_current_texture()?;
+        let view = surface.texture.create_view(&..);
+        let mut encoder = self.device.create_command_encoder(&..);
+        {
+            let mut pass = encoder.begin_render_pass(&..);
+            core.end_frame(&self.device, &self.queue, &mut pass);
+        }
+        self.queue.submit(encoder.finish());
+        surface.present();
+    }
+    ```
+
+2. Replace `UIManager` with direct render functions:
+    - `render_canvas(core, layout, canvas_node, state)` — canvas + grid + containers + cards
+    - `render_drawer(core, layout, state)` — drawer + folder list
+    - `render_search(core, layout, state)` — search input + results
+    - Each function is self-contained and immediate-mode
+
+3. Preserve `UIManager::update` logic (card hover state updates) by moving it into `render_canvas` — after `canvas_end`, iterate containers and update `card.is_hovered` using `core.input.is_hovering(screen_rect)`.
+
+4. Wire up `akar_winit::process_window_event` in the event handler:
+    ```rust
+    fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        let core = self.core.as_mut().unwrap();
+        akar_winit::process_window_event(&mut core.input, &event);
+
+        match event {
+            WindowEvent::RedrawRequested => self.handle_redraw(),
+            WindowEvent::Resized(size) => { /* resize logic */ },
+            WindowEvent::CloseRequested => { /* exit */ },
+            _ => {}
+        }
+        self.window.request_redraw();
+    }
+    ```
+
+5. Handle keyboard shortcuts (Cmd+K, Escape) by checking `core.input.keys_pressed` and `core.input.chars` at the top of the frame, before component functions run.
+
+**Acceptance Criteria:**
+- [ ] `UIManager` struct deleted; render is flat immediate-mode functions
+- [ ] Frame lifecycle uses `core.begin_frame` / `core.end_frame`
+- [ ] Layout tree built per-frame (no retained widget state)
+- [ ] akar-winit bridge processes all window events
+- [ ] Keyboard shortcuts (Cmd+K, Cmd+Shift+K, Escape) work
+- [ ] All UI layers render in correct order: canvas → containers → drawer → search
+- [ ] `cargo check` passes clean
+
+---
+
+### Task 3: Migrate Canvas — Grid and Zoom/Pan
 
 **Priority:** High
 **Status:** ⬜ Not Started
@@ -131,20 +223,21 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
    Note: sugacode's `screen_to_canvas` / `canvas_to_screen` methods are replaced by `CanvasResponse.world_to_screen` / `CanvasResponse.screen_to_world` returned from `canvas_begin`.
 
 2. Replace `Canvas` struct in `ui/canvas.rs` with akar canvas usage in the render loop:
-   ```rust
-   let (resp, painter) = canvas_begin(&mut core, layout, canvas_node, &mut state.canvas_state, &CanvasConfig {
-       pan_button: PanButton::Middle,
-       zoom_sensitivity: 0.005,
-       zoom_min: 0.1,
-       zoom_max: 5.0,
-   });
+    ```rust
+    let (resp, painter) = canvas_begin(&mut core, layout, canvas_node, &mut state.canvas_state, &CanvasConfig {
+        pan_button: PanButton::Middle,
+        zoom_sensitivity: 0.005,
+        zoom_min: 0.1,
+        zoom_max: 5.0,
+    });
 
-   // Grid rendering using painter.push_quad() in world space
-   render_grid(&painter, resp.visible_world_rect, resp.world_to_screen);
+    // Grid rendering using painter.push_quad() in world space
+    render_grid(&painter, resp.visible_world_rect, resp.world_to_screen);
 
-   // Zoom indicator using label() in screen space (after canvas_end)
-   canvas_end(&mut core, painter);
-   ```
+    // Zoom indicator using label() in screen space (after canvas_end)
+    canvas_end(&mut core, painter);
+    ```
+    Note: `resp.world_to_screen` is a `CanvasTransform` struct with methods like `apply_rect()` and `scale_radius()`.
 
 3. Migrate grid rendering from text-based labels to `CanvasPainter::push_quad`:
    - Grid lines: thin quads at regular world-space intervals
@@ -166,7 +259,7 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 
 ---
 
-### Task 3: Migrate Drawer
+### Task 4: Migrate Drawer
 
 **Priority:** High
 **Status:** ⬜ Not Started
@@ -233,7 +326,7 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 
 ---
 
-### Task 4: Migrate Container and Card Rendering
+### Task 5: Migrate Container and Card Rendering
 
 **Priority:** High
 **Status:** ⬜ Not Started
@@ -251,46 +344,46 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
    - `visible_cards()` iterator (replaced by akar's `list_clip` but logic is similar)
 
 2. Replace container rendering in `ui/mod.rs`:
-   ```rust
-   // For each container on the canvas:
-   for container in &mut state.containers {
-       // Position container in world space using canvas painter
-       let container_screen_rect = resp.world_to_screen(container.position, container.size);
+    ```rust
+    // For each container on the canvas:
+    for container in &mut state.containers {
+        // Position container in world space using canvas painter
+        let container_screen_rect = resp.world_to_screen.apply_rect(container.position, container.size);
 
-       // Container background + border
-       container_component(&mut core, container_screen_rect, &BoxStyle::panel(&theme));
+        // Container background + border
+        container(&mut core, layout, container_node, &BoxStyle::panel(&theme));
 
-       // Scroll area for container content
-       let scroll_resp = scroll_area_begin(&mut core, container_screen_rect, &mut container.scroll_offset, container.content_height);
+        // Scroll area for container content
+        let scroll_resp = scroll_area_begin(&mut core, container_screen_rect, &mut container.scroll_offset, container.content_height);
 
-       // Virtualized card rendering
-       let visible = list_clip(container.cards.len(), card_height, container.scroll_offset, container_screen_rect[3]);
-       for i in visible {
-           let card = &container.cards[i];
-           let card_y = scroll_resp.content_y + card.position.y;
-           let card_rect = [container_screen_rect[0] + 8.0, card_y, container_screen_rect[2] - 16.0, card.size.y];
+        // Virtualized card rendering
+        let visible = list_clip(container.cards.len(), card_height, container.scroll_offset, container_screen_rect[3]);
+        for i in visible {
+            let card = &container.cards[i];
+            let card_y = scroll_resp.content_y + card.position.y;
+            let card_rect = [container_screen_rect[0] + 8.0, card_y, container_screen_rect[2] - 16.0, card.size.y];
 
-           // Card background
-           container_component(&mut core, card_rect, &BoxStyle::card(&theme));
+            // Card background
+            container(&mut core, layout, card_node, &BoxStyle::card(&theme));
 
-           // Card content (git commit or document)
-           match container.container_type {
-               ContainerType::GitLogColumn => render_git_card_akar(&mut core, &layout, card, card_rect, &theme),
-               _ => render_doc_card_akar(&mut core, &layout, card, card_rect, &theme),
-           }
-       }
+            // Card content (git commit or document)
+            match container.container_type {
+                ContainerType::GitLogColumn => render_git_card_akar(&mut core, &layout, card, card_rect, &theme),
+                _ => render_doc_card_akar(&mut core, &layout, card, card_rect, &theme),
+            }
+        }
 
-       scroll_area_end(&mut core);
-   }
-   ```
+        scroll_area_end(&mut core);
+    }
+    ```
 
 3. Migrate git commit card rendering (`render_git_card_content`):
-   - Replace text-buffer rectangles with akar `label` components
-   - Hash: cyan label at 12px
-   - Author + date: gray labels at 11px
-   - Separator: akar `separator` component
-   - Message: white label at 13px
-   - Hover state: use `container_component` with different `BoxStyle`
+    - Replace text-buffer rectangles with akar `label` components
+    - Hash: cyan label at 12px
+    - Author + date: gray labels at 11px
+    - Separator: akar `separator` component
+    - Message: white label at 13px
+    - Hover state: use `container` with different `BoxStyle`
 
 4. Migrate document card rendering (`render_doc_card_content`):
    - Icon + title: `label` with emoji prefix
@@ -315,7 +408,7 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 
 ---
 
-### Task 5: Migrate Search Box to akar TextInput
+### Task 6: Migrate Search Box to akar TextInput
 
 **Priority:** High
 **Status:** ⬜ Not Started
@@ -382,9 +475,9 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 5. Migrate search execution logic (indexer calls, result container creation) — this is business logic in `SearchBox::update()` and is preserved as-is.
 
 6. Add search mode indicator:
-   - Blue top border for commit search: use `container_component` with accent border
-   - Green top border for code search: use `container_component` with success border
-   - Or use akar's `badge` component to show "Commits" / "Code" mode label
+    - Blue top border for commit search: use `container` with accent border
+    - Green top border for code search: use `container` with success border
+    - Or use akar's `badge` component to show "Commits" / "Code" mode label
 
 **Acceptance Criteria:**
 - [ ] Search box renders at bottom center with proper styling
@@ -396,98 +489,6 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 - [ ] Real-time search execution on query change
 - [ ] Search result container appears on canvas with results
 - [ ] Visual indicator distinguishes commit vs code search mode
-
----
-
-### Task 6: Migrate Application Shell and Render Loop
-
-**Priority:** High
-**Status:** ⬜ Not Started
-**Estimated Time:** 3 hours
-
-**Description:** Restructure `main.rs` to use akar's frame lifecycle and layout system. Replace the custom `UIManager` orchestration with a flat immediate-mode render function.
-
-**Details:**
-
-1. Restructure the `RedrawRequested` handler:
-   ```rust
-   fn handle_redraw(&mut self) {
-       let core = self.core.as_mut().unwrap();
-       let state = &mut self.state;
-
-       core.begin_frame(
-           state.window_size.x,
-           state.window_size.y,
-           state.scale_factor,
-       );
-
-       // Build layout tree for this frame
-       let mut layout = Layout::new();
-
-       // 1. Canvas (full window)
-       let canvas_node = layout.new_leaf(full_screen_style());
-       layout.compute(canvas_node, (state.window_size.x, state.window_size.y), None);
-
-       // 2. Canvas rendering (grid, containers, cards)
-       render_canvas(&mut core, &mut layout, canvas_node, state);
-
-       // 3. Drawer (overlays on left)
-       if state.drawer_open {
-           render_drawer(&mut core, &mut layout, state);
-       }
-
-       // 4. Search box (overlays at bottom)
-       if state.search_active || state.code_search_active {
-           render_search(&mut core, &mut layout, state);
-       }
-
-       // End frame — flush draw list to GPU
-       let mut surface = self.surface.get_current_texture()?;
-       let view = surface.texture.create_view(&..);
-       let mut encoder = self.device.create_command_encoder(&..);
-       {
-           let mut pass = encoder.begin_render_pass(&..);
-           core.end_frame(&self.device, &self.queue, &mut pass);
-       }
-       self.queue.submit(encoder.finish());
-       surface.present();
-   }
-   ```
-
-2. Replace `UIManager` with direct render functions:
-   - `render_canvas(core, layout, canvas_node, state)` — canvas + grid + containers + cards
-   - `render_drawer(core, layout, state)` — drawer + folder list
-   - `render_search(core, layout, state)` — search input + results
-   - Each function is self-contained and immediate-mode
-
-3. Preserve `UIManager::update` logic (card hover state updates) by moving it into `render_canvas` — after `canvas_end`, iterate containers and update `card.is_hovered` using `core.input.is_hovering(screen_rect)`.
-
-4. Wire up `akar_winit::process_window_event` in the event handler:
-   ```rust
-   fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
-       let core = self.core.as_mut().unwrap();
-       akar_winit::process_window_event(&mut core.input, &event);
-
-       match event {
-           WindowEvent::RedrawRequested => self.handle_redraw(),
-           WindowEvent::Resized(size) => { /* resize logic */ },
-           WindowEvent::CloseRequested => { /* exit */ },
-           _ => {}
-       }
-       self.window.request_redraw();
-   }
-   ```
-
-5. Handle keyboard shortcuts (Cmd+K, Escape) by checking `core.input.keys_pressed` and `core.input.chars` at the top of the frame, before component functions run.
-
-**Acceptance Criteria:**
-- [ ] `UIManager` struct deleted; render is flat immediate-mode functions
-- [ ] Frame lifecycle uses `core.begin_frame` / `core.end_frame`
-- [ ] Layout tree built per-frame (no retained widget state)
-- [ ] akar-winit bridge processes all window events
-- [ ] Keyboard shortcuts (Cmd+K, Cmd+Shift+K, Escape) work
-- [ ] All UI layers render in correct order: canvas → containers → drawer → search
-- [ ] `cargo check` passes clean
 
 ---
 
@@ -536,31 +537,31 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 **Details:**
 
 1. **Card styling:**
-   - Use `BoxStyle::card(theme)` for document cards (border + shadow)
-   - Use `BoxStyle::panel(theme)` for git commit cards (subtle border)
-   - Selection: accent border or tinted fill via `theme.primary` with low alpha
-   - Hover: `BoxStyle::surface(theme)` or lighter fill
+    - Use `BoxStyle::card(theme)` for document cards (border + shadow)
+    - Use `BoxStyle::panel(theme)` for git commit cards (subtle border)
+    - Selection: accent border or tinted fill via `theme.primary` with low alpha
+    - Hover: `BoxStyle::surface(theme)` or lighter fill
 
 2. **Container styling:**
-   - Use `BoxStyle::surface(theme)` for container backgrounds
-   - Border: `theme.base_300` at 1px
-   - Corner radii: `theme.radius_box` (12px)
+    - Use `BoxStyle::surface(theme)` for container backgrounds
+    - Border: `theme.base_300` at 1px
+    - Corner radii: `theme.radius_box` (12px)
 
 3. **Drawer styling:**
-   - akar's drawer provides scrim + panel with corner radii and shadow
-   - Folder items: `button` with `Ghost` variant
-   - Active folder: `button` with `Solid` variant or accent background
+    - akar's drawer provides scrim + panel with corner radii and shadow
+    - Folder items: `button` with `Ghost` variant
+    - Active folder: `button` with `Solid` variant or accent background
 
 4. **Search box styling:**
-   - akar's `text_input` provides themed background, border, cursor
-   - Mode indicator: colored top border or `badge` component
+    - akar's `text_input` provides themed background, border, cursor
+    - Mode indicator: colored top border or `badge` component
 
 5. **Theme:**
-   - Use `AKAR_THEME_DARK` as the default (matches current dark theme)
-   - Map sugacode's hardcoded colors to theme tokens:
-     - `rgba(40,40,40,200)` → `theme.base_200`
-     - `rgba(0,122,255,100)` → `theme.primary` with alpha
-     - `rgb(100,200,255)` (cyan hash) → `theme.info`
+    - Use `AKAR_THEME_DARK` as the default (matches current dark theme)
+    - Map sugacode's hardcoded colors to theme tokens:
+      - `rgba(40,40,40,200)` → `theme.base_200`
+      - `rgba(0,122,255,100)` → `theme.primary` with alpha
+      - `rgb(100,200,255)` (cyan hash) → `theme.info`
 
 6. **Screenshot verification:**
    ```bash
@@ -613,11 +614,11 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 ## Implementation Order
 
 1. **Task 1:** Add akar dependencies, remove old renderer (2 hours)
-2. **Task 2:** Migrate canvas (grid, zoom, pan) (3 hours)
-3. **Task 3:** Migrate drawer (2 hours)
-4. **Task 4:** Migrate container and card rendering (4 hours)
-5. **Task 5:** Migrate search box to text_input (3 hours)
-6. **Task 6:** Restructure application shell and render loop (3 hours)
+2. **Task 2:** Restructure application shell and render loop (3 hours)
+3. **Task 3:** Migrate canvas (grid, zoom, pan) (3 hours)
+4. **Task 4:** Migrate drawer (2 hours)
+5. **Task 5:** Migrate container and card rendering (4 hours)
+6. **Task 6:** Migrate search box to text_input (3 hours)
 7. **Task 7:** Verify CLI modes and indexer (1 hour)
 8. **Task 8:** Visual polish and parity (3 hours)
 9. **Task 9:** Update documentation (1 hour)
