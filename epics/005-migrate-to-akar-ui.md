@@ -88,20 +88,38 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 2. Delete `src/renderer.rs` — its entire responsibility (wgpu instance, device, surface, glyphon pipeline, render pass) is now owned by `AkarCore`.
 
 3. Rewrite `src/main.rs` event loop to use `AkarCore`:
-   - `AkarCore::new(device, queue, surface_format)` in the `resumed` handler
-   - `core.begin_frame(width, height, scale_factor)` at the start of each `RedrawRequested`
-   - `core.end_frame(device, queue, &mut render_pass)` at the end
+   - `AkarCore::new(&device, &queue, surface_format)` in the `resumed` handler — `device` and `queue` are **borrowed references**, not moved
+   - `core.begin_frame(width_u32, height_u32, scale_factor)` at the start of each `RedrawRequested` — `width`/`height` are `u32` (cast `state.window_size.x as u32`); `scale_factor` is `f32`
+   - `core.end_frame(&device, &queue, &mut render_pass)?` at the end — returns `Result<(), Box<dyn Error>>`, so use `?` or `match`. **Critical:** `end_frame` internally calls `self.input.begin_frame()` which clears per-frame input events (`chars`, `keys_pressed`, `scroll_delta`, mouse press/release). All input reads (component hover/click, `text_input`, scroll-aware widgets) must occur *before* `end_frame` — akar's components already do this
    - wgpu instance/device/surface creation stays in `main.rs` (sugacode owns the window, akar owns the pipeline)
 
-4. Delete `src/input.rs` — replace with `akar_winit::process_window_event` feeding `AkarCore`'s `InputState`.
+4. Delete `src/input.rs` — replace with `akar_winit::process_window_event` feeding `AkarCore`'s `InputState`. **Note:** `akar_winit` only forwards `CursorMoved`, `MouseInput`, `MouseWheel`, and the text.KeyCode subset (`Backspace/Delete/Arrows/Home/End/Enter/Escape/Tab`) — it does **not** track keyboard modifiers. Sugacode's Cmd+K shortcut and Cmd+click-to-pan both depend on modifier state, so `AppState` must track this separately.
 
-5. Update `Application` struct to hold `AkarCore` instead of `Renderer`.
+5. Track Cmd/Ctrl modifier state in `AppState` (akar cannot provide it):
+   ```rust
+   // In AppState:
+   pub cmd_or_ctrl: bool,  // true when Super on macOS, Control elsewhere
+   ```
+   Handle the winit event directly in `main.rs` — `akar_winit::process_window_event` ignores it, so it falls through to the match arms:
+   ```rust
+   WindowEvent::ModifiersChanged(m) => {
+       state.cmd_or_ctrl = if cfg!(target_os = "macos") {
+           m.state().super_key()
+       } else {
+           m.state().control_key()
+       };
+   }
+   ```
+   The Cmd+K shortcut checker and Canvas Cmd+Left-drag pan handler (Tasks 2, 3, 6) both read `state.cmd_or_ctrl` — see those tasks for usage.
+
+6. Update `Application` struct to hold `AkarCore` instead of `Renderer`.
 
 **Acceptance Criteria:**
 - [ ] `cargo check` passes with akar dependencies
 - [ ] Window opens and shows a clear color (no text yet)
 - [ ] Window resize works
 - [ ] winit events are forwarded to akar's InputState
+- [ ] Cmd/Ctrl modifier state is tracked in `AppState` via `ModifiersChanged` (akar does not expose modifiers)
 - [ ] `renderer.rs` and `input.rs` are deleted
 - [ ] No direct wgpu/glyphon/winit/glam imports remain in `Cargo.toml`
 
@@ -119,46 +137,72 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 
 1. Restructure the `RedrawRequested` handler:
     ```rust
-    fn handle_redraw(&mut self) {
+    fn handle_redraw(&mut self) -> anyhow::Result<()> {
         let core = self.core.as_mut().unwrap();
         let state = &mut self.state;
 
+        // begin_frame takes (width: u32, height: u32, scale_factor: f32),
+        // so cast the f32 window_size fields to u32.
         core.begin_frame(
-            state.window_size.x,
-            state.window_size.y,
+            state.window_size.x as u32,
+            state.window_size.y as u32,
             state.scale_factor,
         );
 
-        // Build layout tree for this frame
+        // Build layout tree for this frame (rebuilt every frame — immediate mode).
         let mut layout = Layout::new();
 
         // 1. Canvas (full window)
         let canvas_node = layout.new_leaf(full_screen_style());
-        layout.compute(canvas_node, (state.window_size.x, state.window_size.y), None);
+
+        // Layout::compute takes (root, (Option<f32>, Option<f32>), measure_fn).
+        // The available-size tuple uses Option (Some(x) = definite, None = max-content);
+        // the third arg is a MANDATORY measure closure — pass |_,_,_,_,_| Size::ZERO
+        // for nodes whose sizes are fully specified in their Style (no content measuring).
+        use taffy::prelude::*;
+        layout.compute(
+            canvas_node,
+            (Some(state.window_size.x), Some(state.window_size.y)),
+            |_, _, _, _, _| Size::ZERO,
+        );
 
         // 2. Canvas rendering (grid, containers, cards)
-        render_canvas(&mut core, &mut layout, canvas_node, state);
+        render_canvas(core, &mut layout, canvas_node, state);
 
         // 3. Drawer (overlays on left)
         if state.drawer_open {
-            render_drawer(&mut core, &mut layout, state);
+            render_drawer(core, &mut layout, state);
         }
 
         // 4. Search box (overlays at bottom)
         if state.search_active || state.code_search_active {
-            render_search(&mut core, &mut layout, state);
+            render_search(core, &mut layout, state);
         }
 
-        // End frame — flush draw list to GPU
+        // End frame — flush draw list to GPU. end_frame returns Result; use ?.
+        // (end_frame internally clears per-frame input — all reads happened above.)
         let mut surface = self.surface.get_current_texture()?;
-        let view = surface.texture.create_view(&..);
-        let mut encoder = self.device.create_command_encoder(&..);
+        let view = surface.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
-            let mut pass = encoder.begin_render_pass(&..);
-            core.end_frame(&self.device, &self.queue, &mut pass);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_writes: None,
+            });
+            core.end_frame(&self.device, &self.queue, &mut pass)?;
         }
-        self.queue.submit(encoder.finish());
+        self.queue.submit(std::iter::once(encoder.finish()));
         surface.present();
+        Ok(())
     }
     ```
 
@@ -170,14 +214,25 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 
 3. Preserve `UIManager::update` logic (card hover state updates) by moving it into `render_canvas` — after `canvas_end`, iterate containers and update `card.is_hovered` using `core.input.is_hovering(screen_rect)`.
 
-4. Wire up `akar_winit::process_window_event` in the event handler:
+4. Wire up `akar_winit::process_window_event` in the event handler. akar-winit ignores `ModifiersChanged`, so handle it ourselves before the match (it feeds the `cmd_or_ctrl` state set up in Task 1 step 5):
     ```rust
     fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         let core = self.core.as_mut().unwrap();
+        let state = &mut self.state;
+
+        // akar-winit forwards cursor/mouse/wheel/text; modifiers are on us.
+        if let WindowEvent::ModifiersChanged(m) = &event {
+            state.cmd_or_ctrl = if cfg!(target_os = "macos") {
+                m.state().super_key()
+            } else {
+                m.state().control_key()
+            };
+        }
+
         akar_winit::process_window_event(&mut core.input, &event);
 
         match event {
-            WindowEvent::RedrawRequested => self.handle_redraw(),
+            WindowEvent::RedrawRequested => { let _ = self.handle_redraw(); },
             WindowEvent::Resized(size) => { /* resize logic */ },
             WindowEvent::CloseRequested => { /* exit */ },
             _ => {}
@@ -186,7 +241,11 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
     }
     ```
 
-5. Handle keyboard shortcuts (Cmd+K, Escape) by checking `core.input.keys_pressed` and `core.input.chars` at the top of the frame, before component functions run.
+5. Handle keyboard shortcuts. Read modifier-aware shortcuts at the top of the frame (before component functions run), because `end_frame` clears input after the frame. The mapping between sugacode's actions and akar's input fields is:
+   - **Named keys** (Escape, Enter, Backspace,…) → `core.input.keys_pressed: Vec<akar_core::Key>` — akar's typed enum, *not* `Vec<char>`. Only 11 keys are members (`Backspace, Delete, Left, Right, Up, Down, Home, End, Enter, Escape, Tab`); alphabetic keys like `K` are **not** here.
+   - **Text characters** (letters, digits) → `core.input.chars: Vec<char>` — output of winit's IME/text event. `Cmd+K` is detected by combining `state.cmd_or_ctrl` with `'k' (or 'K') ∈ core.input.chars`.
+   - **Modifier state** → `state.cmd_or_ctrl` (Task 1 step 5), not `core.input`.
+   - Example: `Cmd+K` opens commit search → `if state.cmd_or_ctrl && core.input.chars.contains(&'k') { state.search_active = true; state.search_mode = SearchMode::Commits; state.search_just_opened = true; }`. `Cmd+Shift+K` → additionally check `state.shift_pressed` (add `shift: bool` to `AppState` and set it from the same `ModifiersChanged`). `Escape` → scan `core.input.keys_pressed.contains(&Key::Escape)`.
 
 **Acceptance Criteria:**
 - [ ] `UIManager` struct deleted; render is flat immediate-mode functions
@@ -224,7 +283,7 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 
 2. Replace `Canvas` struct in `ui/canvas.rs` with akar canvas usage in the render loop:
     ```rust
-    let (resp, painter) = canvas_begin(&mut core, layout, canvas_node, &mut state.canvas_state, &CanvasConfig {
+    let (resp, painter) = canvas_begin(core, layout, canvas_node, &mut state.canvas_state, &CanvasConfig {
         pan_button: PanButton::Middle,
         zoom_sensitivity: 0.005,
         zoom_min: 0.1,
@@ -235,7 +294,7 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
     render_grid(&painter, resp.visible_world_rect, resp.world_to_screen);
 
     // Zoom indicator using label() in screen space (after canvas_end)
-    canvas_end(&mut core, painter);
+    canvas_end(core, painter);
     ```
     Note: `resp.world_to_screen` is a `CanvasTransform` struct with methods like `apply_rect()` and `scale_radius()`.
 
@@ -247,6 +306,32 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 4. Migrate zoom indicator to akar's `label` component positioned at bottom-right corner.
 
 5. Remove `AppState::screen_to_canvas` and `AppState::canvas_to_screen` — use `CanvasResponse` transforms instead.
+
+6. Implement sugacode's Cmd+Left-click pan manually. akar's `PanButton` enum is only `Middle`/`Right` (`akar-components/src/canvas.rs:9`) — there is no `Left` variant, so sugacode's existing Cmd+Left-click-to-pan convention is not covered by akar's `canvas_begin`. Furthermore, `canvas_begin` resets `state.canvas_state.is_panning = false` every frame when its configured PanButton isn't pressed (`canvas.rs:134`), so reusing `CanvasState::is_panning` for Cmd+Left pan would be cleared immediately. Track a separate `cmd_panning: bool` field in `AppState`, apply the pan delta to `state.canvas_state.pan` **before** `canvas_begin` so the frame's `world_to_screen` transform reflects the pan:
+    ```rust
+    // Before canvas_begin — apply Cmd+Left drag pan so the frame's
+    // world_to_screen transform includes it. cmd_or_ctrl is from Task 1 step 5.
+    let canvas_rect = layout.rect(canvas_node);
+    if state.cmd_or_ctrl
+        && core.input.mouse_buttons_pressed[0]
+        && core.input.is_hovering(canvas_rect)
+    {
+        state.cmd_panning = true;
+    }
+    if !core.input.mouse_buttons[0] {
+        state.cmd_panning = false;
+    }
+    if state.cmd_panning {
+        let delta = (core.input.mouse_pos - core.input.mouse_pos_prev) / state.canvas_state.zoom;
+        state.canvas_state.pan -= delta;
+    }
+
+    // canvas_begin then handles middle-mouse pan (default PanButton::Middle)
+    // and cursor-anchored wheel zoom itself.
+    let (resp, painter) = canvas_begin(
+        core, layout, canvas_node, &mut state.canvas_state, &CanvasConfig::default(),
+    );
+    ```
 
 **Acceptance Criteria:**
 - [ ] Canvas renders with grid lines in world space
@@ -284,7 +369,7 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
    // Animated width (preserve existing frame-rate-dependent approach)
    let panel_width = lerp(60.0, 250.0, animation_progress);
 
-   let resp = drawer_begin(&mut core, viewport_rect, DrawerEdge::Left, panel_width, &theme);
+   let resp = drawer_begin(core, viewport_rect, DrawerEdge::Left, panel_width, &theme);
    if resp.close_requested {
        state.drawer_open = false;
    }
@@ -294,7 +379,7 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
    for (i, folder) in state.folders.iter().enumerate() {
        let icon_node = layout.new_leaf(Style { .. });
        // Position icon using layout
-       let btn = button(&mut core, &layout, icon_node, &folder.icon_emoji, ButtonVariant::Ghost, &theme);
+       let btn = button(core, &layout, icon_node, &folder.icon_emoji, ButtonVariant::Ghost, &theme);
        if btn.clicked {
            state.selected_folder = Some(i);
        }
@@ -304,11 +389,11 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
        // Show name + doc count when expanded
        if animation_progress > 0.5 {
            let label_node = layout.new_leaf(Style { .. });
-           label(&mut core, &layout, label_node, &format!("{} ({} docs)", folder.name, folder.document_count), theme.base_content, &theme);
+           label(core, &layout, label_node, &format!("{} ({} docs)", folder.name, folder.document_count), theme.base_content, &theme);
        }
    }
 
-   drawer_end(&mut core);
+   drawer_end(core);
    ```
 
 3. Migrate folder icon rendering from emoji-in-text-buffer to akar's `label` component (emoji text renders naturally through glyphon).
@@ -343,37 +428,59 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
    - Card height calculation logic
    - `visible_cards()` iterator (replaced by akar's `list_clip` but logic is similar)
 
-2. Replace container rendering in `ui/mod.rs`:
+2. Replace container rendering in `ui/mod.rs`. Caveats confirmed against akar source:
+   - `list_clip` lives in **`akar-core`**, not `akar-components` — import it as `use akar_core::list_clip;` (see `akar-core/src/lib.rs:24`). It takes `(total: usize, item_height: f32, scroll_y: f32, viewport_height: f32) -> Range<usize>` and adds one item of padding on each end.
+   - `scroll_area_begin`'s signature is `(core, rect: [f32;4], scroll_y: &mut f32, content_height: f32) -> ScrollAreaResponse` (the offset param is `scroll_y`, not `scroll_offset`; the return struct is `ScrollAreaResponse`, not `ScrollResponse`; it has `.content_y: f32`).
+   - `container` early-returns when `BoxStyle.fill == 0` (`container.rs:9`) — transparent = skip, not "draw transparent".
+   - `apply_rect` consumes a `WorldRect { min, max: Vec2 }`, not a `[f32;4]`; build one from the container's world-space position/size.
+
     ```rust
+    use akar_core::list_clip;
+    use akar_layout::WorldRect;
+    use akar_components::{container, scroll_area_begin, scroll_area_end, BoxStyle};
+
     // For each container on the canvas:
     for container in &mut state.containers {
         // Position container in world space using canvas painter
-        let container_screen_rect = resp.world_to_screen.apply_rect(container.position, container.size);
+        let container_screen_rect = resp.world_to_screen.apply_rect(WorldRect {
+            min: container.position,
+            max: container.position + container.size,
+        });
 
-        // Container background + border
-        container(&mut core, layout, container_node, &BoxStyle::panel(&theme));
+        // Container background + border. Use a non-zero fill or container() no-ops.
+        container(core, layout, container_node, &BoxStyle::panel(&theme));
 
-        // Scroll area for container content
-        let scroll_resp = scroll_area_begin(&mut core, container_screen_rect, &mut container.scroll_offset, container.content_height);
+        // Scroll area for container content — note the &mut scroll_y param.
+        let scroll_resp = scroll_area_begin(
+            core,
+            container_screen_rect,
+            &mut container.scroll_offset,
+            container.content_height,
+        );
 
-        // Virtualized card rendering
-        let visible = list_clip(container.cards.len(), card_height, container.scroll_offset, container_screen_rect[3]);
+        // Virtualized card rendering — list_clip returns Range<usize>.
+        let visible = list_clip(
+            container.cards.len(),
+            card_height,
+            container.scroll_offset,
+            container_screen_rect[3],
+        );
         for i in visible {
             let card = &container.cards[i];
             let card_y = scroll_resp.content_y + card.position.y;
             let card_rect = [container_screen_rect[0] + 8.0, card_y, container_screen_rect[2] - 16.0, card.size.y];
 
             // Card background
-            container(&mut core, layout, card_node, &BoxStyle::card(&theme));
+            container(core, layout, card_node, &BoxStyle::card(&theme));
 
             // Card content (git commit or document)
             match container.container_type {
-                ContainerType::GitLogColumn => render_git_card_akar(&mut core, &layout, card, card_rect, &theme),
-                _ => render_doc_card_akar(&mut core, &layout, card, card_rect, &theme),
+                ContainerType::GitLogColumn => render_git_card_akar(core, layout, card, card_rect, &theme),
+                _ => render_doc_card_akar(core, layout, card, card_rect, &theme),
             }
         }
 
-        scroll_area_end(&mut core);
+        scroll_area_end(core);
     }
     ```
 
@@ -434,41 +541,57 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
    pub search_node: NodeId,
    ```
 
-2. Replace `SearchBox::render()` with akar's `text_input`:
-   ```rust
-   // Position search box at bottom center using layout
-   let search_rect = [
-       (window_size.x - 500.0) / 2.0,
-       window_size.y - 70.0,
-       500.0,
-       50.0,
-   ];
-   layout.set_style(search_node, Style {
-       position: Position::Absolute,
-       left: Val::Px(search_rect[0]),
-       top: Val::Px(search_rect[1]),
-       size: Size { width: Val::Px(500.0), height: Val::Px(50.0) },
-       ..default()
-   });
+2. Replace `SearchBox::render()` with akar's `text_input`. **taffy 0.11 has no `Val::Px`/`Val::Percent` enum and `Style` has no `left`/`top` fields** — use the taffy helpers `length(x)` / `percent(p)` for size values, and the `inset: Rect<LengthPercentageAuto>` field for offsets:
+    ```rust
+    use taffy::prelude::*;  // brings length, Position, Size, Rect, Style via akar-layout re-export
 
-   let resp = text_input(
-       &mut core, &layout, search_node,
-       &mut state.search_query, &mut state.cursor_pos,
-       "Search documents... (Cmd+K)",
-       state.cursor_visible,
-       &theme,
-   );
+    // Position search box at bottom center
+    let search_x = (window_size.x - 500.0) / 2.0;
+    let search_y = window_size.y - 70.0;
+    layout.set_style(search_node, Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(search_x),
+            top: length(search_y),
+            ..Rect::auto(),
+        },
+        size: Size { width: length(500.0), height: length(50.0) },
+        ..Style::DEFAULT
+    });
 
-   if resp.submitted {
-       execute_search(state);
-   }
-   ```
+    // Focus management (see focus-persistence note in step 3):
+    if state.search_just_opened {
+        core.input.focused_id = Some(u64::from(search_node));
+        state.search_just_opened = false;
+    }
+    // Re-grab focus if the user hasn't clicked elsewhere this frame.
+    if state.search_active && core.input.focused_id.is_none() {
+        core.input.focused_id = Some(u64::from(search_node));
+    }
 
-3. Wire up keyboard shortcuts:
-   - `Cmd+K`: Activate commit search, focus the text input
-   - `Cmd+Shift+K`: Activate code search, focus the text input
-   - `Escape`: Deactivate search, clear results
-   - These shortcuts remain in the event loop (before `text_input` is called), not inside the component
+    let resp = text_input(
+        core, &layout, search_node,
+        &mut state.search_query, &mut state.cursor_pos,
+        "Search documents... (Cmd+K)",
+        state.cursor_visible,
+        &theme,
+    );
+    if resp.submitted {
+        execute_search(state);
+    }
+    ```
+    Note: `text_input` self-manages focus via `core.input.focused_id == Some(u64::from(node_id))` (`akar-components/src/text_input.rs:56-69`): clicking it sets focus, pressing mouse outside while down clears it. To force focus from a Cmd+K handler, set `core.input.focused_id = Some(u64::from(search_node))` **before** calling `text_input`.
+
+3. Wire up keyboard shortcuts. These run at the **top of the frame** (before `text_input`) and lean on the `cmd_or_ctrl` / `shift` state added in Task 1 step 5:
+   - `Cmd+K`: detect `state.cmd_or_ctrl && core.input.chars.contains(&'k')`. Set `state.search_active = true`, set `state.search_mode = SearchMode::Commits`, set `state.search_just_opened = true` so step 2 forces focus on the next frame.
+   - `Cmd+Shift+K`: additionally require `state.shift`. Same activation flow but `SearchMode::Code`.
+   - `Escape`: scan `core.input.keys_pressed.contains(&akar_core::Key::Escape)` — `Escape` is one of the named keys in akar's `Key` enum. Clear `state.search_active`, `state.code_search_active`, set `core.input.focused_id = None`, and clear search-result containers.
+
+> **Focus persistence across frames (subtle).** `Layout::new()` is called per-frame and `NodeId = taffy::NodeId` is a slotmap key, so the u64 backing `search_node` changes every frame if the layout tree is rebuilt from scratch. `core.input.focused_id` is `Option<u64>` and akar compares via `u64::from(node_id)`, so a stale `focused_id` from the previous frame will silently fail to match the new `search_node`, dropping focus. Two robust mitigations (pick one):
+> - **Re-assert focus each frame** based on a sugacode-side flag (`state.search_active && !clicked_outside_this_frame` → set `focused_id` before `text_input`), as shown in step 2's pseudocode; or
+> - **Reuse the `Layout` instance across frames** (call `Layout::new()` once in `AppState::new()` and call `layout.compute()` every frame with updated sizes). This keeps NodeIds stable, so `focused_id` survives frame boundaries naturally.
+>
+> Verify focus by clicking inside the search box (should gain cursor) and clicking elsewhere (should lose cursor) — both flows are handled by akar's `text_input`.
 
 4. Fix the existing bug: sugacode's search box never captures typed characters. akar's `text_input` handles `core.input.chars` and `core.input.keys_pressed` natively, so typing works out of the box.
 
@@ -563,11 +686,11 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
       - `rgba(0,122,255,100)` → `theme.primary` with alpha
       - `rgb(100,200,255)` (cyan hash) → `theme.info`
 
-6. **Screenshot verification:**
+6. **Screenshot verification.** Add `--screenshot <path>` and `--exit` clap flags to sugacode's CLI (`src/main.rs`) — these do **not exist today**. akar's screenshot API is on `AkarCore` (not a CLI helper): `core.request_screenshot()` early in the frame, then `core.capture_target_view(&device, w, h)` returns a `wgpu::TextureView` to render into instead of the surface view when a shot is pending, and `core.take_screenshot(&device, &queue, encoder, &surface_texture)` returns `CapturedFrame { width, height, rgba: Vec<u8> }` to PNG-encode. akar ships `CapturedFrame`, **not** a PNG writer — encode the RGBA buffer with the `png` crate (see `~/Projects/akar/examples/demo-rust/src/main.rs:1578-1596` for the reference flow; the demo also hardcodes a 5-second settle delay before capture). Wire the flags so:
    ```bash
    cargo run --release -- --screenshot /tmp/sugacode-akar.png --exit
    ```
-   Use akar's screenshot utility (Epic 013) to capture and verify the migrated UI.
+   captures the migrated UI and exits. Use this for visual regression comparison against the text-buffer original.
 
 **Acceptance Criteria:**
 - [ ] Cards have proper rounded corners, borders, and shadows
@@ -666,8 +789,14 @@ The migration is complete when:
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| akar's canvas does not support `push_text` in world space | Grid coordinate labels cannot be rendered | Use `push_quad` for grid lines only; coordinate labels deferred to akar Epic 015+ |
+| akar's canvas does not support `push_text` in world space | Grid coordinate labels cannot be rendered | Use `push_quad` for grid lines only; coordinate labels deferred to akar Epic 015+ (verified: only `push_quad` exists on `CanvasPainter`) |
 | akar is pre-alpha; API may change | Breaking changes during migration | Pin to specific commit; path dependency allows local fixes |
-| Layout tree rebuilt per-frame may be slower than retained | Performance regression with many cards | Use `list_clip` to minimize draw calls; profile early |
-| akar's `text_input` may not support Cmd+K shortcut pre-focus | Search activation flow differs | Wire shortcuts before component call; set `focused_id` manually |
+| Layout tree rebuilt per-frame may be slower than retained | Performance regression with many cards | Use `list_clip` (in `akar-core`, not akar-components) to minimize draw calls; profile early |
+| akar's `text_input` may not support Cmd+K shortcut pre-focus | Search activation flow differs | Set `core.input.focused_id = Some(u64::from(search_node))` before calling `text_input` (Task 6 step 2). Confirmed: `text_input.rs:56-69` matches focus via `u64::from(node_id)` |
+| **`akar_winit` does not expose Cmd/Ctrl modifier state** | Cmd+K shortcut and Cmd+left-drag pan don't work | Track `cmd_or_ctrl: bool` in `AppState` via a `WindowEvent::ModifiersChanged` arm in `main.rs`, separate from `akar_winit::process_window_event` (Task 1 step 5 + Task 2 step 4). `InputState` has no `modifiers` field |
+| **`taffy 0.11` has no `Val::Px`/`Val::Percent` enum** | Pseudocode using `Val::Px` will not compile | Use `length(x)` / `percent(p)` helpers (re-exported via `akar_layout::pub use taffy::prelude::*`). Offset fields live in `Style.inset: Rect<LengthPercentageAuto>`, not standalone `left`/`top` (Task 6 step 2) |
+| **`Layout::compute` needs a mandatory measure closure** | The third arg cannot be `None` | Always pass `|_,_,_,_,_| Size::ZERO` for nodes with fixed sizes (no content measuring) — see Task 2 step 1 |
+| **akar's `PanButton` enum is only `Middle`/`Right`** | Cmd+left-click pan (sugacode convention) is not in akar | Implement manually in `render_canvas` BEFORE `canvas_begin`: track `cmd_panning: bool` separately in `AppState` and update `state.canvas_state.pan` directly. Don't reuse `CanvasState::is_panning` — it is reset by `canvas_begin` on every frame the configured button isn't pressed (Task 3 step 6) |
+| **Per-frame `Layout::new()` churns `NodeId`s; `focused_id` is u64-keyed** | Search box loses focus between frames when Cmd+K opens it | Two options: re-assert `focused_id` each frame from a `state.search_active` flag (Task 6 step 2), or construct `Layout` once in `AppState::new()` and reuse across frames so NodeIds are stable |
+| **`--screenshot`/`--exit` CLI flags don't exist in sugacode** | Visual regression step (Task 8) can't run as-is | Add new clap args in `src/main.rs`; call `core.request_screenshot()` / `capture_target_view` / `take_screenshot` and PNG-encode the returned `CapturedFrame { rgba }` with the `png` crate (akar ships the raw frame, not a writer — pattern in `akar/examples/demo-rust/src/main.rs:1578-1596`) |
 | Drawer animation timing differs (frame-rate vs delta-time) | Animation feels different | Use delta-time-based animation; may need `Instant` tracking |
