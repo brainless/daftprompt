@@ -7,14 +7,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+akar-core = { path = "../akar/crates/akar-core" }
+akar-layout = { path = "../akar/crates/akar-layout" }
+akar-components = { path = "../akar/crates/akar-components" }
+akar-winit = { path = "../akar/crates/akar-winit" }
 wgpu = "29.0.0"
 winit = "0.30.12"
-glyphon = { path = "../glyphon" }
-glam = { path = "../glam-rs" }
 pollster = "0.4"
 log = "0.4"
 env_logger = "0.11"
-bytemuck = "1.19"
+glam = { path = "../glam-rs" }
 gix = { path = "../gitoxide/gix", default-features = false, features = ["basic", "sha1"] }
 clap = { version = "4", features = ["derive"] }
 sugacode-indexer = { path = "crates/sugacode-indexer" }

@@ -1,6 +1,4 @@
-mod renderer;
 mod state;
-mod input;
 mod ui;
 mod git_log;
 
@@ -8,10 +6,6 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use state::AppState;
-use renderer::Renderer;
-use input::InputHandler;
-use ui::UIManager;
-use ui::container::Container;
 use sugacode_indexer::{Indexer, IndexerConfig, CommitData, SymbolKind};
 
 #[derive(Parser)]
@@ -182,9 +176,11 @@ fn main() -> anyhow::Result<()> {
     event_loop
         .run_app(&mut Application {
             state: None,
-            renderer: None,
-            input_handler: None,
-            ui_manager: None,
+            core: None,
+            device: None,
+            queue: None,
+            surface: None,
+            surface_config: None,
             window: None,
             commits,
             indexer,
@@ -196,9 +192,11 @@ fn main() -> anyhow::Result<()> {
 
 struct Application {
     state: Option<AppState>,
-    renderer: Option<Renderer>,
-    input_handler: Option<InputHandler>,
-    ui_manager: Option<UIManager>,
+    core: Option<akar_core::AkarCore>,
+    device: Option<wgpu::Device>,
+    queue: Option<wgpu::Queue>,
+    surface: Option<wgpu::Surface<'static>>,
+    surface_config: Option<wgpu::SurfaceConfiguration>,
     window: Option<std::sync::Arc<winit::window::Window>>,
     commits: Vec<git_log::CommitInfo>,
     indexer: Option<Indexer>,
@@ -219,35 +217,60 @@ impl winit::application::ApplicationHandler for Application {
             event_loop.create_window(window_attributes).unwrap()
         );
 
-        let mut state = AppState::new(window.inner_size().into());
+        let physical_size = window.inner_size();
+        let scale_factor = window.scale_factor() as f32;
 
+        let mut state = AppState::new(physical_size.into());
+        state.scale_factor = scale_factor;
         state.indexer = self.indexer.take();
 
-        // Create git log container
+        // Git-log container creation deferred to Task 2/3 — UI module is disabled
+        // in Task 1 (it referenced renderer.rs/input.rs types that are now removed).
+        // For Task 1 we just need the window to open with a clear color.
         if !self.commits.is_empty() {
-            let container_width = 500.0;
-            let container_height = state.window_size.y - 40.0; // 20px padding top/bottom
-            let container = Container::new_git_log(
-                0,
-                glam::Vec2::new(80.0, 20.0),
-                container_width,
-                container_height,
-                self.commits.clone(),
+            log::info!(
+                "Loaded {} commits — container creation deferred to Task 2/3",
+                self.commits.len()
             );
-            state.containers.push(container);
         }
 
-        let renderer = pollster::block_on(Renderer::new(window.clone(), event_loop));
-        let input_handler = InputHandler::new();
-        let ui_manager = UIManager::new();
+        // wgpu setup (sugacode owns the window; akar owns the GPU pipeline)
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(Box::new(
+            event_loop.owned_display_handle(),
+        )));
+        let surface = instance.create_surface(window.clone()).expect("Failed to create surface");
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            compatible_surface: Some(&surface),
+            ..Default::default()
+        }))
+        .unwrap();
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+
+        let surface_format = wgpu::TextureFormat::Bgra8UnormSrgb;
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width: physical_size.width.max(1),
+            height: physical_size.height.max(1),
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&device, &surface_config);
+
+        // AkarCore takes &Device/&Queue; create while borrows are live, then move in.
+        let core = akar_core::AkarCore::new(&device, &queue, surface_format);
 
         self.state = Some(state);
-        self.renderer = Some(renderer);
-        self.input_handler = Some(input_handler);
-        self.ui_manager = Some(ui_manager);
+        self.device = Some(device);
+        self.queue = Some(queue);
+        self.surface = Some(surface);
+        self.surface_config = Some(surface_config);
+        self.core = Some(core);
         self.window = Some(window.clone());
 
-        // Request initial redraw
         window.request_redraw();
     }
 
@@ -257,43 +280,131 @@ impl winit::application::ApplicationHandler for Application {
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
-        let (Some(state), Some(renderer), Some(input_handler), Some(ui_manager), Some(window)) =
-            (&mut self.state, &mut self.renderer, &mut self.input_handler, &mut self.ui_manager, &self.window)
-        else {
+        // Forward to akar's input state. We pull `state` and `core` out so we can mutate them
+        // freely without aliasing the other fields; the remaining fields are accessed via
+        // `self.surface` / `self.window` directly inside the match.
+        if let (Some(state), Some(core)) = (self.state.as_mut(), self.core.as_mut()) {
+            // akar-winit forwards cursor/mouse/wheel/text but NOT modifiers. Track Cmd/Ctrl here.
+            if let winit::event::WindowEvent::ModifiersChanged(m) = &event {
+                state.cmd_or_ctrl = if cfg!(target_os = "macos") {
+                    m.state().super_key()
+                } else {
+                    m.state().control_key()
+                };
+                state.shift_pressed = m.state().shift_key();
+            }
+
+            akar_winit::process_window_event(&mut core.input, &event);
+        } else {
             return;
-        };
-
-        // Handle input events
-        input_handler.handle_event(&event, state);
-
-        // Update UI based on input
-        ui_manager.update(state, input_handler);
+        }
 
         match event {
             winit::event::WindowEvent::Resized(size) => {
-                state.resize(size.into());
-                renderer.resize(size.into());
-                window.request_redraw();
-            }
-            winit::event::WindowEvent::RedrawRequested => {
-                renderer.render(state, ui_manager);
+                if let (Some(state), Some(device), Some(surface)) = (
+                    self.state.as_mut(),
+                    self.device.as_ref(),
+                    self.surface.as_ref(),
+                ) {
+                    state.resize(size.into());
+                    let surface_config = self.surface_config.as_ref().unwrap();
+                    let mut new_config = surface_config.clone();
+                    new_config.width = size.width.max(1);
+                    new_config.height = size.height.max(1);
+                    surface.configure(device, &new_config);
+                }
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
             }
             winit::event::WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
-            winit::event::WindowEvent::CursorMoved { .. } => {
-                window.request_redraw();
+            winit::event::WindowEvent::RedrawRequested => {
+                if let Err(e) = self.handle_redraw() {
+                    log::error!("Redraw failed: {e}");
+                }
             }
-            winit::event::WindowEvent::MouseInput { .. } => {
-                window.request_redraw();
-            }
-            winit::event::WindowEvent::MouseWheel { .. } => {
-                window.request_redraw();
-            }
-            winit::event::WindowEvent::KeyboardInput { .. } => {
-                window.request_redraw();
+            winit::event::WindowEvent::CursorMoved { .. }
+            | winit::event::WindowEvent::MouseInput { .. }
+            | winit::event::WindowEvent::MouseWheel { .. }
+            | winit::event::WindowEvent::KeyboardInput { .. } => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
             }
             _ => {}
         }
+    }
+}
+
+impl Application {
+    fn handle_redraw(&mut self) -> anyhow::Result<()> {
+        let core = self.core.as_mut().unwrap();
+        let state = self.state.as_ref().unwrap();
+        let device = self.device.as_ref().unwrap();
+        let queue = self.queue.as_ref().unwrap();
+        let surface = self.surface.as_mut().unwrap();
+
+        let w = state.window_size.x as u32;
+        let h = state.window_size.y as u32;
+        core.begin_frame(w, h, state.scale_factor);
+
+        let frame = match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+            wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Occluded
+            | wgpu::CurrentSurfaceTexture::Outdated => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                log::warn!("Surface lost; skipping frame");
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                return Err(anyhow::anyhow!("Surface validation error"));
+            }
+        };
+
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Main Encoder"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Main Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.1,
+                            g: 0.1,
+                            b: 0.1,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            let _ = core.end_frame(device, queue, &mut pass);
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+        frame.present();
+
+        Ok(())
     }
 }

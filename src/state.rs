@@ -13,10 +13,18 @@ pub struct AppState {
     pub scale_factor: f32,
 
     // Canvas state
+    #[allow(dead_code)]
     pub zoom: f32,
+    #[allow(dead_code)]
     pub pan_offset: Vec2,
+    #[allow(dead_code)]
     pub is_panning: bool,
+    #[allow(dead_code)]
     pub last_mouse_pos: Option<Vec2>,
+
+    // Modifier state (akar_winit doesn't expose Cmd/Ctrl; we track it ourselves)
+    pub cmd_or_ctrl: bool,
+    pub shift_pressed: bool,
 
     // UI state
     pub system_theme: SystemTheme,
@@ -27,6 +35,7 @@ pub struct AppState {
 
     // Data state
     pub folders: Vec<FolderData>,
+    #[allow(dead_code)]
     pub containers: Vec<Container>,
 
     // Indexer state
@@ -91,6 +100,9 @@ impl AppState {
             is_panning: false,
             last_mouse_pos: None,
 
+            cmd_or_ctrl: false,
+            shift_pressed: false,
+
             system_theme: SystemTheme::Dark,
             drawer_open: true,
             selected_folder: None,
@@ -110,18 +122,22 @@ impl AppState {
         }
     }
 
+    #[allow(dead_code)]
     pub fn resize(&mut self, new_size: (u32, u32)) {
         self.window_size = Vec2::new(new_size.0 as f32, new_size.1 as f32);
     }
 
+    #[allow(dead_code)]
     pub fn screen_to_canvas(&self, screen_pos: Vec2) -> Vec2 {
         (screen_pos - self.window_size * 0.5) / self.zoom + self.pan_offset
     }
 
+    #[allow(dead_code)]
     pub fn canvas_to_screen(&self, canvas_pos: Vec2) -> Vec2 {
         (canvas_pos - self.pan_offset) * self.zoom + self.window_size * 0.5
     }
 
+    #[allow(dead_code)]
     pub fn zoom_at_point(&mut self, screen_pos: Vec2, zoom_delta: f32) {
         let canvas_pos = self.screen_to_canvas(screen_pos);
         let new_zoom = (self.zoom * zoom_delta).clamp(0.1, 5.0);
@@ -131,11 +147,13 @@ impl AppState {
         self.zoom = new_zoom;
     }
 
+    #[allow(dead_code)]
     pub fn start_panning(&mut self, screen_pos: Vec2) {
         self.is_panning = true;
         self.last_mouse_pos = Some(screen_pos);
     }
 
+    #[allow(dead_code)]
     pub fn update_panning(&mut self, screen_pos: Vec2) {
         if let Some(last_pos) = self.last_mouse_pos {
             let delta = (screen_pos - last_pos) / self.zoom;
@@ -144,11 +162,13 @@ impl AppState {
         }
     }
 
+    #[allow(dead_code)]
     pub fn stop_panning(&mut self) {
         self.is_panning = false;
         self.last_mouse_pos = None;
     }
 
+    #[allow(dead_code)]
     fn create_sample_folders() -> Vec<FolderData> {
         vec![
             FolderData {

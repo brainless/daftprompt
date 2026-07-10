@@ -51,8 +51,15 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 ### Task 1: Add akar Dependencies and Remove Old Renderer
 
 **Priority:** High
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 **Estimated Time:** 2 hours
+
+**Review note (post-implementation):**
+- `src/renderer.rs` and `src/input.rs` deleted; `src/main.rs` rewritten to drive `AkarCore`; `AppState` now has `cmd_or_ctrl` and `shift_pressed` fields; `ModifiersChanged` is intercepted in `window_event` before forwarding to `akar_winit::process_window_event`.
+- **Deviation:** the spec asked for `wgpu`/`winit`/`glyphon` to be removed from direct deps. In Rust 2021 the binary cannot `use wgpu::...` or `winit::...` against a transitive-only crate, and no akar crate re-exports them. So `wgpu = "29.0.0"`, `winit = "0.30.12"`, and `glam` are still direct deps. `glyphon` and `bytemuck` are gone (transitive via akar-core). `pollster` is kept as a direct dep because main.rs needs `pollster::block_on` to drive wgpu's async setup in `resumed`.
+- **Deviation:** `glam` stays as a direct dep. The "preferred" `akar_layout::glam::Vec2` route from the spec is impossible because `taffy::prelude::*` does not re-export glam.
+- **Deviation:** the git-log container creation that was previously in `resumed` was deferred — `ui::container` survived but `ui::mod.rs` was trimmed to a single-line stub (`pub mod container;`) so the binary compiles. The original 4-module UI is rebuilt with akar in Tasks 2-5.
+- `cargo check --workspace` passes. `cargo test -p sugacode-indexer` passes (18/18).
 
 **Description:** Replace sugacode's direct wgpu/glyphon/winit/glam dependencies with akar crates. Remove `renderer.rs` and wire up akar's `AkarCore` as the rendering backend.
 
