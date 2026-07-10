@@ -135,8 +135,16 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 ### Task 2: Migrate Application Shell and Render Loop
 
 **Priority:** High
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 **Estimated Time:** 3 hours
+
+**Review note (post-implementation):**
+- `UIManager` is gone; per-frame `Layout::new()` builds a tree containing a single `canvas_node` (full-window `percent(1.0)` × `percent(1.0)`), `layout.compute(...)` runs with the required `Size::ZERO` measure closure, then `core.begin_frame` / `core.end_frame` wrap the render pass. `render_canvas`/`render_drawer`/`render_search` are stubbed in a new `src/ui/render.rs`.
+- Keyboard-shortcut detection lives at the top of `handle_redraw` immediately after `core.begin_frame` so input is read before `core.end_frame` clears it. Cmd+K / Cmd+Shift+K toggle `search_active` / `code_search_active`, clearing the other mode's results and containers (matching the deleted `input.rs` semantics). Escape cascades code → commits → deselect-all, and clears `core.input.focused_id` (no-op for Task 2, but wires Task 6's text input focus loss).
+- `AppState` now has `SearchMode { Commits, Code }`, `search_mode`, `search_just_opened`, `code_search_just_opened`, `cursor_pos`, `cursor_visible`, `cursor_timer` — Task 6 will read/write these; declared here so the state schema is in one place.
+- Git-log container creation restored in `resumed()` (deferred from Task 1) — the git-log data is loaded into `state.containers[0]`, ready for Task 5's rendering.
+- Winit's IME gives both `'k'` and `'K'` on Cmd+Shift+K depending on the platform; the detector checks both. `let _ = core.end_frame(...)` ignores the `Result` for now (the empty draw list can't fail; Tasks 3+ can handle errors properly if needed).
+- `cargo check --workspace` passes. `cargo test -p sugacode-indexer` passes (18/18).
 
 **Description:** Restructure `main.rs` to use akar's frame lifecycle and layout system. Replace the custom `UIManager` orchestration with a flat immediate-mode render function.
 

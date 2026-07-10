@@ -7,6 +7,12 @@ pub enum SystemTheme {
     Dark,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SearchMode {
+    Commits,
+    Code,
+}
+
 pub struct AppState {
     // Window state
     pub window_size: Vec2,
@@ -32,6 +38,13 @@ pub struct AppState {
     pub selected_folder: Option<usize>,
     pub search_query: String,
     pub search_active: bool,
+    pub search_mode: SearchMode,
+    pub search_just_opened: bool,
+
+    // Text-input cursor (Task 6: read/written by search box)
+    pub cursor_pos: usize,
+    pub cursor_visible: bool,
+    pub cursor_timer: f32,
 
     // Data state
     pub folders: Vec<FolderData>,
@@ -44,6 +57,7 @@ pub struct AppState {
 
     // Code search state
     pub code_search_active: bool,
+    pub code_search_just_opened: bool,
     pub code_search_query: String,
     pub code_search_results: Vec<sugacode_indexer::CodeSearchResult>,
     pub code_indexing_in_progress: bool,
@@ -108,6 +122,12 @@ impl AppState {
             selected_folder: None,
             search_query: String::new(),
             search_active: false,
+            search_mode: SearchMode::Commits,
+            search_just_opened: false,
+
+            cursor_pos: 0,
+            cursor_visible: true,
+            cursor_timer: 0.0,
 
             folders: Self::create_sample_folders(),
             containers: Vec::new(),
@@ -116,6 +136,7 @@ impl AppState {
             search_results: Vec::new(),
 
             code_search_active: false,
+            code_search_just_opened: false,
             code_search_query: String::new(),
             code_search_results: Vec::new(),
             code_indexing_in_progress: false,

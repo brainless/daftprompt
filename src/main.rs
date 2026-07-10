@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use clap::Parser;
 use state::AppState;
 use sugacode_indexer::{Indexer, IndexerConfig, CommitData, SymbolKind};
+use ui::container::{Container, ContainerType};
+use ui::render::{render_canvas, render_drawer, render_search};
 
 #[derive(Parser)]
 #[command(name = "text-explorer", about = "A text repository explorer")]
@@ -224,14 +226,20 @@ impl winit::application::ApplicationHandler for Application {
         state.scale_factor = scale_factor;
         state.indexer = self.indexer.take();
 
-        // Git-log container creation deferred to Task 2/3 — UI module is disabled
-        // in Task 1 (it referenced renderer.rs/input.rs types that are now removed).
-        // For Task 1 we just need the window to open with a clear color.
+        // Create git log container. The data model is built here in `resumed` so
+        // the canvas (Task 3) can immediately read it. The visual rendering of the
+        // container is added in Task 5; for now it just lives in `state.containers`.
         if !self.commits.is_empty() {
-            log::info!(
-                "Loaded {} commits — container creation deferred to Task 2/3",
-                self.commits.len()
+            let container_width = 500.0;
+            let container_height = state.window_size.y - 40.0; // 20px padding top/bottom
+            let container = Container::new_git_log(
+                0,
+                glam::Vec2::new(80.0, 20.0),
+                container_width,
+                container_height,
+                self.commits.clone(),
             );
+            state.containers.push(container);
         }
 
         // wgpu setup (sugacode owns the window; akar owns the GPU pipeline)
@@ -340,16 +348,144 @@ impl winit::application::ApplicationHandler for Application {
 
 impl Application {
     fn handle_redraw(&mut self) -> anyhow::Result<()> {
+        // Split borrows from `self` so we can read all fields in parallel. Each
+        // `as_ref().unwrap()` / `as_mut().unwrap()` borrows a different field,
+        // which the borrow checker accepts as disjoint.
         let core = self.core.as_mut().unwrap();
-        let state = self.state.as_ref().unwrap();
+        let state = self.state.as_mut().unwrap();
         let device = self.device.as_ref().unwrap();
         let queue = self.queue.as_ref().unwrap();
         let surface = self.surface.as_mut().unwrap();
 
+        // Build a fresh per-frame layout tree. The whole tree is rebuilt every
+        // frame (immediate mode) — for Task 2 it contains only the canvas root
+        // node. Tasks 3+ add drawer / search subtrees.
+        let mut layout = akar_layout::Layout::new();
+        let canvas_node = layout.new_leaf(akar_layout::Style {
+            size: akar_layout::Size {
+                width: akar_layout::Dimension::percent(1.0),
+                height: akar_layout::Dimension::percent(1.0),
+            },
+            ..Default::default()
+        });
+        // `Layout::compute` requires a measure closure even for fixed-size nodes.
+        // Pass a no-op that returns Size::ZERO — no node in Task 2 needs content
+        // measuring because every size is fully specified in the Style.
+        layout.compute(
+            canvas_node,
+            (Some(state.window_size.x), Some(state.window_size.y)),
+            |_, _, _, _, _| akar_layout::Size::ZERO,
+        );
+
+        // Start the frame. From this point until `core.end_frame`, we can read
+        // `core.input.chars` / `core.input.keys_pressed` — they get cleared at
+        // `end_frame`. Width/height are cast to u32 per the akar API; scale
+        // factor is the winit value (set in `resumed`).
         let w = state.window_size.x as u32;
         let h = state.window_size.y as u32;
         core.begin_frame(w, h, state.scale_factor);
 
+        // Keyboard shortcut detection. This must run between `begin_frame` and
+        // `end_frame` so the per-frame input is still populated. The handlers
+        // mutate `state` (toggle search_active, clear results, etc.) and any
+        // changes are picked up by the render functions below.
+        //
+        // Preserves the semantics of the deleted `src/input.rs` (pre-migration
+        // lines 81-138):
+        //   Cmd+Shift+K toggles code search (clears commit search when ON,
+        //   clears code search when OFF).
+        //   Cmd+K toggles commit search (clears code search when ON, clears
+        //   commit search when OFF).
+        //   Toggling either mode ON clears the other's query/results/containers.
+        //   Toggling either mode OFF clears its own query/results/containers.
+        //   Escape cascade: code → commits → deselect-all-cards.
+        // Also clears `core.input.focused_id` on Escape so any focused text
+        // input loses focus (matters once Task 6 wires the search box).
+        let cmd_or_ctrl = state.cmd_or_ctrl;
+        let shift = state.shift_pressed;
+        if cmd_or_ctrl
+            && (core.input.chars.contains(&'k') || core.input.chars.contains(&'K'))
+        {
+            if shift {
+                // Cmd+Shift+K: toggle code search.
+                state.code_search_active = !state.code_search_active;
+                state.code_search_just_opened = state.code_search_active;
+                state.search_mode = state::SearchMode::Code;
+                if state.code_search_active {
+                    // Turning code search ON: clear commit search.
+                    state.search_active = false;
+                    state.search_query.clear();
+                    state.search_results.clear();
+                    state.containers
+                        .retain(|c| c.container_type != ContainerType::SearchResults);
+                }
+                // Always clear code search's own state (covers both the OFF
+                // toggle and the "fresh open" case where the query was left
+                // over from a previous session).
+                state.code_search_query.clear();
+                state.code_search_results.clear();
+                state.containers
+                    .retain(|c| c.container_type != ContainerType::CodeSearchResults);
+            } else {
+                // Cmd+K: toggle commit search.
+                state.search_active = !state.search_active;
+                state.search_just_opened = state.search_active;
+                state.search_mode = state::SearchMode::Commits;
+                if state.search_active {
+                    // Turning commit search ON: clear code search.
+                    state.code_search_active = false;
+                    state.code_search_query.clear();
+                    state.code_search_results.clear();
+                    state.containers
+                        .retain(|c| c.container_type != ContainerType::CodeSearchResults);
+                }
+                state.search_query.clear();
+                state.search_results.clear();
+                state.containers
+                    .retain(|c| c.container_type != ContainerType::SearchResults);
+            }
+        }
+        if core.input.keys_pressed.contains(&akar_core::Key::Escape) {
+            if state.code_search_active {
+                state.code_search_active = false;
+                state.code_search_just_opened = false;
+                state.code_search_query.clear();
+                state.code_search_results.clear();
+                state.containers
+                    .retain(|c| c.container_type != ContainerType::CodeSearchResults);
+            } else if state.search_active {
+                state.search_active = false;
+                state.search_just_opened = false;
+                state.search_query.clear();
+                state.search_results.clear();
+                state.containers
+                    .retain(|c| c.container_type != ContainerType::SearchResults);
+            } else {
+                // Deselect all (cascade terminator).
+                state.selected_folder = None;
+                for container in &mut state.containers {
+                    for card in &mut container.cards {
+                        card.is_selected = false;
+                    }
+                }
+            }
+            // Any focused text input loses focus on Escape. No-op for Task 2
+            // (no components set focused_id yet) but Task 6's text_input will
+            // honor this.
+            core.input.focused_id = None;
+        }
+
+        // Render layers. Order: canvas → drawer → search (search is on top).
+        render_canvas(core, &mut layout, canvas_node, state);
+        if state.drawer_open {
+            render_drawer(core, &mut layout, state);
+        }
+        if state.search_active || state.code_search_active {
+            render_search(core, &mut layout, state);
+        }
+
+        // Acquire the surface texture. If acquisition fails, skip the frame
+        // and request another redraw — same as Task 1.
         let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             wgpu::CurrentSurfaceTexture::Timeout
@@ -400,6 +536,9 @@ impl Application {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            // `end_frame` flushes the draw list to the GPU AND clears
+            // `core.input` (chars, keys_pressed, scroll_delta, mouse press/release).
+            // All input reads for this frame must have happened above.
             let _ = core.end_frame(device, queue, &mut pass);
         }
         queue.submit(std::iter::once(encoder.finish()));
