@@ -82,7 +82,7 @@ pub struct ItemRow {
 
 pub fn insert_items(db: &Connection, source_type: &str, items: &[ItemRow]) -> anyhow::Result<Vec<i64>> {
     let mut stmt = db.prepare(
-        "INSERT INTO items(source_type, identifier, text, author, metadata) VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO items(source_type, identifier, text, author, metadata) VALUES (?, ?, ?, ?, ?)",
     )?;
     let mut ids = Vec::new();
     for item in items {

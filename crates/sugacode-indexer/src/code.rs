@@ -45,7 +45,7 @@ const RUST_QUERY: &str = r#"
   name: (type_identifier) @name) @definition.trait
 
 (impl_item
-  type: (type_identifier) @impl_type
+  type: (_) @impl_type
   body: (declaration_list
     (function_item
       name: (identifier) @name) @definition.impl_method))
