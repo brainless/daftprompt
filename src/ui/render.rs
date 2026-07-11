@@ -306,8 +306,7 @@ fn render_containers(
             // loop and the long match below.
             let card_pos = container.cards[i].position;
             let card_size = container.cards[i].size;
-            let was_selected = container.cards[i].is_selected;
-            let doc = container.documents[container.cards[i].document_id].clone();
+            let document_id = container.cards[i].document_id;
 
             // Card screen rect. `card.position` is in world space
             // relative to the container; `scroll_resp.content_y` is the
@@ -328,6 +327,16 @@ fn render_containers(
                 }
             }
 
+            // Read selection state AFTER the potential iter_mut above,
+            // so the fill reflects the click that just happened (not
+            // the previous frame's state).
+            let is_selected = container.cards[i].is_selected;
+
+            // Borrow the document immutably for rendering. This is safe
+            // because the iter_mut on cards above has completed, releasing
+            // the mutable borrow on container.
+            let doc = &container.documents[document_id];
+
             // Card background. Pushed to `core.draw_list` directly (z=0.1)
             // so the active scroll-area scissor clips it to the
             // container, and so it sorts after the z=0.0 quads in
@@ -347,7 +356,7 @@ fn render_containers(
             //   the saturated base_100 card body.
             // - Hover: theme.base_300, a step lighter than the default.
             let default_card = BoxStyle::card(&theme);
-            let (fill, border, border_width, corner_radii, shadow) = if was_selected {
+            let (fill, border, border_width, corner_radii, shadow) = if is_selected {
                 // theme.primary is 0xRRGGBBAA; zero the AA byte and set it
                 // to 0x40 (~25% alpha). The earlier `(& 0x00FFFFFF) | 0x40_00_00_00`
                 // formula wrote 0x40 to the RR byte instead — left a fully
@@ -1140,6 +1149,12 @@ pub fn render_search(
     } else if (state.search_active || state.code_search_active)
         && core.input.focused_id.is_none()
     {
+        // FIXME: click-outside-to-unfocus is broken. This branch re-grabs
+        // focus whenever focused_id is None, even if the user clicked outside
+        // the search box. The per-frame NodeId churn means we can't reliably
+        // detect "user clicked elsewhere" vs "NodeId was recycled." Escape is
+        // the only way to unfocus without closing the search. Documented in
+        // Epic 005 Task 6 review notes; deferred to a future task.
         core.input.focused_id = Some(id_u64);
     }
 

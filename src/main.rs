@@ -687,7 +687,9 @@ impl Application {
             // `end_frame` flushes the draw list to the GPU AND clears
             // `core.input` (chars, keys_pressed, scroll_delta, mouse press/release).
             // All input reads for this frame must have happened above.
-            let _ = core.end_frame(device, queue, &mut pass);
+            if let Err(e) = core.end_frame(device, queue, &mut pass) {
+                log::error!("end_frame: {e}");
+            }
         }
 
         if screenshot_pending {
