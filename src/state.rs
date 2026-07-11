@@ -34,7 +34,16 @@ pub struct AppState {
     // UI state
     pub system_theme: SystemTheme,
     pub drawer_open: bool,
+    // Animated drawer progress in [0.0, 1.0]. 0.0 = fully collapsed (60px),
+    // 1.0 = fully expanded (250px). Updated by main.rs each frame from
+    // `drawer_open` and a delta-time; render_drawer reads it to compute
+    // `panel_width` and decide whether to show the folder names.
+    pub drawer_animation: f32,
     pub selected_folder: Option<usize>,
+    // Index of the folder row the mouse is currently hovering. Set by
+    // render_drawer (Task 4) on each frame; consumers can read it for
+    // tooltip / preview purposes later.
+    pub hover_index: Option<usize>,
     pub search_query: String,
     pub search_active: bool,
     pub search_mode: SearchMode,
@@ -116,7 +125,9 @@ impl AppState {
 
             system_theme: SystemTheme::Dark,
             drawer_open: true,
+            drawer_animation: 1.0,
             selected_folder: None,
+            hover_index: None,
             search_query: String::new(),
             search_active: false,
             search_mode: SearchMode::Commits,

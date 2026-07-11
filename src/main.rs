@@ -3,6 +3,7 @@ mod ui;
 mod git_log;
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use clap::Parser;
 use state::AppState;
@@ -186,6 +187,7 @@ fn main() -> anyhow::Result<()> {
             window: None,
             commits,
             indexer,
+            last_frame: None,
         })
         .unwrap();
 
@@ -202,6 +204,10 @@ struct Application {
     window: Option<std::sync::Arc<winit::window::Window>>,
     commits: Vec<git_log::CommitInfo>,
     indexer: Option<Indexer>,
+    // Timestamp of the previous `handle_redraw` call. Used by Task 4 (drawer)
+    // to advance `state.drawer_animation` with a delta-time. None on the
+    // first frame; the first `handle_redraw` then primes it.
+    last_frame: Option<Instant>,
 }
 
 impl winit::application::ApplicationHandler for Application {
@@ -529,6 +535,34 @@ impl Application {
         }
 
         render_canvas(core, &mut layout, canvas_node, indicator_node, state);
+
+        // Drawer animation (Task 4). Delta-time based: advances
+        // `state.drawer_animation` toward 1.0 (open) or 0.0 (closed) at a
+        // rate of 6.0/sec, so a full open/close takes ~1/6 s. Runs BEFORE
+        // `render_drawer` so it sees the updated value when computing
+        // `panel_width`. Also keeps requesting redraws while the animation
+        // is in flight so the lerp continues frame-to-frame.
+        let now = Instant::now();
+        let dt = match self.last_frame {
+            Some(prev) => now.duration_since(prev).as_secs_f32(),
+            None => 0.0,
+        };
+        self.last_frame = Some(now);
+        let target = if state.drawer_open { 1.0 } else { 0.0 };
+        let anim_speed = 6.0_f32;
+        if state.drawer_animation < target {
+            state.drawer_animation = (state.drawer_animation + dt * anim_speed).min(target);
+        } else if state.drawer_animation > target {
+            state.drawer_animation = (state.drawer_animation - dt * anim_speed).max(target);
+        }
+        if (state.drawer_open && state.drawer_animation < 1.0)
+            || (!state.drawer_open && state.drawer_animation > 0.0)
+        {
+            if let Some(window) = self.window.as_ref() {
+                window.request_redraw();
+            }
+        }
+
         if state.drawer_open {
             render_drawer(core, &mut layout, state);
         }

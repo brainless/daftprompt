@@ -370,8 +370,18 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 ### Task 4: Migrate Drawer
 
 **Priority:** High
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 **Estimated Time:** 2 hours
+
+**Review note (post-implementation):**
+- `render_drawer` uses `drawer_begin`/`drawer_end` (scrim + panel + scissor) and pushes the folder list inside the scissor. Per-row is a taffy `row_node` (absolute) with `icon_node` and (when expanded) `text_node` children; a Ghost-variant `button` covers the row for hover/click; the selected row gets a `container` with a `theme.primary` fill underneath.
+- Animation is delta-time-based: `AppState::drawer_animation` ∈ [0.0, 1.0] lerps toward 1.0 (open) or 0.0 (closed) at 6.0/sec in `main.rs::handle_redraw`, driven by a new `last_frame: Option<Instant>` field on `Application`. Replaces the old frame-rate-incremented `0.1 / frame` step. A 60→250px full open/close takes ~1/6 s.
+- `AppState` gained `drawer_animation: f32` and `hover_index: Option<usize>`.
+- `src/ui/drawer.rs` deleted (268 lines of emoji-in-text-buffer rendering and frame-rate-incremented animation).
+- **Deviation:** `panel_node` is a *rootless* taffy leaf, then we call `layout.compute(panel_node, …)` as a second pass — the canvas tree (already computed for `canvas_node`) is unaffected because `panel_node` is not a descendant. This works because taffy 0.11 lets you compute a subtree independently of its parent.
+- **Deviation:** no in-app way to *re-open* the drawer after a scrim-close yet — the spec said this was acceptable to defer.
+- **Deviation:** did not add Escape-to-close for the drawer (spec said not to). Selected-row highlight uses full-alpha `theme.primary` which is barely visible against the panel's `theme.base_200` in the dark theme — Task 8 should swap to a low-alpha tint or `theme.accent` for visual contrast.
+- `cargo check --workspace` passes clean (10 pre-existing dead-code warnings on `Container`, all from Task 5). `cargo test -p sugacode-indexer` passes 18/18. `cargo build` clean.
 
 **Description:** Replace sugacode's custom drawer (emoji icons, expand/collapse animation, text-buffer backgrounds) with akar's `drawer_begin/end` + `container` + `label` + `button` components.
 
