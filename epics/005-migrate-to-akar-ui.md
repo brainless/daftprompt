@@ -564,8 +564,21 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 ### Task 6: Migrate Search Box to akar TextInput
 
 **Priority:** High
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 **Estimated Time:** 3 hours
+
+**Review note (post-implementation):**
+- `render_search` is now a real implementation. It builds a rootless taffy sub-tree (window-sized parent + 16px-tall mode-indicator child + 500×50px search-box child), computes it, then calls `akar_components::text_input` with the active mode's query string and shared `state.cursor_pos`.
+- **Bug fix from spec**: typing characters into the search box now actually updates the query (the old `src/ui/search.rs` only rendered; no input capture). `text_input` reads `core.input.chars` and `core.input.keys_pressed` natively.
+- **Focus persistence via re-assert.** `core.input.focused_id` is set to `Some(u64::from(search_node))` on `state.search_just_opened` (the first frame) and re-asserted each frame as long as `search_active || code_search_active` and no other widget has claimed focus. This is option A from the Risks row — option B (persistent `Layout`) would require restructuring `main.rs::handle_redraw`'s per-frame `Layout::new()`, which is out of scope.
+- **Click-outside-to-unfocus is broken in practice** as the sub-agent flagged: the per-frame `NodeId` churn means the re-assert branch keeps grabbing focus whenever `focused_id` is `None`, even if the user clicked outside. Escape is the only way to unfocus without the box closing. Documented for Task 8.
+- **Mode indicator** is a `badge` ("Commits" = `BadgeVariant::Info` cyan, "Code" = `BadgeVariant::Success` green) 4px above the search box, left-aligned. Avoids needing a new accent-border component.
+- **Search execution** in `execute_search(state)`: empty query → remove results container; non-empty + indexer present → call `search_hybrid` / `search_code_hybrid` and push a `Container::new_search_results` / `new_code_search_results` at world `(620, 20)`, width 500, height `window_h - 40`. Container id is reused from the previous results container if one exists (so the id space stays small and selection state isn't orphaned).
+- **Cursor blink** uses `dt` from `main.rs::handle_redraw` (already plumbed by Task 4). `state.cursor_timer += dt; if timer >= 0.5 { timer -= 0.5; visible = !visible; }` — fps-independent.
+- `src/main.rs` changed by exactly 1 line: `render_search(...)` → `render_search(..., dt)`. The keyboard-shortcut detector block (Cmd+K, Cmd+Shift+K, Escape) at lines 429-499 was left untouched.
+- **Deviation:** `state.search_results = results.clone()` was dropped because `SearchResult` / `CodeSearchResult` don't derive `Clone`. The data is owned by the `Container` already; the `search_results` field is only ever read via `.clear()` by the keyboard handler. The field stays as a placeholder.
+- **Deviation:** `submit-on-Enter` re-runs the search instead of dismissing the box, matching the spec's `execute_search(state)` pseudocode literally.
+- `cargo check --workspace` passes clean (7 pre-existing dead-code warnings). `cargo test -p sugacode-indexer` 18/18. `cargo build` clean.
 
 **Description:** Replace sugacode's custom search box (text-buffer rendering, no actual text input) with akar's `text_input` component, which provides real keyboard text capture, cursor blinking, and focus management.
 

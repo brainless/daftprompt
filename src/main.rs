@@ -567,7 +567,7 @@ impl Application {
             render_drawer(core, &mut layout, state);
         }
         if state.search_active || state.code_search_active {
-            render_search(core, &mut layout, state);
+            render_search(core, &mut layout, state, dt);
         }
 
         // Acquire the surface texture. If acquisition fails, skip the frame

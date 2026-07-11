@@ -29,21 +29,38 @@
 //     rendered with `label`. See the `render_containers` doc comment for
 //     the full layering rationale.
 //
-// Task 6 (search) still stubs the search box.
+// Task 6 (search):
+//   - `render_search` builds a rootless taffy sub-tree containing a
+//     mode-indicator `badge` (above the box) and the `text_input` (the
+//     search box). Both are absolute-positioned children of a rootless
+//     parent that covers the window. The same `Layout::new()`-per-frame
+//     model that churns `NodeId`s for the canvas tree applies here too,
+//     so `core.input.focused_id` is re-asserted from
+//     `state.search_just_opened` before each `text_input` call (see the
+//     epic Risks row on `focused_id` being u64-keyed).
+//   - The mode indicator uses `badge` (cyan for Commits, green for Code)
+//     — a 16px-tall pill above the search box left-aligned with it.
+//   - Search execution (`resp.changed` or `resp.submitted`) re-runs
+//     `indexer.search_hybrid` / `search_code_hybrid` and (re)creates a
+//     results container; empty query removes it.
 
 use akar_components::{
     akar_button as button, akar_container as container, akar_label as label,
     canvas_begin, canvas_end, BoxStyle, ButtonVariant, CanvasConfig, CanvasPainter,
     CanvasResponse, DrawerEdge,
 };
-use akar_components::{drawer_begin, drawer_end, scroll_area_begin, scroll_area_end};
+use akar_components::{
+    akar_badge as badge, akar_text_input as text_input, drawer_begin, drawer_end,
+    scroll_area_begin, scroll_area_end, BadgeVariant,
+};
 use akar_core::{list_clip, AkarCore, QuadCall};
 use akar_layout::{
     auto, length, CanvasTransform, Layout, NodeId, Position, Rect, Size, Style, WorldRect,
 };
+use glam::Vec2;
 
 use crate::state::{self, AppState, IconType};
-use crate::ui::container::ContainerType;
+use crate::ui::container::{Container, ContainerType};
 
 /// Renders the infinite canvas: grid (world space) + zoom indicator (screen
 /// space).
@@ -945,8 +962,270 @@ fn icon_emoji(icon: IconType) -> &'static str {
     }
 }
 
-/// Renders the search box (commit search via Cmd+K, code search via Cmd+Shift+K).
-/// Stub for Task 2; Task 6 wires this in using `text_input` + `modal`.
-pub fn render_search(_core: &mut AkarCore, _layout: &mut Layout, _state: &mut AppState) {
-    // TODO(Task 6): text_input + results overlay.
+/// Renders the search box (commit search via Cmd+K, code search via
+/// Cmd+Shift+K) and, when the query has changed, runs the search and
+/// (re)creates the results container on the canvas.
+///
+/// Layout
+/// ------
+/// The box is 500×50px, centered horizontally, 70px above the window
+/// bottom. A 16px-tall mode indicator (a `badge` reading "Commits" or
+/// "Code") sits 4px above the box, left-aligned with its left edge.
+///
+/// All three nodes (rootless parent, indicator, box) are part of a
+/// **rootless** taffy sub-tree. Per-frame `Layout::new()` churns the
+/// `NodeId` slotmap keys, so a `u64::from(search_node)` from one frame
+/// is meaningless the next; see the epic Risks row on
+/// `focused_id` being u64-keyed. We mitigate by re-asserting focus from
+/// `state.search_just_opened` each frame.
+///
+/// Input
+/// -----
+/// `text_input` mutates `value` (typed/deleted characters) and
+/// `cursor_pos` (arrow/Home/End), and reports `changed` / `submitted`
+/// via its response. The `value` and placeholder are picked from
+/// `state.search_mode`; `cursor_pos` is shared across both modes
+/// because only one search box is visible at a time.
+///
+/// Focus
+/// -----
+/// Before `text_input` runs we re-assert `core.input.focused_id`:
+///   * on the frame the box opens (`state.search_just_opened`), or
+///   * on any frame where nothing else has claimed focus and the box
+///     is visible. This is the first of the two mitigations in the
+///     Risks row — it lets the box hold focus across frames without
+///     requiring a persistent `Layout`. Side effect: user-click-outside
+///     to unfocus is undone on the same frame; closing the box (Escape)
+///     is the only way out. The spec accepts this trade-off.
+///
+/// Search execution
+/// ----------------
+/// `resp.changed` (typed/backspaced) and `resp.submitted` (Enter) both
+/// trigger `execute_search`. An empty query removes the
+/// `SearchResults` / `CodeSearchResults` container; a non-empty query
+/// runs hybrid search and replaces-or-creates the container at
+/// world-space `(620, 20)`, width 500, height `window_size.y - 40`.
+///
+/// `dt` is the frame delta (already computed by the drawer's animation
+/// block in `handle_redraw`). It drives the cursor blink at a 0.5s
+/// half-cycle.
+pub fn render_search(
+    core: &mut AkarCore,
+    layout: &mut Layout,
+    state: &mut AppState,
+    dt: f32,
+) {
+    let theme = match state.system_theme {
+        state::SystemTheme::Dark => akar_components::AKAR_THEME_DARK,
+        state::SystemTheme::Light => akar_components::AKAR_THEME_LIGHT,
+    };
+
+    // Cursor blink. Uses `dt` so the blink rate is fps-independent.
+    state.cursor_timer += dt;
+    if state.cursor_timer >= 0.5 {
+        state.cursor_timer -= 0.5;
+        state.cursor_visible = !state.cursor_visible;
+    }
+
+    // Geometry constants. Box centered horizontally, 70px above the
+    // window's bottom edge; indicator is a 16px pill 4px above the box.
+    const BOX_W: f32 = 500.0;
+    const BOX_H: f32 = 50.0;
+    const BOTTOM_GAP: f32 = 70.0;
+    const INDICATOR_W: f32 = 80.0;
+    const INDICATOR_H: f32 = 16.0;
+    const INDICATOR_GAP: f32 = 4.0;
+    let box_x = (state.window_size.x - BOX_W) / 2.0;
+    let box_y = state.window_size.y - BOTTOM_GAP - BOX_H;
+    let indicator_x = box_x;
+    let indicator_y = box_y - INDICATOR_H - INDICATOR_GAP;
+
+    // Rootless taffy sub-tree: a window-sized parent with two absolute
+    // children. Computed independently of `canvas_node` so the canvas
+    // tree (already computed in `handle_redraw`) is unaffected.
+    let rootless = layout.new_leaf(Style {
+        position: Position::Absolute,
+        size: Size {
+            width: length(state.window_size.x),
+            height: length(state.window_size.y),
+        },
+        ..Default::default()
+    });
+    let indicator_node = layout.new_leaf(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(indicator_x),
+            top: length(indicator_y),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(INDICATOR_W),
+            height: length(INDICATOR_H),
+        },
+        ..Default::default()
+    });
+    let search_node = layout.new_leaf(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(box_x),
+            top: length(box_y),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(BOX_W),
+            height: length(BOX_H),
+        },
+        ..Default::default()
+    });
+    layout.add_child(rootless, indicator_node);
+    layout.add_child(rootless, search_node);
+    layout.compute(
+        rootless,
+        (Some(state.window_size.x), Some(state.window_size.y)),
+        |_, _, _, _, _| Size::ZERO,
+    );
+
+    // Re-assert focus before `text_input`. See the function doc comment
+    // and the epic Risks row.
+    let id_u64 = u64::from(search_node);
+    if state.search_just_opened {
+        core.input.focused_id = Some(id_u64);
+        state.search_just_opened = false;
+    } else if (state.search_active || state.code_search_active)
+        && core.input.focused_id.is_none()
+    {
+        core.input.focused_id = Some(id_u64);
+    }
+
+    let (value, placeholder): (&mut String, &str) = match state.search_mode {
+        state::SearchMode::Commits => (
+            &mut state.search_query,
+            "Search documents... (Cmd+K)",
+        ),
+        state::SearchMode::Code => (
+            &mut state.code_search_query,
+            "Search code... (Cmd+Shift+K)",
+        ),
+    };
+
+    let resp = text_input(
+        core,
+        &*layout,
+        search_node,
+        value,
+        &mut state.cursor_pos,
+        placeholder,
+        state.cursor_visible,
+        &theme,
+    );
+
+    // Mode indicator (cyan = Commits, green = Code). Rendered after the
+    // input so its quad lands on top of any overlapping background.
+    let (badge_variant, badge_text) = match state.search_mode {
+        state::SearchMode::Commits => (BadgeVariant::Info, "Commits"),
+        state::SearchMode::Code => (BadgeVariant::Success, "Code"),
+    };
+    badge(
+        core,
+        &*layout,
+        indicator_node,
+        badge_text,
+        badge_variant,
+        &theme,
+    );
+
+    if resp.changed || resp.submitted {
+        execute_search(state);
+    }
+}
+
+/// Run the search for the active mode using `state.search_query` /
+/// `state.code_search_query`. Empty query → remove the results
+/// container; otherwise call the indexer and (re)create the container
+/// at a fixed world-space position so the user sees a stable results
+/// panel as they type.
+///
+/// Both the `SearchResults` and `CodeSearchResults` containers use a
+/// (id, position, width, viewport_height, results) constructor. The id
+/// is reused from the previous container if one exists, so the id
+/// space stays small and the card-click handlers in
+/// `render_containers` don't see their selection state orphaned to a
+/// ghost container.
+fn execute_search(state: &mut AppState) {
+    match state.search_mode {
+        state::SearchMode::Commits => {
+            if state.search_query.is_empty() {
+                state.search_results.clear();
+                state
+                    .containers
+                    .retain(|c| c.container_type != ContainerType::SearchResults);
+                return;
+            }
+            if let Some(indexer) = state.indexer.as_ref() {
+                match indexer.search_hybrid(&state.search_query, 20) {
+                    Ok(results) => {
+                        let existing_id = state
+                            .containers
+                            .iter()
+                            .find(|c| c.container_type == ContainerType::SearchResults)
+                            .map(|c| c.id);
+                        state
+                            .containers
+                            .retain(|c| c.container_type != ContainerType::SearchResults);
+                        let id = existing_id.unwrap_or_else(|| {
+                            state.containers.iter().map(|c| c.id).max().unwrap_or(0) + 1
+                        });
+                        state.containers.push(Container::new_search_results(
+                            id,
+                            Vec2::new(620.0, 20.0),
+                            500.0,
+                            state.window_size.y - 40.0,
+                            results,
+                        ));
+                    }
+                    Err(e) => {
+                        log::warn!("Commit search failed: {e}");
+                    }
+                }
+            }
+        }
+        state::SearchMode::Code => {
+            if state.code_search_query.is_empty() {
+                state.code_search_results.clear();
+                state
+                    .containers
+                    .retain(|c| c.container_type != ContainerType::CodeSearchResults);
+                return;
+            }
+            if let Some(indexer) = state.indexer.as_ref() {
+                match indexer.search_code_hybrid(&state.code_search_query, 20) {
+                    Ok(results) => {
+                        let existing_id = state
+                            .containers
+                            .iter()
+                            .find(|c| c.container_type == ContainerType::CodeSearchResults)
+                            .map(|c| c.id);
+                        state
+                            .containers
+                            .retain(|c| c.container_type != ContainerType::CodeSearchResults);
+                        let id = existing_id.unwrap_or_else(|| {
+                            state.containers.iter().map(|c| c.id).max().unwrap_or(0) + 1
+                        });
+                        state.containers.push(Container::new_code_search_results(
+                            id,
+                            Vec2::new(620.0, 20.0),
+                            500.0,
+                            state.window_size.y - 40.0,
+                            results,
+                        ));
+                    }
+                    Err(e) => {
+                        log::warn!("Code search failed: {e}");
+                    }
+                }
+            }
+        }
+    }
 }
