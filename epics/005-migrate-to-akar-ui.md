@@ -677,8 +677,15 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 ### Task 7: Preserve CLI Modes and Indexer Integration
 
 **Priority:** Medium
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 **Estimated Time:** 1 hour
+
+**Review note (post-implementation):**
+- All 8 CLI modes verified working end-to-end against the local `sugacode` repo: `--help`, `--index`, `--reindex`, `--search`, `--index-code`, `--reindex-code`, `--search-code`, and `RUST_LOG=debug --index-code`.
+- **No code changes were required** — the indexer crate and `src/git_log.rs` were correctly left untouched by Tasks 1-6, and the CLI's flag set was already complete. The migration's only deletion was `src/renderer.rs` + `src/input.rs` (purely GUI-layer), so every CLI code path is intact.
+- All four indexer-to-GUI wires confirmed intact: `Indexer::new` in `src/main.rs:150-176` → `Application.indexer` field at `:189` → `state.indexer = self.indexer.take()` in `resumed` at `:206,233` → `execute_search` calling `search_hybrid` / `search_code_hybrid` in `src/ui/render.rs:1166,1202`.
+- `cargo check --workspace` clean (7 pre-existing dead-code warnings). `cargo test -p sugacode-indexer` 18/18.
+- Working tree is clean; no commit needed for this task.
 
 **Description:** Ensure all existing CLI modes continue to work after the migration. The indexer crate and git_log module are untouched, but their integration points (argument parsing, indexer initialization, search execution) must be verified.
 
