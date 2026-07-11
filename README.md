@@ -1,8 +1,8 @@
-# Text Explorer - UI Prototype
+# Text Explorer (sugacode)
 
 ## Overview
 
-This is a UI prototype for a text repository explorer application built with Rust, wgpu, and glyphon. The application provides an infinite canvas interface for exploring text documents in a visual, card-based layout.
+This is a text repository explorer built with Rust and akar (a GPU UI component library) on top of wgpu and glyphon. The application provides an infinite canvas interface for exploring text documents in a visual, card-based layout, with hybrid commit and code search.
 
 ## Features Implemented
 
@@ -13,13 +13,13 @@ This is a UI prototype for a text repository explorer application built with Rus
 - Zoom indicator in bottom-right corner
 
 ✅ **Left Drawer**
-- 4 sample folder icons with Unicode symbols
+- Folder icons with Unicode symbols
 - Hover effects and selection states
 - Expand/collapse animation
 - Document count display
 
 ✅ **Document Cards**
-- 8 sample documents with previews
+- Git log cards (real data from the current repo) and search result cards
 - File type icons
 - Title, content preview, and metadata
 - Hover and selection states
@@ -27,13 +27,14 @@ This is a UI prototype for a text repository explorer application built with Rus
 
 ✅ **Global Search Box**
 - Fixed at bottom center of screen
-- Cmd+K / Ctrl+K keyboard shortcut
-- Real-time filtering (placeholder implementation)
+- Cmd+K / Ctrl+K keyboard shortcut (commit search)
+- Cmd+Shift+K / Ctrl+Shift+K (code search)
+- Real-time filtering (now functional — hybrid FTS5 + vector KNN via the indexer)
 - Result count display
 - Clear button
 
 ✅ **System Theme Support**
-- Dark theme (default)
+- Dark theme (default, via `AKAR_THEME_DARK`)
 - Theme-aware colors for all components
 
 ## Running the Application
@@ -49,91 +50,80 @@ cargo run
 - **Pan**: Middle mouse button OR Cmd/Ctrl + left mouse button
 - **Select Card**: Left click on card
 - **Select Folder**: Left click on folder icon in drawer
-- **Open Search**: Cmd+K (Mac) or Ctrl+K (Windows/Linux)
+- **Open Commit Search**: Cmd+K (Mac) or Ctrl+K (Windows/Linux)
+- **Open Code Search**: Cmd+Shift+K (Mac) or Ctrl+Shift+K (Windows/Linux)
 - **Close Search**: Escape key
 - **Deselect All**: Escape key (when search is closed)
 
 ## Project Structure
 
 ```
-src/
-├── main.rs              # Entry point and event loop
-├── renderer.rs          # wgpu rendering pipeline
-├── state.rs             # Application state management
-├── input.rs             # Input handling (mouse, keyboard)
-└── ui/
-    ├── mod.rs           # UI manager
-    ├── canvas.rs        # Infinite canvas with grid
-    ├── drawer.rs        # Left drawer component
-    ├── card.rs          # Document card renderer
-    └── search.rs        # Global search box
+sugacode/
+├── Cargo.toml                    # workspace root + main binary
+├── src/
+│   ├── main.rs                   # entry point, CLI args, event loop, screenshot flow
+│   ├── state.rs                  # application state (CanvasState, AppState)
+│   ├── git_log.rs                # git commit reader (gitoxide)
+│   └── ui/
+│       ├── mod.rs                # module tree (container, render)
+│       ├── container.rs          # data model (Container, CardData, DocumentData, ContainerType)
+│       └── render.rs             # immediate-mode render functions (canvas, drawer, search, containers)
+├── crates/
+│   └── sugacode-indexer/
+│       ├── Cargo.toml
+│       └── src/
+│           ├── lib.rs            # Indexer public API
+│           ├── db.rs             # SQLite schema, FTS5, vec0, queries
+│           ├── embed.rs          # model2vec-rs wrapper
+│           ├── code.rs           # tree-sitter code parsing
+│           └── schema.sql        # SQL schema definition
+└── epics/                        # feature epic specifications
 ```
 
 ## Dependencies
 
-- **wgpu** (v29.0.0) - GPU rendering
-- **glyphon** (v0.11.0) - Text rendering on GPU
-- **winit** (v0.30.12) - Windowing and input handling
-- **glam** - Mathematics library for transforms
-- **pollster** - Async runtime
-
-## Sample Data
-
-The prototype includes 8 sample documents:
-1. README.md - Project documentation
-2. main.rs - Rust code example
-3. config.json - JSON configuration
-4. meeting-notes.md - Meeting notes
-5. todo.txt - Task list
-6. algorithms.rs - Binary search implementation
-7. design.md - Design document
-8. api-docs.txt - API documentation
+- **akar-core / akar-layout / akar-components / akar-winit** — path deps at `~/Projects/akar/crates/akar-*`. Owns the wgpu pipeline, taffy layout, components, and winit event routing.
+- **wgpu** (v29.0.0) — GPU rendering (still a direct dep; akar builds on it)
+- **winit** (v0.30.12) — Windowing and input handling (still a direct dep; `akar-winit` augments it)
+- **glam** — Mathematics library for transforms
+- **pollster** — Async runtime
+- **gix** (gitoxide) — Git repository access (path dep)
+- **sugacode-indexer** — in-workspace indexer crate (FTS5 + sqlite-vec + model2vec-rs)
+- **tree-sitter / tree-sitter-rust** — Rust source parsing (in the indexer crate, Epic 004)
+- **png** — PNG encoding for `--screenshot` output
+- **clap** — CLI argument parsing
+- **anyhow / serde_json** — error handling and serialization
 
 ## Next Steps
 
-1. **Connect to Real Data**
-   - Git repository integration
-   - Document parsing and indexing
-   - File system watching
+The previous "Next Steps" list (real-data integration, document parsing, file watching) is now done by Epic 002 (git log column), Epic 003 (commit indexer), and Epic 004 (code indexer). The remaining genuine follow-ups after Epic 005 are:
 
-2. **Enhanced Interactions**
-   - Drag-and-drop card repositioning
-   - Double-click to open documents
-   - Context menus
-
-3. **Graph Visualization**
-   - Relationship mapping between documents
-   - Visual connections on canvas
-   - Clustering algorithms
-
-4. **Performance Optimization**
-   - Spatial indexing for large collections
-   - Level-of-detail rendering
-   - Background loading
-
-5. **Additional Features**
-   - Export/import functionality
-   - Collaboration features
-   - Plugin system
+1. **Drag-and-drop card repositioning** — Cards are positioned in world space; drag-to-move is a follow-up epic.
+2. **Graph visualization** — Relationship mapping between documents/commits on the canvas.
+3. **Context menus** — Right-click menus on cards, container headers, and the canvas background.
+4. **Plugin system** — Third-party extension points for new container types and search backends.
+5. **Window/canvas state persistence** — Restore pan, zoom, and selected folder across sessions.
 
 ## Known Limitations
 
-- Text rendering may have minor alignment issues
-- Search is currently placeholder (no actual filtering)
-- Card dragging not yet implemented
-- No persistence between sessions
+- Card dragging is not yet implemented (cards are positioned in world space; drag-to-move is a future epic).
+- Per-repo indexer DBs are persisted in the OS cache directory (`~/Library/Caches/sugacode/{slug}.db` on macOS), but window state and canvas pan/zoom are not.
+- `akar-winit` does not expose Cmd/Ctrl modifier state; modifier tracking is done manually in `AppState` via a `WindowEvent::ModifiersChanged` arm.
 
 ## Development
 
 ```bash
 # Check for compilation errors
-cargo check
+cargo check --workspace
 
 # Run with debug logging
 RUST_LOG=debug cargo run
 
-# Run tests (when available)
-cargo test
+# Capture one frame to PNG (visual regression)
+cargo run --release -- --screenshot /tmp/sugacode.png --exit
+
+# Run tests
+cargo test --workspace
 ```
 
 ## License

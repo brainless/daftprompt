@@ -1,5 +1,7 @@
 # Epic 001: Text Explorer UI Prototype
 
+> **Status: completed — superseded by Epic 005 (migrate UI to akar).** The hand-rolled wgpu + glyphon pipeline described below was replaced by `akar-core` / `akar-components` in Epic 005. The container abstraction and data model survived; the renderer, input handler, and per-widget render files were deleted. See `DEVELOP.md` and `epics/005-migrate-to-akar-ui.md` for the current architecture.
+
 ## Introduction
 
 This epic focuses on creating the foundational UI prototype for a text repository explorer application. The goal is to build a visually appealing, interactive canvas-based interface that allows non-technical users to explore text repositories (git repos, document folders) through an intuitive graph-based visualization.

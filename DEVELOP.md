@@ -12,7 +12,10 @@ Several dependencies are cloned locally under `~/Projects/` and referenced via p
 
 | Crate | Local path | Used by |
 |---|---|---|
-| **glyphon** | `~/Projects/glyphon` | `text-explorer` (GPU text rendering) |
+| **akar-core** | `~/Projects/akar/crates/akar-core` | `text-explorer` (wgpu pipeline, draw list, input state) |
+| **akar-layout** | `~/Projects/akar/crates/akar-layout` | `text-explorer` (taffy flexbox layout) |
+| **akar-components** | `~/Projects/akar/crates/akar-components` | `text-explorer` (buttons, inputs, drawer, canvas, etc.) |
+| **akar-winit** | `~/Projects/akar/crates/akar-winit` | `text-explorer` (winit event routing) |
 | **glam** | `~/Projects/glam-rs` | `text-explorer` (math/transforms) |
 | **gix** (gitoxide) | `~/Projects/gitoxide/gix` | `text-explorer` (git repository access) |
 
@@ -22,10 +25,13 @@ These are not currently path dependencies but are available locally for referenc
 
 | Crate | Local path | Relevance |
 |---|---|---|
+| **akar** | `~/Projects/akar` | GPU UI component library that owns the rendering pipeline post-Epic 005 |
+| **glyphon** | `~/Projects/glyphon` | Text shaping/atlas — transitive via `akar-core`; no longer a direct dep |
 | **wgpu** | `~/Projects/wgpu` | GPU rendering pipeline (v29.0.0 from crates.io, source available locally) |
+| **taffy** | (via `akar-layout`) | CSS Flexbox layout engine used by akar |
 | **sqlite-vec** | `~/Projects/sqlite-vec` | Vector similarity search extension (v0.0.1-alpha.33, used in `sugacode-indexer`) |
 | **model2vec-rs** | `~/Projects/model2vec-rs` | Static text embeddings (v0.2.1, used in `sugacode-indexer`) |
-| **tree-sitter** | `~/Projects/tree-sitter` | Source code parsing with tree-sitter (Epic 004 — planned) |
+| **tree-sitter** | `~/Projects/tree-sitter` | Source code parsing with tree-sitter (Epic 004 — done) |
 | **xilem** | `~/Projects/xilem` | Rust-native UI framework (under evaluation) |
 | **sqlx** | `~/Projects/sqlx` | Async SQL toolkit (potential future use) |
 | **diesel** | `~/Projects/diesel` | ORM (potential future use) |
@@ -57,6 +63,7 @@ cargo run -- --repo . --index  # index commits into search DB
 cargo run -- --repo . --search "fix crash"  # CLI hybrid search (no GUI)
 cargo run -- --repo . --index-code  # index Rust source code (Epic 004)
 cargo run -- --repo . --search-code "render pipeline"  # CLI code search (Epic 004)
+cargo run --release -- --screenshot /tmp/sugacode.png --exit  # capture one frame to PNG and quit (visual regression)
 RUST_LOG=debug cargo run       # run with debug logging
 cargo test --workspace         # run all tests
 ```
@@ -67,18 +74,13 @@ cargo test --workspace         # run all tests
 sugacode/
 ├── Cargo.toml                    # workspace root + main binary
 ├── src/
-│   ├── main.rs                   # entry point, CLI args, event loop
-│   ├── renderer.rs               # wgpu rendering pipeline
-│   ├── state.rs                  # application state
-│   ├── input.rs                  # mouse/keyboard input handling
+│   ├── main.rs                   # entry point, CLI args, event loop, screenshot flow
+│   ├── state.rs                  # application state (CanvasState, AppState)
 │   ├── git_log.rs                # git commit reader (gitoxide)
 │   └── ui/
-│       ├── mod.rs                # UI manager
-│       ├── canvas.rs             # infinite canvas with grid
-│       ├── drawer.rs             # left navigation drawer
-│       ├── card.rs               # document/commit card renderer
-│       ├── container.rs          # container abstraction (cards live in containers)
-│       └── search.rs             # global search box (Cmd+K)
+│       ├── mod.rs                # module tree (container, render)
+│       ├── container.rs          # data model (Container, CardData, DocumentData, ContainerType)
+│       └── render.rs             # immediate-mode render functions (canvas, drawer, search, containers)
 ├── crates/
 │   └── sugacode-indexer/
 │       ├── Cargo.toml
@@ -86,7 +88,7 @@ sugacode/
 │           ├── lib.rs            # Indexer public API
 │           ├── db.rs             # SQLite schema, FTS5, vec0, queries
 │           ├── embed.rs          # model2vec-rs wrapper
-│           ├── code.rs           # Tree-sitter code parsing (Epic 004 — planned)
+│           ├── code.rs           # tree-sitter code parsing
 │           └── schema.sql        # SQL schema definition
 └── epics/                        # feature epic specifications
 ```
@@ -98,3 +100,5 @@ sugacode/
 - **Hybrid search**: Combines FTS5 (keyword) and sqlite-vec (vector KNN) via Reciprocal Rank Fusion.
 - **Graceful degradation**: If the embedding model fails to load, search falls back to FTS5-only. In non-git folders, Cmd+K falls back to substring matching.
 - **Separate search modes**: Commit search (`Cmd+K`) and code search (`Cmd+Shift+K`) are independent APIs and UI modes (Epic 004).
+- **UI is rendered by akar** (post-Epic 005): sugacode owns application state + the winit window; akar owns the wgpu pipeline, draw list, input state, layout, and components. `src/ui/render.rs` is the immediate-mode render layer; the per-frame `Layout::new()` rebuilds the taffy tree every frame.
+- **Screenshot mode** (post-Task 8): `cargo run --release -- --screenshot <path> --exit` waits 5 s for the UI to settle, captures one frame via akar's `core.take_screenshot`, PNG-encodes the result, and exits. Useful for visual regression testing.

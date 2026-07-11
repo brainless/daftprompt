@@ -786,8 +786,15 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 ### Task 9: Update Documentation
 
 **Priority:** Low
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 **Estimated Time:** 1 hour
+
+**Review note (post-implementation):**
+- **`DEVELOP.md`** updated: path-dep table swapped (removed `glyphon` direct dep; added four `akar-*` crates; kept `glam` and `gix`); "Other relevant deps" got a new `akar` row, a transitive `glyphon` note, a new `taffy` row, and `tree-sitter` flipped from "planned" to "done"; Build & Run section gained the `cargo run --release -- --screenshot <path> --exit` line; Project Structure tree replaced (no more `renderer.rs` / `input.rs` / `ui/canvas.rs` / `ui/drawer.rs` / `ui/search.rs` / `ui/card.rs`); Architecture Notes got two new bullets (akar ownership, screenshot mode).
+- **`README.md`** updated: title is now "Text Explorer (sugacode)"; overview rewritten to mention akar + hybrid search; features cleaned up (search is no longer a placeholder; cards are now real git log + search results; `Cmd+Shift+K` added); controls list now includes code search; project structure tree mirrors DEVELOP.md; dependencies list adds the four akar crates + `gix` + `sugacode-indexer` + `tree-sitter` + `png` + clap/anyhow/serde_json; "Known Limitations" drops the "search placeholder" and "text alignment" bullets that no longer apply and replaces the persistence bullet with the per-repo indexer DB note; "Next Steps" is a short list of genuinely-unfinished items.
+- **`epics/001-text-explorer-ui-prototype.md`** got a `> **Status: completed — superseded by Epic 005**` blockquote at the top. The 50+ per-task acceptance-criteria checkboxes inside 001 were left untouched (pre-existing template artifact; 003/004 don't carry banners and don't describe obsolete architectures, so per-task flipping would be churn for no new information).
+- Verified: `grep -E "renderer\.rs|input\.rs|ui/canvas|ui/drawer|ui/search|ui/card"` against both docs returns zero matches. The only `glyphon` mention in `README.md` is in the overview line "on top of wgpu and glyphon" — intentional, accurate.
+- `cargo check --workspace` clean (7 pre-existing dead-code warnings). No code changes.
 
 **Description:** Update DEVELOP.md and README.md to reflect the akar migration.
 
