@@ -1,3 +1,4 @@
+use akar_components::CanvasState;
 use glam::Vec2;
 use crate::ui::container::Container;
 
@@ -18,15 +19,13 @@ pub struct AppState {
     pub window_size: Vec2,
     pub scale_factor: f32,
 
-    // Canvas state
-    #[allow(dead_code)]
-    pub zoom: f32,
-    #[allow(dead_code)]
-    pub pan_offset: Vec2,
-    #[allow(dead_code)]
-    pub is_panning: bool,
-    #[allow(dead_code)]
-    pub last_mouse_pos: Option<Vec2>,
+    // Canvas state (Task 3: replaced legacy fields with akar's CanvasState)
+    pub canvas_state: CanvasState,
+    // Tracks Cmd+Left-drag pan. akar's PanButton enum is only Middle/Right,
+    // and canvas_begin resets CanvasState::is_panning every frame the
+    // configured button isn't pressed, so we need a separate flag for the
+    // manual Cmd+Left-pan flow (see main.rs::handle_redraw).
+    pub cmd_panning: bool,
 
     // Modifier state (akar_winit doesn't expose Cmd/Ctrl; we track it ourselves)
     pub cmd_or_ctrl: bool,
@@ -109,10 +108,8 @@ impl AppState {
             window_size,
             scale_factor: 1.0,
 
-            zoom: 1.0,
-            pan_offset: Vec2::ZERO,
-            is_panning: false,
-            last_mouse_pos: None,
+            canvas_state: CanvasState::new(),
+            cmd_panning: false,
 
             cmd_or_ctrl: false,
             shift_pressed: false,
@@ -146,47 +143,6 @@ impl AppState {
     #[allow(dead_code)]
     pub fn resize(&mut self, new_size: (u32, u32)) {
         self.window_size = Vec2::new(new_size.0 as f32, new_size.1 as f32);
-    }
-
-    #[allow(dead_code)]
-    pub fn screen_to_canvas(&self, screen_pos: Vec2) -> Vec2 {
-        (screen_pos - self.window_size * 0.5) / self.zoom + self.pan_offset
-    }
-
-    #[allow(dead_code)]
-    pub fn canvas_to_screen(&self, canvas_pos: Vec2) -> Vec2 {
-        (canvas_pos - self.pan_offset) * self.zoom + self.window_size * 0.5
-    }
-
-    #[allow(dead_code)]
-    pub fn zoom_at_point(&mut self, screen_pos: Vec2, zoom_delta: f32) {
-        let canvas_pos = self.screen_to_canvas(screen_pos);
-        let new_zoom = (self.zoom * zoom_delta).clamp(0.1, 5.0);
-        let zoom_ratio = new_zoom / self.zoom;
-
-        self.pan_offset = canvas_pos - (canvas_pos - self.pan_offset) * zoom_ratio;
-        self.zoom = new_zoom;
-    }
-
-    #[allow(dead_code)]
-    pub fn start_panning(&mut self, screen_pos: Vec2) {
-        self.is_panning = true;
-        self.last_mouse_pos = Some(screen_pos);
-    }
-
-    #[allow(dead_code)]
-    pub fn update_panning(&mut self, screen_pos: Vec2) {
-        if let Some(last_pos) = self.last_mouse_pos {
-            let delta = (screen_pos - last_pos) / self.zoom;
-            self.pan_offset -= delta;
-            self.last_mouse_pos = Some(screen_pos);
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn stop_panning(&mut self) {
-        self.is_panning = false;
-        self.last_mouse_pos = None;
     }
 
     #[allow(dead_code)]

@@ -276,8 +276,16 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 ### Task 3: Migrate Canvas — Grid and Zoom/Pan
 
 **Priority:** High
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 **Estimated Time:** 3 hours
+
+**Review note (post-implementation):**
+- `render_canvas` in `src/ui/render.rs` calls `canvas_begin`/`canvas_end` and uses `CanvasPainter::push_quad` to draw a world-space grid; grid spacing snaps to powers of 10 to keep line density stable across zoom levels, and the grid is hidden when zoom < 0.15 for readability.
+- Cmd+Left-drag pan lives in `main.rs::handle_redraw` (not in `render_canvas`) so the pan shows up in the same frame's `world_to_screen` transform; `cmd_panning` is a separate flag because `canvas_begin` clears `CanvasState::is_panning` each frame the configured button isn't pressed.
+- Zoom indicator is an absolute-positioned child of `canvas_node` (taffy 0.11 reports location (0,0) for rootless absolute nodes, so it has to be parented); `label` is drawn after `canvas_end` because it borrows `&mut AkarCore`.
+- `src/ui/canvas.rs` deleted (was 146 lines of hand-rolled coordinate transforms + text-buffer grid).
+- Zoom limits (0.1–5.0) come from `CanvasConfig::default()`; `PanButton::Middle` is the default.
+- `cargo check --workspace` passes clean (only pre-existing dead-code warnings on `Container` fields that Task 5 will use).
 
 **Description:** Replace sugacode's custom infinite canvas (coordinate transforms, grid rendering, zoom indicator) with akar's `canvas_begin/end` + `CanvasPainter`.
 

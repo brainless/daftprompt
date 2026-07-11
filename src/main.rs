@@ -358,8 +358,10 @@ impl Application {
         let surface = self.surface.as_mut().unwrap();
 
         // Build a fresh per-frame layout tree. The whole tree is rebuilt every
-        // frame (immediate mode) — for Task 2 it contains only the canvas root
-        // node. Tasks 3+ add drawer / search subtrees.
+        // frame (immediate mode) — for Task 3 it contains the canvas root and
+        // the zoom-indicator overlay (absolute-positioned, child of canvas so
+        // taffy can resolve its `inset`). Tasks 4/6 add drawer / search
+        // subtrees.
         let mut layout = akar_layout::Layout::new();
         let canvas_node = layout.new_leaf(akar_layout::Style {
             size: akar_layout::Size {
@@ -368,8 +370,29 @@ impl Application {
             },
             ..Default::default()
         });
+        // Zoom indicator. Absolute-positioned at the bottom-right of the
+        // canvas. Must be a child of canvas_node (not rootless) so taffy can
+        // resolve its `inset` against the canvas's containing block — a
+        // rootless absolute node reports location (0,0) (verified locally
+        // against taffy 0.11). The 10/10 insets give a small right/bottom
+        // margin.
+        let indicator_node = layout.new_leaf(akar_layout::Style {
+            position: akar_layout::Position::Absolute,
+            inset: akar_layout::Rect {
+                left: akar_layout::auto(),
+                top: akar_layout::auto(),
+                right: akar_layout::length(10.0),
+                bottom: akar_layout::length(10.0),
+            },
+            size: akar_layout::Size {
+                width: akar_layout::length(80.0),
+                height: akar_layout::length(20.0),
+            },
+            ..Default::default()
+        });
+        layout.add_child(canvas_node, indicator_node);
         // `Layout::compute` requires a measure closure even for fixed-size nodes.
-        // Pass a no-op that returns Size::ZERO — no node in Task 2 needs content
+        // Pass a no-op that returns Size::ZERO — no node in Task 3 needs content
         // measuring because every size is fully specified in the Style.
         layout.compute(
             canvas_node,
@@ -476,7 +499,36 @@ impl Application {
         }
 
         // Render layers. Order: canvas → drawer → search (search is on top).
-        render_canvas(core, &mut layout, canvas_node, state);
+
+        // Cmd+Left-drag pan (Task 3). akar's `PanButton` enum is only
+        // `Middle`/`Right` (akar-components/src/canvas.rs:9), so sugacode's
+        // existing Cmd+Left-drag-to-pan convention is not covered by
+        // `canvas_begin`. Furthermore, `canvas_begin` resets
+        // `CanvasState::is_panning` every frame the configured button isn't
+        // pressed (canvas.rs:134), so reusing it for Cmd+Left would be
+        // cleared immediately. We track `state.cmd_panning` separately and
+        // mutate `state.canvas_state.pan` here so the frame's
+        // `world_to_screen` transform from `canvas_begin` already reflects
+        // the drag. This must run AFTER `core.begin_frame` (so per-frame
+        // input is populated) and BEFORE `render_canvas` (so
+        // `canvas_begin` sees the updated pan).
+        let canvas_rect_for_pan = layout.rect(canvas_node);
+        if state.cmd_or_ctrl
+            && core.input.mouse_buttons_pressed[0]
+            && core.input.is_hovering(canvas_rect_for_pan)
+        {
+            state.cmd_panning = true;
+        }
+        if !core.input.mouse_buttons[0] {
+            state.cmd_panning = false;
+        }
+        if state.cmd_panning {
+            let delta = (core.input.mouse_pos - core.input.mouse_pos_prev)
+                / state.canvas_state.zoom;
+            state.canvas_state.pan -= delta;
+        }
+
+        render_canvas(core, &mut layout, canvas_node, indicator_node, state);
         if state.drawer_open {
             render_drawer(core, &mut layout, state);
         }
