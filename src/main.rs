@@ -40,6 +40,16 @@ struct Args {
 
     #[arg(long)]
     search_code: Option<String>,
+
+    /// Task 8: capture one frame to a PNG file after a 5s settle delay.
+    /// Combine with `--exit` to terminate the GUI after the capture.
+    #[arg(long)]
+    screenshot: Option<PathBuf>,
+
+    /// Task 8: exit the GUI after `--screenshot` writes its PNG. No-op
+    /// without `--screenshot` (matches akar's demo behavior).
+    #[arg(long)]
+    exit: bool,
 }
 
 impl From<&git_log::CommitInfo> for CommitData {
@@ -188,6 +198,10 @@ fn main() -> anyhow::Result<()> {
             commits,
             indexer,
             last_frame: None,
+            screenshot_path: args.screenshot,
+            exit_after_screenshot: args.exit,
+            start_time: None,
+            screenshot_taken: false,
         })
         .unwrap();
 
@@ -208,6 +222,15 @@ struct Application {
     // to advance `state.drawer_animation` with a delta-time. None on the
     // first frame; the first `handle_redraw` then primes it.
     last_frame: Option<Instant>,
+    // Task 8: visual-regression screenshot plumbing. Pattern follows
+    // `akar/examples/demo-rust/src/main.rs` — start_time is primed on the
+    // first frame after `screenshot_path` is set, then `handle_redraw`
+    // captures once 5s have elapsed. `screenshot_taken` is a one-shot
+    // guard so we only write the PNG once.
+    screenshot_path: Option<PathBuf>,
+    exit_after_screenshot: bool,
+    start_time: Option<Instant>,
+    screenshot_taken: bool,
 }
 
 impl winit::application::ApplicationHandler for Application {
@@ -338,6 +361,13 @@ impl winit::application::ApplicationHandler for Application {
                 if let Err(e) = self.handle_redraw() {
                     log::error!("Redraw failed: {e}");
                 }
+                // Task 8: after `--screenshot` writes its PNG, exit when
+                // `--exit` was also passed. The actual `event_loop.exit()`
+                // has to happen here because `handle_redraw` doesn't have
+                // access to the `ActiveEventLoop` borrow.
+                if self.screenshot_taken && self.exit_after_screenshot {
+                    event_loop.exit();
+                }
             }
             winit::event::WindowEvent::CursorMoved { .. }
             | winit::event::WindowEvent::MouseInput { .. }
@@ -362,6 +392,20 @@ impl Application {
         let device = self.device.as_ref().unwrap();
         let queue = self.queue.as_ref().unwrap();
         let surface = self.surface.as_mut().unwrap();
+
+        // Task 8: prime the screenshot settle timer. The 5s delay mirrors
+        // akar's demo-rust example so the UI has time to populate search
+        // results / animations before the capture. `start_time` is
+        // initialized lazily on the first frame where `screenshot_path` is
+        // set, then `screenshot_pending` becomes true exactly once.
+        if self.screenshot_path.is_some() && self.start_time.is_none() {
+            self.start_time = Some(Instant::now());
+        }
+        let screenshot_pending = self.screenshot_path.is_some()
+            && !self.screenshot_taken
+            && self
+                .start_time
+                .is_some_and(|t| t.elapsed() >= std::time::Duration::from_secs(5));
 
         // Build a fresh per-frame layout tree. The whole tree is rebuilt every
         // frame (immediate mode) — for Task 3 it contains the canvas root and
@@ -594,9 +638,27 @@ impl Application {
             }
         };
 
-        let view = frame
+        // Task 8: request a screenshot before the pass. The capture
+        // machinery (`screenshot_capture.requested = true`) is what makes
+        // `core.capture_target_view(...)` return `Some(view)` below. The
+        // call must precede the pass so the render pass targets the
+        // capture texture, not the surface.
+        if screenshot_pending {
+            core.request_screenshot();
+        }
+
+        let surface_view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        // `render_view` is the capture view when a screenshot is pending,
+        // otherwise the normal surface view. The pass writes to it
+        // identically; only the destination texture differs.
+        let render_view = if screenshot_pending {
+            core.capture_target_view(device, w, h)
+                .expect("capture_target_view returns Some when request_screenshot was called")
+        } else {
+            surface_view
+        };
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Main Encoder"),
         });
@@ -604,7 +666,7 @@ impl Application {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Main Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &render_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -627,7 +689,54 @@ impl Application {
             // All input reads for this frame must have happened above.
             let _ = core.end_frame(device, queue, &mut pass);
         }
-        queue.submit(std::iter::once(encoder.finish()));
+
+        if screenshot_pending {
+            // `take_screenshot` consumes the encoder, blits the capture
+            // view onto the surface view, copies the result into a staging
+            // buffer, maps it, and submits to the queue. The returned
+            // `CapturedFrame` has BGRA-swapped, unpadded RGBA8 ready for
+            // PNG encoding. Pattern from
+            // `akar/examples/demo-rust/src/main.rs:1566-1614`.
+            let screenshot_path = self
+                .screenshot_path
+                .clone()
+                .expect("screenshot_pending implies screenshot_path is Some");
+            let captured = core.take_screenshot(device, queue, encoder, &frame);
+            match captured {
+                Ok(frame_data) => match std::fs::File::create(&screenshot_path) {
+                    Ok(file) => {
+                        let mut png_encoder =
+                            png::Encoder::new(file, frame_data.width, frame_data.height);
+                        png_encoder.set_color(png::ColorType::Rgba);
+                        png_encoder.set_depth(png::BitDepth::Eight);
+                        match png_encoder.write_header() {
+                            Ok(mut writer) => {
+                                if let Err(e) = writer.write_image_data(&frame_data.rgba) {
+                                    log::error!("Failed to write PNG data: {e}");
+                                } else {
+                                    log::info!(
+                                        "Screenshot saved to {}",
+                                        screenshot_path.display()
+                                    );
+                                }
+                            }
+                            Err(e) => log::error!("Failed to write PNG header: {e}"),
+                        }
+                    }
+                    Err(e) => log::error!(
+                        "Failed to create screenshot file {}: {e}",
+                        screenshot_path.display()
+                    ),
+                },
+                Err(e) => log::error!("Screenshot failed: {e}"),
+            }
+            self.screenshot_taken = true;
+            // `event_loop.exit()` is called from `window_event` after this
+            // method returns (see the `RedrawRequested` arm) — that
+            // handler owns the `ActiveEventLoop` reference.
+        } else {
+            queue.submit(std::iter::once(encoder.finish()));
+        }
         frame.present();
 
         Ok(())

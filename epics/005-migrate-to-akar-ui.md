@@ -718,8 +718,22 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 ### Task 8: Visual Polish and Parity
 
 **Priority:** Medium
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 **Estimated Time:** 3 hours
+
+**Review note (post-implementation):**
+- **Card backgrounds** in `render_containers` now use values copied from `BoxStyle::card(&theme)` rather than ad-hoc color literals. Cards are screen-space rects (not taffy nodes), so the `container(...)` helper (which reads `layout.rect(node)`) doesn't apply — went with Option A: build a `BoxStyle::card(&theme)`, copy its `fill` / `border_color` / `border_width` / `corner_radii` / `shadow` into the `QuadCall`, and override `fill` for the selected/hover variants. The card now has a real shadow, rounded corners, and a proper 1px border in `theme.base_300` against the panel's `theme.base_200` background.
+- **Selected card alpha fixed.** Initial implementation used `((theme.primary & 0x00FFFFFF) | 0x40000000)`, intending "low-alpha primary tint." But `theme.primary` is `0xRRGGBBAA` (verified against the existing `color_to_f32` in `render.rs:655-662`), so that formula writes `0x40` to the **R** byte, not the **A** byte — a fully-opaque slightly-lighter blue, not a 25%-alpha tint. Patched to `((theme.primary & 0xFFFF_FF00) | 0x40)`, which zeroes the A byte and sets it to `0x40` (25%). Sub-agent flagged the issue in their deviation note.
+- **Hover state** uses `theme.base_300` (a step lighter than the card's `base_100` default) for a subtle lift effect.
+- **Container backgrounds** were already using theme tokens (`theme.base_200` fill, `theme.base_300` border, `theme.radius_box` corners) — confirmed in the painter push at `render.rs:226-233`. No change needed.
+- **Drawer / search box** rely on akar's own theming via `drawer_begin` and `text_input` — no change needed.
+- **`--screenshot <PATH>` and `--exit` clap flags** added to `Args` in `src/main.rs`. Pattern follows `akar/examples/demo-rust/src/main.rs:1484-1614`:
+  - 5-second settle delay (`start_time` primed lazily on the first frame after `screenshot_path` is set).
+  - `core.request_screenshot()` runs before the pass, then `core.capture_target_view(&device, w, h)` provides the color attachment.
+  - `core.take_screenshot(&device, &queue, encoder, &frame)` returns `CapturedFrame { width, height, rgba }`; PNG-encoded with `png = "0.17"` (added to `Cargo.toml`).
+  - `event_loop.exit()` is called from `window_event`'s `RedrawRequested` arm after `handle_redraw` returns, because `handle_redraw` doesn't have the `&ActiveEventLoop` borrow.
+- `cargo check --workspace` passes clean (7 pre-existing dead-code warnings). `cargo test -p sugacode-indexer` 18/18. `cargo build` clean. `cargo run -- --help` shows the new `--screenshot` and `--exit` flags.
+- **Not smoke-tested live** in this agent environment (no display surface available to `create_surface`). The release build compiles, the CLI parsing is verified, and the screenshot flow is a direct port of akar's reference example. A human (or visual-regression pipeline) needs to run `cargo run --release -- --screenshot /tmp/sugacode-akar.png --exit` to confirm the rendered output looks correct.
 
 **Description:** Bring the migrated UI to visual parity with (or improvement over) the original. akar's proper quad rendering with borders, shadows, and corner radii should make the UI look better than the text-buffer approximation.
 

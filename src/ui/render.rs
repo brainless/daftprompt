@@ -239,7 +239,9 @@ fn render_containers(
         let [cx, cy, cw, ch] = container_screen_rect;
 
         // Container background (panel-style). Pushed to the painter at
-        // z=0.0 — it's flushed at `canvas_end` behind the cards.
+        // z=0.0 — it's flushed at `canvas_end` behind the cards. Already
+        // pulls fill, border, and radii from `theme` (Task 8 confirmation:
+        // theme.base_200 / base_300 / radius_box — no hardcoded colors).
         painter.push_quad(
             container_world_rect,
             theme.base_200,
@@ -330,24 +332,66 @@ fn render_containers(
             // so the active scroll-area scissor clips it to the
             // container, and so it sorts after the z=0.0 quads in
             // `draw_list.sorted_quads()`.
-            let (fill, border) = if was_selected {
-                (theme.primary, theme.primary)
+            //
+            // Task 8 visual polish: the *values* come from
+            // `BoxStyle::card(&theme)` (fill = base_100, border = base_300,
+            // border_width = theme.border_width, corner_radii = radius_box,
+            // shadow = subtle 12px blur, 4px y-offset). Cards are
+            // positioned in screen space, not via taffy nodes, so the
+            // `container(...)` helper (which reads `layout.rect(node)`)
+            // doesn't apply — Option A: keep the direct `push_quad` and
+            // copy the BoxStyle fields into the QuadCall. Selected and
+            // hover states override fill/border for visual feedback.
+            // - Selected: theme.primary at ~25% alpha (0x40) — the
+            //   previous full-alpha primary was almost invisible against
+            //   the saturated base_100 card body.
+            // - Hover: theme.base_300, a step lighter than the default.
+            let default_card = BoxStyle::card(&theme);
+            let (fill, border, border_width, corner_radii, shadow) = if was_selected {
+                // theme.primary is 0xRRGGBBAA; zero the AA byte and set it
+                // to 0x40 (~25% alpha). The earlier `(& 0x00FFFFFF) | 0x40_00_00_00`
+                // formula wrote 0x40 to the RR byte instead — left a fully
+                // opaque slightly-lighter blue, which defeats the purpose.
+                let primary_tint = (theme.primary & 0xFFFF_FF00) | 0x40;
+                (
+                    primary_tint,
+                    theme.primary,
+                    theme.border_width,
+                    [theme.radius_box; 4],
+                    None,
+                )
             } else if hovered {
-                (theme.base_100, theme.primary)
+                (
+                    theme.base_300,
+                    theme.base_300,
+                    theme.border_width,
+                    [theme.radius_box; 4],
+                    None,
+                )
             } else {
-                (theme.base_100, theme.base_300)
+                (
+                    default_card.fill,
+                    default_card.border_color,
+                    default_card.border_width,
+                    default_card.corner_radii,
+                    default_card.shadow,
+                )
+            };
+            let (shadow_blur, shadow_spread, shadow_color, shadow_offset) = match shadow {
+                Some(s) => (s.blur, s.spread, color_to_f32(s.color), s.offset),
+                None => (0.0, 0.0, [0.0; 4], [0.0; 2]),
             };
             core.draw_list.push_quad(QuadCall {
                 rect: card_screen_rect,
                 fill: color_to_f32(fill),
                 border_color: color_to_f32(border),
-                corner_radii: [theme.radius_box; 4],
-                border_width: theme.border_width,
+                corner_radii,
+                border_width,
                 z: CARD_BG_Z,
-                shadow_blur: 0.0,
-                shadow_spread: 0.0,
-                shadow_color: [0.0; 4],
-                shadow_offset: [0.0; 2],
+                shadow_blur,
+                shadow_spread,
+                shadow_color,
+                shadow_offset,
                 _pad: [0.0; 2],
             });
 
