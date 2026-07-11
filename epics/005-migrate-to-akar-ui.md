@@ -447,8 +447,21 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 ### Task 5: Migrate Container and Card Rendering
 
 **Priority:** High
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 **Estimated Time:** 4 hours
+
+**Review note (post-implementation):**
+- `render_containers` is wired into `render_canvas` between `render_grid` and `canvas_end`. It walks `state.containers` and renders each container's background (via `painter.push_quad` at z=0.0, flushed at `canvas_end` behind everything else), opens a scroll area for card content, and renders a virtualized card list using `list_clip` from `akar_core`.
+- **Z-ordering for layered draws.** Container backgrounds are pushed through the painter at z=0.0; card backgrounds push to `core.draw_list` directly at z=0.1 so the active `scroll_area_begin` scissor clips them to the container rect (the painter's buffer doesn't carry a scissor, so painter quads would land unclipped). `core.draw_list.sorted_quads()` sorts by z so the layering is correct.
+- **Labels via rootless taffy overlay.** Card text (hash/author/date/message) is laid out as absolute children of a rootless overlay node (one per label), then a second `layout.compute(overlay_node, …)` pass resolves them, then `label(core, &*layout, node, …)` renders them. The `label` calls respect the active scissor because they push to `core.draw_list.push_text` (not the painter).
+- **Data path is parsing, not refactor.** The git log / search-result document content is `"<hash>\nAuthor: <name>\nDate: <time>"`; `render_containers` parses it line-by-line to extract the three fields. `DocumentData` is unchanged, so the data-model "preserve" constraint is satisfied strictly. Drawback: a slight code smell; cleaner would be a `GitMeta` field on `DocumentData` populated by the constructors. Left as a Task 8 follow-up if visual polish needs it.
+- **Selection is single-select per container** (`is_clicked` on a card clears other cards' `is_selected` in the same container). Matches the spec wording.
+- **No scroll indicator rendered.** The spec marked it "optional but encouraged" — left for Task 8 (visual polish).
+- **Deviation (compile workaround).** `glam 0.30` (sugacode's path dep) vs `glam 0.33` (akar's transitive dep) means `container.position` and `WorldRect.min/max` are different `Vec2` types. Constructed `WorldRect` via `WorldRect::from_xywh(x, y, w, h)` (f32s) to dodge the version clash. No `use glam::Vec2` in `render.rs`.
+- **Deviation (small).** `akar_components::color::color_to_f32` is `pub(crate)`, so inlined a 6-line helper in `render.rs` to convert u32 → `[f32; 4]`.
+- **Deviation (small).** All labels use the same font size — akar's `label` hardcodes `theme.font_size_base` (16px). The spec wanted 11/12/13px variants; without exposing akar's `text_pipeline` we can't easily mix sizes. Used color/position to convey hierarchy instead. Documented as a Task 8 follow-up.
+- `src/ui/search.rs` deleted (429 lines of pre-akar search rendering; not exported by `mod.rs`).
+- `cargo check --workspace` passes clean (9 pre-existing dead-code warnings on `Container::scroll`/`is_mouse_over`/`visible_cards`/`new_document_grid` — these are data-model methods, not render code, and will be flagged in the next task if they remain unused). `cargo test -p sugacode-indexer` 18/18. `cargo build` clean.
 
 **Description:** Replace sugacode's custom container backgrounds, borders, scroll indicators, and card rendering (text-buffer rectangles) with akar's `container` + `scroll_area` + `list_clip` + `label` components.
 
