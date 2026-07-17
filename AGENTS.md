@@ -4,14 +4,14 @@ Guide for AI coding agents (and humans) working on sugacode. Read this before to
 
 ## Project Overview
 
-sugacode ("Text Explorer") is a Rust app for exploring text repositories (git repos, document folders) via an infinite-canvas, card-based UI. It combines a hand-rolled wgpu + glyphon rendering pipeline with a git commit reader (gitoxide) and a hybrid search indexer (SQLite FTS5 + sqlite-vec embeddings).
+sugacode ("Text Explorer") is a Rust app for exploring text repositories (git repos, document folders) via an infinite-canvas, card-based UI. It uses **akar** (a GPU UI component library on wgpu + glyphon + taffy) for rendering, combined with a git commit reader (gitoxide) and a hybrid search indexer (SQLite FTS5 + sqlite-vec embeddings).
 
 **Status:** early stage. APIs unstable, architecture evolving. Expect breaking changes.
 
 Primary references — read these:
 - `DEVELOP.md` — build/run commands, local path dependencies, project structure, architecture notes
 - `README.md` — user-facing feature list and controls
-- `epics/` — per-feature epic specs (001 UI prototype → 005 akar migration). Each epic has tasks, acceptance criteria, and file-change summaries. **Check the epic status markers (`✅` / `⬜`) before assuming a task is done.**
+- `epics/` — per-feature epic specs (001 UI prototype → 005 akar migration). Each epic has tasks, acceptance criteria, and file-change summaries.
 
 ## Build, Run, Test
 
@@ -35,7 +35,7 @@ There is no separate linter/formatter script — `cargo check --workspace` is th
 
 ## Local Path Dependencies
 
-Several dependency crates have their full source cloned under `~/Projects/` and are referenced via path dependencies. **Agents should read this local source when debugging internals, understanding behavior, or checking APIs** rather than guessing or fetching from crates.io. Active path deps (in `Cargo.toml`): `glyphon` (`~/Projects/glyphon`), `glam` (`~/Projects/glam-rs`), `gix` (`~/Projects/gitoxide/gix`). Additional sources available locally (not currently path deps but useful for reference): `wgpu`, `sqlite-vec`, `model2vec-rs`, `tree-sitter`, `akar`, `xilem`, and others — see `DEVELOP.md` for the full local-clone table and the `[patch.crates-io]` pattern for switching between local and published versions.
+Several dependency crates have their full source cloned under `~/Projects/` and are referenced via path dependencies. **Agents should read this local source when debugging internals, understanding behavior, or checking APIs** rather than guessing or fetching from crates.io. Active path deps (in `Cargo.toml`): `akar-core`, `akar-layout`, `akar-components`, `akar-winit` (`~/Projects/akar/crates/akar-*`), `glam` (`~/Projects/glam-rs`), `gix` (`~/Projects/gitoxide/gix`). Additional sources available locally (not currently path deps but useful for reference): `wgpu`, `sqlite-vec`, `model2vec-rs`, `tree-sitter`, `xilem`, and others — see `DEVELOP.md` for the full local-clone table and the `[patch.crates-io]` pattern for switching between local and published versions.
 
 ## Architecture (current)
 
@@ -52,16 +52,12 @@ Separate search modes          ← Cmd+K = commits, Cmd+Shift+K = code (independ
 ```
 src/                    main binary (CLI + GUI)
   main.rs               entry, CLI args (clap), event loop, indexer init
-  renderer.rs           wgpu pipeline + glyphon text renderer
   state.rs              AppState (canvas, drawer, containers, search, indexer handle)
-  input.rs              winit mouse/keyboard routing
   git_log.rs            git commit reader (gitoxide) — read_log, read_log_all_branches
   ui/
-    mod.rs              UIManager — container/card rendering orchestration
-    canvas.rs           infinite canvas, grid, zoom/pan
-    drawer.rs           left navigation drawer
+    mod.rs              module tree (container, render)
     container.rs        Container abstraction + CardData (business logic, keep across migrations)
-    search.rs           search box
+    render.rs           immediate-mode render functions (canvas, drawer, search, containers)
 crates/sugacode-indexer/  standalone indexing + search crate
   src/
     lib.rs              Indexer public API (index_commits, index_code, search_hybrid, search_code_hybrid)
@@ -90,6 +86,9 @@ When implementing, keep **rejected alternatives as comments in code** (Epic 004 
 - **Tree-sitter queries** are compiled once at construction and reused for every file (per-file compilation is a startup-error bug).
 - **Trait default methods** (with bodies) are indexed individually as `TraitMethod`; signature-only methods are folded into the parent `Trait` item. Identifiers carry the full canonical namespace (`file_path::module_path::TypeName::method`).
 
-## In-Flight Work
+- **UI is rendered by akar** (post-Epic 005): sugacode owns application state + the winit window; akar owns the wgpu pipeline, draw list, input state, layout, and components. `src/ui/render.rs` is the immediate-mode render layer; the per-frame `Layout::new()` rebuilds the taffy tree every frame.
+- **Screenshot mode** (post-Task 8): `cargo run --release -- --screenshot <path> --exit` waits 5 s for the UI to settle, captures one frame via akar's `core.take_screenshot`, PNG-encodes the result, and exits. Useful for visual regression testing.
 
-Epic 005 (migrate UI to akar) is specified but **not yet started** — `renderer.rs`, `input.rs`, and the direct wgpu/glyphon/winit/glam deps still exist in `Cargo.toml`. If asked to work on the akar migration, the epic file (`epics/005-migrate-to-akar-ui.md`) has detailed per-task caveats (akar-winit modifier handling, taffy 0.11 layout API, `list_clip` placement in `akar-core`, `text_input` focus persistence, `--screenshot` wiring). Read the epic's "Risks and Mitigations" table before coding.
+## Epics
+
+Per-feature epic specs live in `epics/`. Each epic has tasks, acceptance criteria, and file-change summaries. Check the epic file for current status before starting work.
