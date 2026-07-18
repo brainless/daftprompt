@@ -132,14 +132,25 @@ fn parse_symbol_kind(s: &str) -> code::SymbolKind {
     }
 }
 
-fn parse_code_search_result(detail: &ItemDetail, score: f32, match_type: MatchType) -> CodeSearchResult {
+fn parse_code_search_result(
+    detail: &ItemDetail,
+    score: f32,
+    match_type: MatchType,
+) -> CodeSearchResult {
     let (file_path, line_start, line_end, symbol_kind) = match &detail.metadata {
         Some(m) => {
             let v: serde_json::Value = serde_json::from_str(m).unwrap_or_default();
-            let file_path = v.get("file_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let file_path = v
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let line_start = v.get("line_start").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
             let line_end = v.get("line_end").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            let kind_str = v.get("symbol_kind").and_then(|v| v.as_str()).unwrap_or("function");
+            let kind_str = v
+                .get("symbol_kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("function");
             let symbol_kind = parse_symbol_kind(kind_str);
             (file_path, line_start, line_end, symbol_kind)
         }
@@ -198,8 +209,7 @@ impl Indexer {
         Ok(Self {
             db,
             embedder,
-            repo_path: std::fs::canonicalize(repo_path)
-                .unwrap_or_else(|_| repo_path.to_path_buf()),
+            repo_path: std::fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.to_path_buf()),
         })
     }
 
@@ -377,8 +387,7 @@ impl Indexer {
                     let texts: Vec<String> =
                         embed_pairs.iter().map(|(_, t)| t.to_string()).collect();
                     let embeddings = embedder.encode_batch(&texts);
-                    let ids: Vec<i64> =
-                        embed_pairs.iter().map(|(i, _)| item_ids[*i]).collect();
+                    let ids: Vec<i64> = embed_pairs.iter().map(|(i, _)| item_ids[*i]).collect();
                     db::insert_vectors_into(&tx, "vec_code", &ids, &embeddings)?;
                 }
             }
@@ -519,18 +528,30 @@ impl Indexer {
         Ok(results)
     }
 
-    pub fn search_code_text(&self, query: &str, limit: usize) -> anyhow::Result<Vec<CodeSearchResult>> {
+    pub fn search_code_text(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<CodeSearchResult>> {
         let hits = db::search_fts_filtered(&self.db, query, "code", limit)?;
         let mut results = Vec::new();
         for (id, score) in hits {
             if let Some(detail) = lookup_item(&self.db, id)? {
-                results.push(parse_code_search_result(&detail, score as f32, MatchType::Fts));
+                results.push(parse_code_search_result(
+                    &detail,
+                    score as f32,
+                    MatchType::Fts,
+                ));
             }
         }
         Ok(results)
     }
 
-    pub fn search_code_similar(&self, query: &str, limit: usize) -> anyhow::Result<Vec<CodeSearchResult>> {
+    pub fn search_code_similar(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<CodeSearchResult>> {
         let embedder = match &self.embedder {
             Some(e) => e,
             None => return Ok(Vec::new()),
@@ -542,13 +563,21 @@ impl Indexer {
         let mut results = Vec::new();
         for (id, score) in hits {
             if let Some(detail) = lookup_item(&self.db, id)? {
-                results.push(parse_code_search_result(&detail, score as f32, MatchType::Vector));
+                results.push(parse_code_search_result(
+                    &detail,
+                    score as f32,
+                    MatchType::Vector,
+                ));
             }
         }
         Ok(results)
     }
 
-    pub fn search_code_hybrid(&self, query: &str, limit: usize) -> anyhow::Result<Vec<CodeSearchResult>> {
+    pub fn search_code_hybrid(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<CodeSearchResult>> {
         let fts_hits = db::search_fts_filtered(&self.db, query, "code", limit)?;
 
         let vec_hits = if let Some(ref embedder) = self.embedder {
@@ -562,7 +591,11 @@ impl Indexer {
             let mut results = Vec::new();
             for (id, score) in &fts_hits {
                 if let Some(detail) = lookup_item(&self.db, *id)? {
-                    results.push(parse_code_search_result(&detail, *score as f32, MatchType::Fts));
+                    results.push(parse_code_search_result(
+                        &detail,
+                        *score as f32,
+                        MatchType::Fts,
+                    ));
                 }
             }
             return Ok(results);
@@ -593,7 +626,11 @@ impl Indexer {
         let mut results = Vec::new();
         for (id, score) in ranked {
             if let Some(detail) = lookup_item(&self.db, id)? {
-                results.push(parse_code_search_result(&detail, score as f32, MatchType::Hybrid));
+                results.push(parse_code_search_result(
+                    &detail,
+                    score as f32,
+                    MatchType::Hybrid,
+                ));
             }
         }
         Ok(results)

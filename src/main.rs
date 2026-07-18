@@ -1,13 +1,13 @@
+mod git_log;
 mod state;
 mod ui;
-mod git_log;
 
 use std::path::PathBuf;
 use std::time::Instant;
 
 use clap::Parser;
 use state::AppState;
-use sugacode_indexer::{Indexer, IndexerConfig, CommitData, SymbolKind};
+use sugacode_indexer::{CommitData, Indexer, IndexerConfig, SymbolKind};
 use ui::container::{Container, ContainerType};
 use ui::render::{render_canvas, render_drawer, render_search};
 
@@ -79,8 +79,13 @@ fn main() -> anyhow::Result<()> {
         } else {
             indexer.index_code()?
         };
-        println!("Code index: {} files scanned, {} changed, {} deleted, {} symbols indexed",
-            report.files_scanned, report.files_changed, report.files_deleted, report.symbols_indexed);
+        println!(
+            "Code index: {} files scanned, {} changed, {} deleted, {} symbols indexed",
+            report.files_scanned,
+            report.files_changed,
+            report.files_deleted,
+            report.symbols_indexed
+        );
         if args.search_code.is_none() {
             return Ok(());
         }
@@ -106,10 +111,15 @@ fn main() -> anyhow::Result<()> {
                 SymbolKind::Comments => "comments",
                 SymbolKind::Imports => "imports",
             };
-            println!("[{:.3}] {:<8} {}:{}       {} — {}",
-                r.score, kind_abbr, r.file_path, r.line_start,
+            println!(
+                "[{:.3}] {:<8} {}:{}       {} — {}",
+                r.score,
+                kind_abbr,
+                r.file_path,
+                r.line_start,
                 r.identifier.split("::").last().unwrap_or(""),
-                r.text.lines().next().unwrap_or(""));
+                r.text.lines().next().unwrap_or("")
+            );
         }
         return Ok(());
     }
@@ -138,7 +148,13 @@ fn main() -> anyhow::Result<()> {
         for r in &results {
             let id = r.short_hash.as_str();
             let title = r.text.lines().next().unwrap_or("");
-            println!("[{:.3}] {:<7} {} — {}", r.score, id, r.author.as_deref().unwrap_or(""), title);
+            println!(
+                "[{:.3}] {:<7} {} — {}",
+                r.score,
+                id,
+                r.author.as_deref().unwrap_or(""),
+                title
+            );
         }
         return Ok(());
     }
@@ -162,7 +178,8 @@ fn main() -> anyhow::Result<()> {
             Ok(mut indexer) => {
                 match git_log::read_log_all_branches(&args.repo) {
                     Ok(all_commits) => {
-                        let commit_data: Vec<CommitData> = all_commits.iter().map(Into::into).collect();
+                        let commit_data: Vec<CommitData> =
+                            all_commits.iter().map(Into::into).collect();
                         match indexer.index_commits(&commit_data) {
                             Ok(n) => log::info!("Indexed {n} new commits"),
                             Err(e) => log::warn!("Failed to index commits: {e}"),
@@ -171,7 +188,11 @@ fn main() -> anyhow::Result<()> {
                     Err(e) => log::warn!("Failed to read all branches: {e}"),
                 }
                 match indexer.index_code() {
-                    Ok(report) => log::info!("Indexed {} code symbols from {} files", report.symbols_indexed, report.files_changed),
+                    Ok(report) => log::info!(
+                        "Indexed {} code symbols from {} files",
+                        report.symbols_indexed,
+                        report.files_changed
+                    ),
                     Err(e) => log::warn!("Failed to index code: {e}"),
                 }
                 Some(indexer)
@@ -244,9 +265,7 @@ impl winit::application::ApplicationHandler for Application {
             .with_title("Text Explorer")
             .with_maximized(true);
 
-        let window = std::sync::Arc::new(
-            event_loop.create_window(window_attributes).unwrap()
-        );
+        let window = std::sync::Arc::new(event_loop.create_window(window_attributes).unwrap());
 
         let physical_size = window.inner_size();
         let scale_factor = window.scale_factor() as f32;
@@ -272,10 +291,12 @@ impl winit::application::ApplicationHandler for Application {
         }
 
         // wgpu setup (sugacode owns the window; akar owns the GPU pipeline)
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(Box::new(
-            event_loop.owned_display_handle(),
-        )));
-        let surface = instance.create_surface(window.clone()).expect("Failed to create surface");
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
+            Box::new(event_loop.owned_display_handle()),
+        ));
+        let surface = instance
+            .create_surface(window.clone())
+            .expect("Failed to create surface");
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             compatible_surface: Some(&surface),
             ..Default::default()
@@ -476,9 +497,7 @@ impl Application {
         // input loses focus (matters once Task 6 wires the search box).
         let cmd_or_ctrl = state.cmd_or_ctrl;
         let shift = state.shift_pressed;
-        if cmd_or_ctrl
-            && (core.input.chars.contains(&'k') || core.input.chars.contains(&'K'))
-        {
+        if cmd_or_ctrl && (core.input.chars.contains(&'k') || core.input.chars.contains(&'K')) {
             if shift {
                 // Cmd+Shift+K: toggle code search.
                 state.code_search_active = !state.code_search_active;
@@ -489,7 +508,8 @@ impl Application {
                     state.search_active = false;
                     state.search_query.clear();
                     state.search_results.clear();
-                    state.containers
+                    state
+                        .containers
                         .retain(|c| c.container_type != ContainerType::SearchResults);
                 }
                 // Always clear code search's own state (covers both the OFF
@@ -497,7 +517,8 @@ impl Application {
                 // over from a previous session).
                 state.code_search_query.clear();
                 state.code_search_results.clear();
-                state.containers
+                state
+                    .containers
                     .retain(|c| c.container_type != ContainerType::CodeSearchResults);
             } else {
                 // Cmd+K: toggle commit search.
@@ -509,12 +530,14 @@ impl Application {
                     state.code_search_active = false;
                     state.code_search_query.clear();
                     state.code_search_results.clear();
-                    state.containers
+                    state
+                        .containers
                         .retain(|c| c.container_type != ContainerType::CodeSearchResults);
                 }
                 state.search_query.clear();
                 state.search_results.clear();
-                state.containers
+                state
+                    .containers
                     .retain(|c| c.container_type != ContainerType::SearchResults);
             }
         }
@@ -524,14 +547,16 @@ impl Application {
                 state.code_search_just_opened = false;
                 state.code_search_query.clear();
                 state.code_search_results.clear();
-                state.containers
+                state
+                    .containers
                     .retain(|c| c.container_type != ContainerType::CodeSearchResults);
             } else if state.search_active {
                 state.search_active = false;
                 state.search_just_opened = false;
                 state.search_query.clear();
                 state.search_results.clear();
-                state.containers
+                state
+                    .containers
                     .retain(|c| c.container_type != ContainerType::SearchResults);
             } else {
                 // Deselect all (cascade terminator).
@@ -573,8 +598,8 @@ impl Application {
             state.cmd_panning = false;
         }
         if state.cmd_panning {
-            let delta = (core.input.mouse_pos - core.input.mouse_pos_prev)
-                / state.canvas_state.zoom;
+            let delta =
+                (core.input.mouse_pos - core.input.mouse_pos_prev) / state.canvas_state.zoom;
             state.canvas_state.pan -= delta;
         }
 
@@ -617,7 +642,8 @@ impl Application {
         // Acquire the surface texture. If acquisition fails, skip the frame
         // and request another redraw — same as Task 1.
         let frame = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+            wgpu::CurrentSurfaceTexture::Success(t)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             wgpu::CurrentSurfaceTexture::Timeout
             | wgpu::CurrentSurfaceTexture::Occluded
             | wgpu::CurrentSurfaceTexture::Outdated => {
@@ -716,10 +742,7 @@ impl Application {
                                 if let Err(e) = writer.write_image_data(&frame_data.rgba) {
                                     log::error!("Failed to write PNG data: {e}");
                                 } else {
-                                    log::info!(
-                                        "Screenshot saved to {}",
-                                        screenshot_path.display()
-                                    );
+                                    log::info!("Screenshot saved to {}", screenshot_path.display());
                                 }
                             }
                             Err(e) => log::error!("Failed to write PNG header: {e}"),
