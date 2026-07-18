@@ -81,9 +81,9 @@ pub fn extract_symbols(file_path: &Path, source: &str) -> anyhow::Result<Vec<Cod
     let mut parser = Parser::new();
     let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
     parser.set_language(&language)?;
-    let tree = parser.parse(source, None).ok_or_else(|| {
-        anyhow::anyhow!("Failed to parse source file: {}", file_path.display())
-    })?;
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| anyhow::anyhow!("Failed to parse source file: {}", file_path.display()))?;
 
     let query = Query::new(&language, RUST_QUERY)?;
     let mut cursor = QueryCursor::new();
@@ -179,7 +179,14 @@ pub fn extract_symbols(file_path: &Path, source: &str) -> anyhow::Result<Vec<Cod
             let body_excerpt = extract_body_excerpt(node, source);
             let text = compose_symbol_text(&doc_comment, &signature, &body_excerpt);
 
-            let identifier = build_identifier(&file_path_str, node, &name, impl_type.as_deref(), trait_type.as_deref(), source);
+            let identifier = build_identifier(
+                &file_path_str,
+                node,
+                &name,
+                impl_type.as_deref(),
+                trait_type.as_deref(),
+                source,
+            );
 
             let line_start = node.start_position().row + 1;
             let line_end = node.end_position().row + 1;
@@ -200,7 +207,8 @@ pub fn extract_symbols(file_path: &Path, source: &str) -> anyhow::Result<Vec<Cod
         }
     }
 
-    let comment_text = collect_standalone_comments(source, &standalone_comment_ranges, &doc_comment_nodes);
+    let comment_text =
+        collect_standalone_comments(source, &standalone_comment_ranges, &doc_comment_nodes);
     if !comment_text.is_empty() {
         symbols.push(CodeSymbol {
             identifier: format!("{}::__comments__", file_path_str),
@@ -321,7 +329,8 @@ fn extract_signature(node: tree_sitter::Node, source: &str) -> String {
             let sig_bytes = &source.as_bytes()[node.start_byte()..block_start];
             String::from_utf8_lossy(sig_bytes).trim().to_string()
         }
-        "struct_item" | "enum_item" | "trait_item" | "type_item" | "const_item" | "static_item" | "macro_definition" => {
+        "struct_item" | "enum_item" | "trait_item" | "type_item" | "const_item" | "static_item"
+        | "macro_definition" => {
             let text = node.utf8_text(source.as_bytes()).unwrap_or("");
             text.lines().next().unwrap_or("").to_string()
         }
@@ -460,15 +469,9 @@ pub fn list_tracked_rust_files(repo_path: &Path) -> anyhow::Result<Vec<PathBuf>>
     let rust_files: Vec<PathBuf> = entries
         .into_iter()
         .filter(|entry| {
-            entry.mode.is_blob()
-                && entry
-                    .filepath
-                    .to_str()
-                    .map_or(false, |p| p.ends_with(".rs"))
+            entry.mode.is_blob() && entry.filepath.to_str().is_ok_and(|p| p.ends_with(".rs"))
         })
-        .filter_map(|entry| {
-            entry.filepath.to_str().ok().map(|p| work_dir.join(p))
-        })
+        .filter_map(|entry| entry.filepath.to_str().ok().map(|p| work_dir.join(p)))
         .collect();
 
     Ok(rust_files)

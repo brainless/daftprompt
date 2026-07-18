@@ -6,6 +6,7 @@ use rusqlite::Connection;
 use zerocopy::AsBytes;
 
 pub fn register_sqlite_vec() {
+    #[allow(clippy::missing_transmute_annotations)]
     unsafe {
         rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
             sqlite_vec::sqlite3_vec_init as *const (),
@@ -80,7 +81,11 @@ pub struct ItemRow {
     pub metadata: Option<String>,
 }
 
-pub fn insert_items(db: &Connection, source_type: &str, items: &[ItemRow]) -> anyhow::Result<Vec<i64>> {
+pub fn insert_items(
+    db: &Connection,
+    source_type: &str,
+    items: &[ItemRow],
+) -> anyhow::Result<Vec<i64>> {
     let mut stmt = db.prepare(
         "INSERT OR REPLACE INTO items(source_type, identifier, text, author, metadata) VALUES (?, ?, ?, ?, ?)",
     )?;
@@ -98,7 +103,11 @@ pub fn insert_items(db: &Connection, source_type: &str, items: &[ItemRow]) -> an
     Ok(ids)
 }
 
-pub fn insert_vectors(db: &Connection, item_ids: &[i64], embeddings: &[Vec<f32>]) -> anyhow::Result<()> {
+pub fn insert_vectors(
+    db: &Connection,
+    item_ids: &[i64],
+    embeddings: &[Vec<f32>],
+) -> anyhow::Result<()> {
     let mut stmt = db.prepare("INSERT INTO vec_items(item_id, embedding) VALUES (?, ?)")?;
     for (id, emb) in item_ids.iter().zip(embeddings.iter()) {
         stmt.execute(rusqlite::params![id, emb.as_bytes()])?;
@@ -106,7 +115,12 @@ pub fn insert_vectors(db: &Connection, item_ids: &[i64], embeddings: &[Vec<f32>]
     Ok(())
 }
 
-pub fn insert_vectors_into(db: &Connection, table: &str, item_ids: &[i64], embeddings: &[Vec<f32>]) -> anyhow::Result<()> {
+pub fn insert_vectors_into(
+    db: &Connection,
+    table: &str,
+    item_ids: &[i64],
+    embeddings: &[Vec<f32>],
+) -> anyhow::Result<()> {
     let sql = format!("INSERT INTO {}(item_id, embedding) VALUES (?, ?)", table);
     let mut stmt = db.prepare(&sql)?;
     for (id, emb) in item_ids.iter().zip(embeddings.iter()) {
@@ -129,7 +143,11 @@ pub fn search_fts(db: &Connection, query: &str, limit: usize) -> anyhow::Result<
     Ok(results)
 }
 
-pub fn search_vec(db: &Connection, query_embedding: &[f32], limit: usize) -> anyhow::Result<Vec<(i64, f64)>> {
+pub fn search_vec(
+    db: &Connection,
+    query_embedding: &[f32],
+    limit: usize,
+) -> anyhow::Result<Vec<(i64, f64)>> {
     let mut stmt = db.prepare(
         "SELECT item_id, distance FROM vec_items WHERE embedding MATCH ? AND k = ? ORDER BY distance",
     )?;
@@ -144,7 +162,12 @@ pub fn search_vec(db: &Connection, query_embedding: &[f32], limit: usize) -> any
     Ok(results)
 }
 
-pub fn search_fts_filtered(db: &Connection, query: &str, source_type: &str, limit: usize) -> anyhow::Result<Vec<(i64, f64)>> {
+pub fn search_fts_filtered(
+    db: &Connection,
+    query: &str,
+    source_type: &str,
+    limit: usize,
+) -> anyhow::Result<Vec<(i64, f64)>> {
     let mut stmt = db.prepare(
         "SELECT items.id, items_fts.rank \
          FROM items_fts \
@@ -152,10 +175,9 @@ pub fn search_fts_filtered(db: &Connection, query: &str, source_type: &str, limi
          WHERE items_fts MATCH ? AND items.source_type = ? \
          ORDER BY items_fts.rank LIMIT ?",
     )?;
-    let rows = stmt.query_map(
-        rusqlite::params![query, source_type, limit as i64],
-        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)),
-    )?;
+    let rows = stmt.query_map(rusqlite::params![query, source_type, limit as i64], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
+    })?;
     let mut results = Vec::new();
     for row in rows {
         results.push(row?);
@@ -163,7 +185,11 @@ pub fn search_fts_filtered(db: &Connection, query: &str, source_type: &str, limi
     Ok(results)
 }
 
-pub fn search_vec_code(db: &Connection, query_embedding: &[f32], limit: usize) -> anyhow::Result<Vec<(i64, f64)>> {
+pub fn search_vec_code(
+    db: &Connection,
+    query_embedding: &[f32],
+    limit: usize,
+) -> anyhow::Result<Vec<(i64, f64)>> {
     // Partitioning approach: vec_code is a separate vec0 table scoped to code items,
     // so no post-filter is needed — every row is already a code item.
     //
@@ -202,8 +228,10 @@ pub fn delete_source(db: &Connection, source_type: &str) -> anyhow::Result<()> {
             placeholders.join(",")
         );
         let mut stmt = db.prepare(&sql)?;
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            chunk.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = chunk
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
         stmt.execute(params.as_slice())?;
     }
 
@@ -241,7 +269,12 @@ pub fn code_file_get(db: &Connection, file_path: &str) -> anyhow::Result<Option<
     }
 }
 
-pub fn code_file_upsert(db: &Connection, file_path: &str, mtime: i64, content_hash: &str) -> anyhow::Result<()> {
+pub fn code_file_upsert(
+    db: &Connection,
+    file_path: &str,
+    mtime: i64,
+    content_hash: &str,
+) -> anyhow::Result<()> {
     let indexed_at = Utc::now().to_rfc3339();
     db.execute(
         "INSERT INTO code_files(file_path, mtime, content_hash, indexed_at) VALUES (?, ?, ?, ?)
@@ -285,7 +318,9 @@ pub fn delete_code_file_items(db: &Connection, file_path: &str) -> anyhow::Resul
     let escaped = escape_like_pattern(file_path);
     let pattern = format!("{}::%", escaped);
 
-    let mut stmt = db.prepare("SELECT id FROM items WHERE source_type = 'code' AND identifier LIKE ? ESCAPE '\\'")?;
+    let mut stmt = db.prepare(
+        "SELECT id FROM items WHERE source_type = 'code' AND identifier LIKE ? ESCAPE '\\'",
+    )?;
     let ids: Vec<i64> = stmt
         .query_map([&pattern], |row| row.get::<_, i64>(0))?
         .filter_map(|r| r.ok())
@@ -298,8 +333,10 @@ pub fn delete_code_file_items(db: &Connection, file_path: &str) -> anyhow::Resul
             placeholders.join(",")
         );
         let mut stmt = db.prepare(&sql)?;
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            chunk.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = chunk
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
         stmt.execute(params.as_slice())?;
     }
 
@@ -310,7 +347,11 @@ pub fn delete_code_file_items(db: &Connection, file_path: &str) -> anyhow::Resul
     Ok(())
 }
 
-pub fn delete_source_vec(db: &Connection, source_table: &str, source_type: &str) -> anyhow::Result<()> {
+pub fn delete_source_vec(
+    db: &Connection,
+    source_table: &str,
+    source_type: &str,
+) -> anyhow::Result<()> {
     let mut stmt = db.prepare("SELECT id FROM items WHERE source_type = ?")?;
     let ids: Vec<i64> = stmt
         .query_map([source_type], |row| row.get::<_, i64>(0))?
@@ -325,8 +366,10 @@ pub fn delete_source_vec(db: &Connection, source_table: &str, source_type: &str)
             placeholders.join(",")
         );
         let mut stmt = db.prepare(&sql)?;
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            chunk.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = chunk
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
         stmt.execute(params.as_slice())?;
     }
     Ok(())

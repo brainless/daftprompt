@@ -98,7 +98,11 @@ fn extract_commit_info(commit: &gix::Commit) -> Option<CommitInfo> {
     })
 }
 
-fn walk_commits(repo: &gix::Repository, tips: Vec<gix::hash::ObjectId>) -> Result<Vec<CommitInfo>, GitLogError> {
+#[allow(clippy::result_large_err)]
+fn walk_commits(
+    repo: &gix::Repository,
+    tips: Vec<gix::hash::ObjectId>,
+) -> Result<Vec<CommitInfo>, GitLogError> {
     let mut commits = Vec::new();
     let walk = repo
         .rev_walk(tips)
@@ -123,6 +127,7 @@ fn walk_commits(repo: &gix::Repository, tips: Vec<gix::hash::ObjectId>) -> Resul
     Ok(commits)
 }
 
+#[allow(clippy::result_large_err)]
 pub fn read_log(repo_path: &Path) -> Result<Vec<CommitInfo>, GitLogError> {
     let repo = gix::discover(repo_path)?;
 
@@ -136,6 +141,7 @@ pub fn read_log(repo_path: &Path) -> Result<Vec<CommitInfo>, GitLogError> {
     walk_commits(&repo, vec![head.id().into()])
 }
 
+#[allow(clippy::result_large_err)]
 pub fn read_log_all_branches(repo_path: &Path) -> Result<Vec<CommitInfo>, GitLogError> {
     let repo = gix::discover(repo_path)?;
 

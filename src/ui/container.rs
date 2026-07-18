@@ -26,7 +26,6 @@ pub struct Container {
     pub id: usize,
     pub position: Vec2,
     pub size: Vec2,
-    pub content_height: f32,
     pub scroll_offset: f32,
     pub container_type: ContainerType,
     pub cards: Vec<CardData>,
@@ -41,18 +40,11 @@ impl Container {
         viewport_height: f32,
         commits: Vec<CommitInfo>,
     ) -> Self {
-        let card_padding = 8.0;
-        let card_width = width - 16.0; // 8px padding each side
-
         let mut cards = Vec::new();
         let mut documents = Vec::new();
-        let mut y_offset = 0.0;
 
         for (i, commit) in commits.iter().enumerate() {
             cards.push(CardData {
-                id: i,
-                position: Vec2::new(8.0, y_offset),
-                size: Vec2::new(card_width, CARD_HEIGHT),
                 document_id: i,
                 stable_key: adapter::stable_item_key_commit(commit),
                 is_selected: false,
@@ -67,17 +59,12 @@ impl Container {
                 file_type: crate::state::IconType::Code,
                 folder_id: 0,
             });
-
-            y_offset += CARD_HEIGHT + card_padding;
         }
-
-        let content_height = y_offset.max(viewport_height);
 
         Self {
             id,
             position,
             size: Vec2::new(width, viewport_height),
-            content_height,
             scroll_offset: 0.0,
             container_type: ContainerType::GitLogColumn,
             cards,
@@ -92,12 +79,8 @@ impl Container {
         viewport_height: f32,
         results: Vec<SearchResult>,
     ) -> Self {
-        let card_padding = 8.0;
-        let card_width = width - 16.0;
-
         let mut cards = Vec::new();
         let mut documents = Vec::new();
-        let mut y_offset = 0.0;
 
         for (i, result) in results.iter().enumerate() {
             let title = result.text.lines().next().unwrap_or("").to_string();
@@ -105,9 +88,6 @@ impl Container {
             let content = format!("{}\nAuthor: {}\nDate: ", result.short_hash, author);
 
             cards.push(CardData {
-                id: i,
-                position: Vec2::new(8.0, y_offset),
-                size: Vec2::new(card_width, CARD_HEIGHT),
                 document_id: i,
                 stable_key: adapter::stable_item_key_search(result),
                 is_selected: false,
@@ -119,17 +99,12 @@ impl Container {
                 file_type: crate::state::IconType::Code,
                 folder_id: 0,
             });
-
-            y_offset += CARD_HEIGHT + card_padding;
         }
-
-        let content_height = y_offset.max(viewport_height);
 
         Self {
             id,
             position,
             size: Vec2::new(width, viewport_height),
-            content_height,
             scroll_offset: 0.0,
             container_type: ContainerType::SearchResults,
             cards,
@@ -144,12 +119,8 @@ impl Container {
         viewport_height: f32,
         results: Vec<CodeSearchResult>,
     ) -> Self {
-        let card_padding = 8.0;
-        let card_width = width - 16.0;
-
         let mut cards = Vec::new();
         let mut documents = Vec::new();
-        let mut y_offset = 0.0;
 
         for (i, result) in results.iter().enumerate() {
             let title = result
@@ -164,9 +135,6 @@ impl Container {
             );
 
             cards.push(CardData {
-                id: i,
-                position: Vec2::new(8.0, y_offset),
-                size: Vec2::new(card_width, CARD_HEIGHT),
                 document_id: i,
                 stable_key: adapter::stable_item_key_code_search(result),
                 is_selected: false,
@@ -178,24 +146,16 @@ impl Container {
                 file_type: crate::state::IconType::Code,
                 folder_id: 0,
             });
-
-            y_offset += CARD_HEIGHT + card_padding;
         }
-
-        let content_height = y_offset.max(viewport_height);
 
         Self {
             id,
             position,
             size: Vec2::new(width, viewport_height),
-            content_height,
             scroll_offset: 0.0,
             container_type: ContainerType::CodeSearchResults,
             cards,
             documents,
         }
     }
-
 }
-
-

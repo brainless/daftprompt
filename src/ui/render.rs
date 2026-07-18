@@ -45,17 +45,15 @@
 //     results container; empty query removes it.
 
 use akar_components::{
-    akar_button as button, akar_container as container, akar_label as label,
-    canvas_begin, canvas_end, BoxStyle, ButtonVariant, CanvasConfig, CanvasPainter,
-    CanvasResponse, DrawerEdge,
-};
-use akar_components::{
     akar_badge as badge, akar_text_input as text_input, drawer_begin, drawer_end, BadgeVariant,
 };
 use akar_components::{
-    akar_data_item, canvas_data_item, canvas_portal_begin, canvas_portal_end,
-    data_list_begin, data_list_end, CanvasDataItemDescriptor, CanvasInput,
-    DataItemStyle, DataListState,
+    akar_button as button, akar_container as container, akar_label as label, canvas_begin,
+    canvas_end, BoxStyle, ButtonVariant, CanvasConfig, CanvasPainter, CanvasResponse, DrawerEdge,
+};
+use akar_components::{
+    akar_data_item, canvas_data_item, canvas_portal_begin, canvas_portal_end, data_list_begin,
+    data_list_end, CanvasDataItemDescriptor, CanvasInput, DataItemStyle, DataListState,
 };
 use akar_core::{AkarCore, QuadCall};
 use akar_layout::{
@@ -123,7 +121,14 @@ pub fn render_canvas(
     // Container/card rendering. World-space backgrounds flow through
     // `painter`; cards are rendered inside a portal + data list via
     // `data_item`. See the `render_containers` doc comment for details.
-    render_containers(core, &mut *layout, &mut painter, state, &resp.world_to_screen, &resp);
+    render_containers(
+        core,
+        &mut *layout,
+        &mut painter,
+        state,
+        &resp.world_to_screen,
+        &resp,
+    );
 
     canvas_end(core, painter);
 
@@ -322,11 +327,9 @@ fn render_containers(
 
         // --- Compute viewport (without children) first, so layout.rect is
         // correct for portal_begin and data_list_begin.
-        layout.compute(
-            viewport_node,
-            (Some(cw), Some(list_h)),
-            |_, _, _, _, _| Size::ZERO,
-        );
+        layout.compute(viewport_node, (Some(cw), Some(list_h)), |_, _, _, _, _| {
+            Size::ZERO
+        });
 
         // Open portal. Pushes a scissor that clips to both the canvas rect
         // and the portal (viewport) rect. All subsequent data_list content
@@ -363,8 +366,8 @@ fn render_containers(
 
             // Item node — absolute child of viewport, positioned at
             // content_origin[1] + i * CARD_HEIGHT, relative to viewport.
-            let item_rel_y = list_resp.content_origin[1] - list_y
-                + i as f32 * crate::ui::container::CARD_HEIGHT;
+            let item_rel_y =
+                list_resp.content_origin[1] - list_y + i as f32 * crate::ui::container::CARD_HEIGHT;
             let item_node = layout.new_leaf(Style {
                 position: Position::Absolute,
                 inset: Rect {
@@ -462,8 +465,7 @@ fn render_containers(
                     // Separator is drawn in the render pass.
                     let sep_y_rel = PAD + 3.0 * HEADER_LINE_HEIGHT + LABEL_GAP;
                     let msg_y_rel = sep_y_rel + SEPARATOR_HEIGHT;
-                    let msg_h_rel =
-                        (crate::ui::container::CARD_HEIGHT - msg_y_rel - PAD).max(18.0);
+                    let msg_h_rel = (crate::ui::container::CARD_HEIGHT - msg_y_rel - PAD).max(18.0);
                     let msg = if doc.title.is_empty() {
                         doc.content.clone()
                     } else {
@@ -533,8 +535,7 @@ fn render_containers(
 
                     // Identifier (title) — prominent text
                     let id_y_rel = PAD + 2.0 * HEADER_LINE_HEIGHT + LABEL_GAP;
-                    let id_h_rel =
-                        (crate::ui::container::CARD_HEIGHT - id_y_rel - PAD).max(18.0);
+                    let id_h_rel = (crate::ui::container::CARD_HEIGHT - id_y_rel - PAD).max(18.0);
                     let node = layout.new_leaf(Style {
                         position: Position::Absolute,
                         inset: Rect {
@@ -564,11 +565,9 @@ fn render_containers(
         }
 
         // Re-compute the viewport subtree (with children now added).
-        layout.compute(
-            viewport_node,
-            (Some(cw), Some(list_h)),
-            |_, _, _, _, _| Size::ZERO,
-        );
+        layout.compute(viewport_node, (Some(cw), Some(list_h)), |_, _, _, _, _| {
+            Size::ZERO
+        });
 
         // --- Render pass: data_item + labels for each visible item ---
         for item_data in &render_items {
@@ -583,13 +582,8 @@ fn render_containers(
                 base_style
             };
 
-            let item_resp = akar_data_item(
-                core,
-                &*layout,
-                item_data.item_node,
-                item_data.key,
-                &style,
-            );
+            let item_resp =
+                akar_data_item(core, &*layout, item_data.item_node, item_data.key, &style);
 
             // Selection handling (single-select per container).
             if item_resp.clicked {
@@ -602,8 +596,7 @@ fn render_containers(
             let item_rect = layout.rect(item_data.item_node);
             match container.container_type {
                 ContainerType::GitLogColumn | ContainerType::SearchResults => {
-                    let sep_y =
-                        item_rect[1] + PAD + 3.0 * HEADER_LINE_HEIGHT + LABEL_GAP;
+                    let sep_y = item_rect[1] + PAD + 3.0 * HEADER_LINE_HEIGHT + LABEL_GAP;
                     core.draw_list.push_quad(QuadCall {
                         rect: [
                             item_rect[0] + PAD,
@@ -893,8 +886,8 @@ pub fn render_drawer(core: &mut AkarCore, layout: &mut Layout, state: &mut AppSt
     // container goes first (behind), then the button (which is transparent
     // when not hovered, so the container shows through for selected rows
     // that aren't being hovered), then the labels.
-    for i in 0..state.folders.len() {
-        let row = rows[i].row;
+    for (i, row_nodes) in rows.iter().enumerate() {
+        let row = row_nodes.row;
         let is_selected = state.selected_folder == Some(i);
 
         if is_selected {
@@ -935,14 +928,7 @@ pub fn render_drawer(core: &mut AkarCore, layout: &mut Layout, state: &mut AppSt
 
         if let Some(text) = entry.text {
             let name_text = format!("{}\n{} docs", folder.name, folder.document_count);
-            label(
-                core,
-                &*layout,
-                text,
-                &name_text,
-                theme.base_content,
-                &theme,
-            );
+            label(core, &*layout, text, &name_text, theme.base_content, &theme);
         }
     }
 
@@ -1008,12 +994,7 @@ fn icon_emoji(icon: IconType) -> &'static str {
 /// `dt` is the frame delta (already computed by the drawer's animation
 /// block in `handle_redraw`). It drives the cursor blink at a 0.5s
 /// half-cycle.
-pub fn render_search(
-    core: &mut AkarCore,
-    layout: &mut Layout,
-    state: &mut AppState,
-    dt: f32,
-) {
+pub fn render_search(core: &mut AkarCore, layout: &mut Layout, state: &mut AppState, dt: f32) {
     let theme = match state.system_theme {
         state::SystemTheme::Dark => akar_components::AKAR_THEME_DARK,
         state::SystemTheme::Light => akar_components::AKAR_THEME_LIGHT,
@@ -1092,9 +1073,7 @@ pub fn render_search(
     if state.search_just_opened {
         core.input.focused_id = Some(id_u64);
         state.search_just_opened = false;
-    } else if (state.search_active || state.code_search_active)
-        && core.input.focused_id.is_none()
-    {
+    } else if (state.search_active || state.code_search_active) && core.input.focused_id.is_none() {
         // FIXME: click-outside-to-unfocus is broken. This branch re-grabs
         // focus whenever focused_id is None, even if the user clicked outside
         // the search box. The per-frame NodeId churn means we can't reliably
@@ -1105,14 +1084,8 @@ pub fn render_search(
     }
 
     let (value, placeholder): (&mut String, &str) = match state.search_mode {
-        state::SearchMode::Commits => (
-            &mut state.search_query,
-            "Search documents... (Cmd+K)",
-        ),
-        state::SearchMode::Code => (
-            &mut state.code_search_query,
-            "Search code... (Cmd+Shift+K)",
-        ),
+        state::SearchMode::Commits => (&mut state.search_query, "Search documents... (Cmd+K)"),
+        state::SearchMode::Code => (&mut state.code_search_query, "Search code... (Cmd+Shift+K)"),
     };
 
     let resp = text_input(

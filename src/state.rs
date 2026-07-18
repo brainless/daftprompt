@@ -1,9 +1,10 @@
+use crate::ui::container::Container;
 use akar_components::CanvasState;
 use glam::Vec2;
-use crate::ui::container::Container;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SystemTheme {
+    #[allow(dead_code)]
     Light,
     Dark,
 }
@@ -68,6 +69,7 @@ pub struct AppState {
     pub code_search_just_opened: bool,
     pub code_search_query: String,
     pub code_search_results: Vec<sugacode_indexer::CodeSearchResult>,
+    #[allow(dead_code)]
     pub code_indexing_in_progress: bool,
 }
 
@@ -75,7 +77,9 @@ pub struct AppState {
 pub struct FolderData {
     pub name: String,
     pub icon: IconType,
+    #[allow(dead_code)]
     pub path: String,
+    #[allow(dead_code)]
     pub is_git_repo: bool,
     pub document_count: usize,
 }
@@ -84,10 +88,13 @@ pub struct FolderData {
 pub enum IconType {
     Folder,
     GitRepo,
+    #[allow(dead_code)]
     Document,
     Code,
     Markdown,
+    #[allow(dead_code)]
     Search,
+    #[allow(dead_code)]
     Settings,
 }
 
@@ -95,15 +102,14 @@ pub enum IconType {
 pub struct DocumentData {
     pub title: String,
     pub content: String,
+    #[allow(dead_code)]
     pub file_type: IconType,
+    #[allow(dead_code)]
     pub folder_id: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct CardData {
-    pub id: usize,
-    pub position: Vec2,
-    pub size: Vec2,
     pub document_id: usize,
     pub stable_key: u64,
     pub is_selected: bool,
