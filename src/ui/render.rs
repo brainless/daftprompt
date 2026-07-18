@@ -53,13 +53,19 @@ use akar_components::{
     akar_badge as badge, akar_text_input as text_input, drawer_begin, drawer_end, BadgeVariant,
 };
 use akar_components::{
-    akar_data_item, data_list_begin, data_list_end, DataItemStyle, DataListState,
+    akar_data_item, canvas_data_item, canvas_portal_begin, canvas_portal_end,
+    data_list_begin, data_list_end, CanvasDataItemDescriptor, CanvasInput,
+    DataItemStyle, DataListState,
 };
 use akar_core::{AkarCore, QuadCall};
 use akar_layout::{
     auto, length, CanvasTransform, Layout, NodeId, Position, Rect, Size, Style, WorldRect,
 };
 use glam::Vec2;
+
+/// LOD thresholds (minimum screen dimension in pixels).
+/// Index 0 = far zoom (summary card), index ≥1 = full detail via portal.
+const CONTAINER_LOD_THRESHOLDS: &[f32] = &[200.0];
 
 use crate::state::{self, AppState, IconType};
 use crate::ui::container::{Container, ContainerType};
@@ -119,7 +125,7 @@ pub fn render_canvas(
     // `core.draw_list` so the per-container `scroll_area_begin` scissor
     // clips them to the container rect. See the `render_containers` doc
     // comment for the z-ordering rationale.
-    render_containers(core, &mut *layout, &mut painter, state, &resp.world_to_screen);
+    render_containers(core, &mut *layout, &mut painter, state, &resp.world_to_screen, &resp);
 
     canvas_end(core, painter);
 
@@ -191,6 +197,7 @@ fn render_containers(
     painter: &mut CanvasPainter,
     state: &mut AppState,
     world_to_screen: &CanvasTransform,
+    canvas_resp: &CanvasResponse,
 ) {
     let theme = match state.system_theme {
         state::SystemTheme::Dark => akar_components::AKAR_THEME_DARK,
@@ -247,6 +254,40 @@ fn render_containers(
             0.0,
         );
 
+        // LOD: if the container's projected screen rect is smaller than the
+        // threshold, render a summary card instead of the full data list.
+        let lod = canvas_resp.lod_index(container_world_rect, CONTAINER_LOD_THRESHOLDS);
+
+        if lod == 0 {
+            // Low-detail path: summary card via canvas_data_item.
+            let title_text = match container.container_type {
+                ContainerType::GitLogColumn => "Git Log",
+                ContainerType::SearchResults => "Search Results",
+                ContainerType::CodeSearchResults => "Code Search",
+                ContainerType::DocumentGrid => "Documents",
+            };
+            let count = container.cards.len();
+            let summary_text = match container.container_type {
+                ContainerType::GitLogColumn => format!("{count} commits"),
+                ContainerType::SearchResults => format!("{count} results"),
+                ContainerType::CodeSearchResults => format!("{count} symbols"),
+                ContainerType::DocumentGrid => format!("{count} documents"),
+            };
+
+            let canvas_input = CanvasInput::new(&core.input, &canvas_resp.screen_to_world);
+            let summary_style = DataItemStyle::from_theme(&theme);
+            let desc = CanvasDataItemDescriptor {
+                title: Some(title_text),
+                supporting_text: Some(&summary_text),
+                metadata: None,
+                style: &summary_style,
+            };
+            canvas_data_item(&mut *painter, &canvas_input, container_world_rect, &desc);
+            continue;
+        }
+
+        // --- High-detail path ---
+
         // Title bar text.
         let title_text = match container.container_type {
             ContainerType::GitLogColumn => "Git Log",
@@ -273,7 +314,7 @@ fn render_containers(
 
         // Viewport layout node — absolute positioned at the container's
         // screen-space rect (below the title). This is the viewport for
-        // data_list_begin.
+        // data_list_begin and the portal root.
         let title_bottom = cy + TITLE_HEIGHT + 6.0;
         let list_y = title_bottom;
         let list_h = (cy + ch - title_bottom).max(0.0);
@@ -301,8 +342,22 @@ fn render_containers(
             scroll_y: container.scroll_offset,
         };
 
+        // --- Compute viewport (without children) first, so layout.rect is
+        // correct for portal_begin and data_list_begin.
+        layout.compute(
+            viewport_node,
+            (Some(cw), Some(list_h)),
+            |_, _, _, _, _| Size::ZERO,
+        );
+
+        // Open portal. Pushes a scissor that clips to both the canvas rect
+        // and the portal (viewport) rect. All subsequent data_list content
+        // is nested inside this scissor.
+        let portal_guard = canvas_portal_begin(core, canvas_resp, &*layout, viewport_node);
+
         // data_list_begin handles wheel scrolling, pushes a scissor for
-        // the viewport rect, and returns the visible range + content origin.
+        // the viewport rect (nested inside the portal scissor), and returns
+        // the visible range + content origin.
         let list_resp = data_list_begin(
             core,
             &*layout,
@@ -531,7 +586,7 @@ fn render_containers(
             });
         }
 
-        // Compute the viewport subtree (viewport_node + all item subtrees).
+        // Re-compute the viewport subtree (with children now added).
         layout.compute(
             viewport_node,
             (Some(cw), Some(list_h)),
@@ -602,6 +657,7 @@ fn render_containers(
         }
 
         data_list_end(core);
+        canvas_portal_end(core, portal_guard);
     }
 
     // Compute and render title labels.
