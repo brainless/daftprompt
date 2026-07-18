@@ -1,9 +1,11 @@
 # Epic 006: Refactor Canvas Containers to akar Data Items and Lists
 
-**Status:** Planned
+**Status:** In Progress (Task 1 complete, Task 2 in progress)
 **Goal:** Replace sugacode's canvas-coupled git-log, search-result, and code-search card renderer with the reusable akar data-item and data-list APIs introduced by akar Epic 017, while retaining sugacode ownership of all domain data and UI policy.
 
 **Prerequisite:** sugacode Epic 005 is complete and akar Epic 017 has shipped the required APIs.
+
+**Pre-implementation review (2026-07-18):** Verified against the shipped akar source (`~/Projects/akar`, Epics 016/017 both `Status: Done`). `data_item`, `data_list_begin/end`, `canvas_data_item`, `canvas_portal_begin/end`, `CanvasResponse::project`/`lod_index`, and `Layout::widget_id_keyed`/`set_namespace_id` all exist and match the epic's sketch, with one signature drift: `canvas_portal_end` takes a `CanvasPortalGuard` argument, not `(core)` alone. Three findings from that review are folded into the tasks below: the fixed-height list constraint forces Task 3's decision earlier than Task 2, `CardData.id` is a positional index and not a valid ADR-016a key, and `ContainerType::DocumentGrid` is confirmed dead code (see Task 5).
 
 ---
 
@@ -55,40 +57,21 @@ The current renderer remains usable while each data source is migrated. The refa
 
 **Work:**
 
-1. Upgrade the akar path dependencies to the Epic 017 API surface.
+1. Confirm sugacode builds against the shipped akar Epic 017 API. The akar crates are path dependencies already at the same version, so this is a `cargo check --workspace` verification, not a version bump — fix any call-site drift (e.g. `canvas_portal_end(core, guard)` taking a `CanvasPortalGuard`).
 2. Define small sugacode-local mapping functions from commit/search/code-search data to data-item title, supporting text, metadata, and style inputs.
-3. Preserve domain records and stable item keys; do not expose `CardData` to akar.
+3. Preserve domain records and stable item keys; do not expose `CardData` to akar. `CardData.id` (a per-container loop index, not record identity) must **not** be used as the `data_item`/`data_list` key. Derive the `u64` key by hashing real record identity instead: `CommitInfo.sha` for git-log, `SearchResult.short_hash`/`identifier` for commit search, `CodeSearchResult.identifier` for code search. This is what makes ADR-016a hold — a key derived from loop position corrupts focus/selection identity across scroll and re-search exactly the way ADR-016a describes.
 4. Add a local layout/portal cache keyed by stable container and item identity where portal state is needed.
 
 **Acceptance criteria:**
 
 - Sugacode compiles against the shipped Epic 017 API.
 - The mapping layer contains presentation mapping only, not rendering math or application-owned records in akar.
+- Item keys are derived from stable record content (commit SHA, search result identifier), not from `CardData.id` or list position.
 - Recreated portal layouts use stable namespaces for the same logical item.
 
-### Task 2: Refactor Normal List Rendering
+### Task 2: Resolve Variable-Height Card Policy
 
-**Files:**
-
-- `src/ui/render.rs`
-- `src/ui/container.rs`
-- `src/state.rs`
-
-**Work:**
-
-1. Replace direct card quad submission and ad hoc item hover handling with akar `data_item` responses.
-2. Replace direct `scroll_area_begin/end` and `list_clip` use in container rendering with `data_list_begin/end`.
-3. Build layout item subtrees only for the visible range and render title, hash, author, date, message, and code location through ordinary components.
-4. Preserve the existing card styles and selected/hovered appearance through the new style configuration.
-
-**Acceptance criteria:**
-
-- Git log, commit search, and code search render through the reusable item/list path.
-- Only visible fixed-height list items are constructed and rendered.
-- Existing single-select behavior remains correct.
-- No card background is pushed directly from sugacode to `core.draw_list`.
-
-### Task 3: Resolve Variable-Height Card Policy
+**Must land before Task 3.** `data_list_begin` (`crates/akar-components/src/data_list.rs`) takes one uniform `item_height` for the whole list — akar Epic 017 deliberately deferred variable-height virtualization (ADR-017). Sugacode's current `calculate_card_height`/`calculate_search_card_height` produce a variable 80–200px height per card. Task 3 cannot pick a `data_list_begin` call without this decision already made, so it is sequenced first even though it was originally numbered after the list refactor.
 
 **Files:**
 
@@ -105,6 +88,28 @@ The current renderer remains usable while each data source is migrated. The refa
 
 - The renderer never incorrectly skips a visible record due to a mismatched virtualization height.
 - Overflow behavior is legible and tested with long commit messages and code identifiers.
+
+### Task 3: Refactor Normal List Rendering
+
+**Files:**
+
+- `src/ui/render.rs`
+- `src/ui/container.rs`
+- `src/state.rs`
+
+**Work:**
+
+1. Replace direct card quad submission and ad hoc item hover handling with akar `data_item` responses.
+2. Replace direct `scroll_area_begin/end` and `list_clip` use in container rendering with `data_list_begin/end`, using the fixed `item_height` chosen in Task 2 and the stable per-record keys established in Task 1 (not `CardData.id`).
+3. Build layout item subtrees only for the visible range and render title, hash, author, date, message, and code location through ordinary components.
+4. Preserve the existing card styles and selected/hovered appearance through the new style configuration.
+
+**Acceptance criteria:**
+
+- Git log, commit search, and code search render through the reusable item/list path.
+- Only visible fixed-height list items are constructed and rendered.
+- Existing single-select behavior remains correct.
+- No card background is pushed directly from sugacode to `core.draw_list`.
 
 ### Task 4: Add Canvas LOD Presentation
 
@@ -140,12 +145,14 @@ The current renderer remains usable while each data source is migrated. The refa
 1. Remove rootless absolute text overlays used only by the old card renderer.
 2. Remove redundant per-card hover state if it is fully derivable from the current item response; retain selected state only where it represents application policy.
 3. Simplify container fields and helpers that existed solely for manual screen-coordinate card rendering.
+4. Remove `ContainerType::DocumentGrid` and `Container::new_document_grid` (`src/ui/container.rs`) along with their two match arms in `src/ui/render.rs`. Verified dead code: `new_document_grid` has no call sites anywhere in the codebase, so it is out of this epic's scope by construction, not something to migrate.
 
 **Acceptance criteria:**
 
 - The legacy manual card path is gone.
 - Domain and selection state remain clear and minimal.
 - No unrelated drawer, search, indexer, or canvas behavior regresses.
+- `ContainerType::DocumentGrid` and `new_document_grid` no longer exist.
 
 ### Task 6: Verification and Documentation
 

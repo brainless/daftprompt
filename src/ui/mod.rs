@@ -11,5 +11,6 @@
 // The old `canvas.rs`, `drawer.rs`, `search.rs` modules (which depended on the
 // removed `renderer.rs`/`input.rs` types) are re-implemented on top of akar in
 // Tasks 3/4/6 — each task deletes the corresponding old module file.
+pub mod adapter;
 pub mod container;
 pub mod render;
