@@ -302,14 +302,26 @@ fn render_containers(
         let list_y = title_bottom;
         let list_h = (cy + ch - title_bottom).max(0.0);
 
+        // `viewport_node` is computed as its own layout root (see below), so
+        // its own `position`/`inset` style is never applied to itself —
+        // Taffy places a root's own box at (0,0) regardless of that style,
+        // since a root has no containing block. Absolute insets only affect
+        // *children* of a node, not the node's own placement when it is the
+        // root of a `layout.compute` call. Previously this inset (`cx`,
+        // `list_y`) was silently discarded, so every rect computed under
+        // `viewport_node` (including the `canvas_portal_begin` scissor and
+        // `data_list_begin`'s hover/scroll rect) resolved to (0,0)-relative
+        // instead of the container's actual screen position — cards render
+        // at the coordinate origin, ignoring canvas pan (zoom still "worked"
+        // because `cw`/`list_h` are passed as literal style values, not
+        // read back through `layout.rect`). Use `screen_origin` instead,
+        // which is added on top of every `layout.rect` lookup regardless of
+        // parent-chain accumulation, and reset it after this container's
+        // subtree is done with so it doesn't leak into the next container's
+        // math or the title-label pass below.
+        layout.set_screen_origin([cx, list_y]);
+
         let viewport_node = layout.new_leaf(Style {
-            position: Position::Absolute,
-            inset: Rect {
-                left: length(cx),
-                top: length(list_y),
-                right: auto(),
-                bottom: auto(),
-            },
             size: Size {
                 width: length(cw),
                 height: length(list_h),
@@ -628,6 +640,10 @@ fn render_containers(
 
         data_list_end(core);
         canvas_portal_end(core, portal_guard);
+
+        // Reset for the next container / the title-label pass, which expect
+        // the default (0,0) origin.
+        layout.set_screen_origin([0.0, 0.0]);
     }
 
     // Compute and render title labels.
