@@ -4,6 +4,16 @@ use crate::git_log::CommitInfo;
 use crate::state::{CardData, DocumentData};
 use sugacode_indexer::{CodeSearchResult, SearchResult};
 
+/// Fixed card height policy for Epic 017 compatibility.
+///
+/// `data_list_begin` requires a single uniform `item_height` for all cards
+/// (akar deliberately deferred variable-height virtualization, see ADR-017).
+/// 120px accommodates a header line (~24px), separator (~8px), gap (~4px),
+/// ~3 lines of wrapped text at 18px each (~54px), and vertical padding
+/// (~24px), totaling ~114px rounded to 120px for comfortable spacing.
+/// Content exceeding this height is truncated by the label component.
+pub const CARD_HEIGHT: f32 = 120.0;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ContainerType {
     DocumentGrid,
@@ -55,8 +65,6 @@ impl Container {
         viewport_height: f32,
         commits: Vec<CommitInfo>,
     ) -> Self {
-        let card_min_height = 80.0;
-        let card_max_height = 200.0;
         let card_padding = 8.0;
         let card_width = width - 16.0; // 8px padding each side
 
@@ -65,13 +73,10 @@ impl Container {
         let mut y_offset = 0.0;
 
         for (i, commit) in commits.iter().enumerate() {
-            let height =
-                calculate_card_height(commit, card_width, card_min_height, card_max_height);
-
             cards.push(CardData {
                 id: i,
                 position: Vec2::new(8.0, y_offset),
-                size: Vec2::new(card_width, height),
+                size: Vec2::new(card_width, CARD_HEIGHT),
                 document_id: i,
                 is_selected: false,
                 is_hovered: false,
@@ -87,7 +92,7 @@ impl Container {
                 folder_id: 0,
             });
 
-            y_offset += height + card_padding;
+            y_offset += CARD_HEIGHT + card_padding;
         }
 
         let content_height = y_offset.max(viewport_height);
@@ -111,8 +116,6 @@ impl Container {
         viewport_height: f32,
         results: Vec<SearchResult>,
     ) -> Self {
-        let card_min_height = 80.0;
-        let card_max_height = 200.0;
         let card_padding = 8.0;
         let card_width = width - 16.0;
 
@@ -125,12 +128,10 @@ impl Container {
             let author = result.author.as_deref().unwrap_or("");
             let content = format!("{}\nAuthor: {}\nDate: ", result.short_hash, author);
 
-            let height = calculate_search_card_height(&title, card_width, card_min_height, card_max_height);
-
             cards.push(CardData {
                 id: i,
                 position: Vec2::new(8.0, y_offset),
-                size: Vec2::new(card_width, height),
+                size: Vec2::new(card_width, CARD_HEIGHT),
                 document_id: i,
                 is_selected: false,
                 is_hovered: false,
@@ -143,7 +144,7 @@ impl Container {
                 folder_id: 0,
             });
 
-            y_offset += height + card_padding;
+            y_offset += CARD_HEIGHT + card_padding;
         }
 
         let content_height = y_offset.max(viewport_height);
@@ -167,8 +168,6 @@ impl Container {
         viewport_height: f32,
         results: Vec<CodeSearchResult>,
     ) -> Self {
-        let card_min_height = 80.0;
-        let card_max_height = 200.0;
         let card_padding = 8.0;
         let card_width = width - 16.0;
 
@@ -188,17 +187,10 @@ impl Container {
                 result.file_path, result.line_start, result.line_end
             );
 
-            let height = calculate_search_card_height(
-                &title,
-                card_width,
-                card_min_height,
-                card_max_height,
-            );
-
             cards.push(CardData {
                 id: i,
                 position: Vec2::new(8.0, y_offset),
-                size: Vec2::new(card_width, height),
+                size: Vec2::new(card_width, CARD_HEIGHT),
                 document_id: i,
                 is_selected: false,
                 is_hovered: false,
@@ -211,7 +203,7 @@ impl Container {
                 folder_id: 0,
             });
 
-            y_offset += height + card_padding;
+            y_offset += CARD_HEIGHT + card_padding;
         }
 
         let content_height = y_offset.max(viewport_height);
@@ -260,40 +252,4 @@ impl Container {
     }
 }
 
-fn calculate_card_height(
-    commit: &CommitInfo,
-    card_width: f32,
-    min: f32,
-    max: f32,
-) -> f32 {
-    // Header line: hash + author + date
-    let header_height = 24.0;
-    // Separator
-    let separator_height = 16.0;
-    // Message title (may wrap)
-    let chars_per_line = ((card_width - 20.0) / 7.5).max(1.0); // approx chars at 12px font
-    let message_lines = (commit.message_title.len() as f32 / chars_per_line).ceil().max(1.0);
-    let message_height = message_lines * 18.0;
-    // Padding
-    let padding = 24.0;
 
-    let total = header_height + separator_height + message_height + padding;
-    total.clamp(min, max)
-}
-
-fn calculate_search_card_height(
-    title: &str,
-    card_width: f32,
-    min: f32,
-    max: f32,
-) -> f32 {
-    let header_height = 24.0;
-    let separator_height = 16.0;
-    let chars_per_line = ((card_width - 20.0) / 7.5).max(1.0);
-    let message_lines = (title.len() as f32 / chars_per_line).ceil().max(1.0);
-    let message_height = message_lines * 18.0;
-    let padding = 24.0;
-
-    let total = header_height + separator_height + message_height + padding;
-    total.clamp(min, max)
-}

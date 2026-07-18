@@ -151,14 +151,14 @@ pub fn render_canvas(
 ///   2. Open a scroll area (`scroll_area_begin`) which clamps
 ///      `container.scroll_offset` and pushes a scissor for the
 ///      container's screen rect onto `core.draw_list`.
-///   3. Use `list_clip` (from `akar_core`) to pick a `Range<usize>` of
-///      cards whose `card.position.y` falls inside the visible viewport,
-///      plus one item of padding on each end (per the helper's contract
-///      — see `akar-core/src/lib.rs:24`). The card heights are computed
-///      per card by `new_git_log`/`new_search_results`/etc. but
-///      `list_clip` takes a single uniform `item_height`; we pass the
-///      first card's height (or 80px as a safe lower bound) and accept
-///      the spec-acknowledged over-render at boundaries.
+    ///   3. Use `list_clip` (from `akar_core`) to pick a `Range<usize>` of
+    ///      cards whose `card.position.y` falls inside the visible viewport,
+    ///      plus one item of padding on each end (per the helper's contract
+    ///      — see `akar-core/src/lib.rs:24`). All cards use the fixed
+    ///      `crate::ui::container::CARD_HEIGHT` (120px) — this is the chosen policy
+    ///      for Epic 017 compatibility. Variable-height virtualization is
+    ///      deferred; any content that exceeds the fixed height is truncated
+    ///      by the label component.
 ///   4. For each visible card:
 ///      * compute its screen-space rect,
 ///      * push the card background to `core.draw_list` directly (z=0.1)
@@ -288,10 +288,13 @@ fn render_containers(
         // Virtualized visible range. `list_clip` returns
         // `start..end` with one-item padding on each end; cards outside
         // are skipped entirely.
-        let card_height = container.cards.first().map(|c| c.size.y).unwrap_or(80.0);
+        //
+        // Fixed height policy for Epic 017 — all cards use
+        // `container::CARD_HEIGHT` (120px). Variable-height
+        // virtualization is deferred.
         let visible = list_clip(
             container.cards.len(),
-            card_height,
+            crate::ui::container::CARD_HEIGHT,
             container.scroll_offset,
             ch,
         );
