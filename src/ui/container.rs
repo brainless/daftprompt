@@ -17,7 +17,6 @@ pub const CARD_HEIGHT: f32 = 120.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ContainerType {
-    DocumentGrid,
     GitLogColumn,
     SearchResults,
     CodeSearchResults,
@@ -35,30 +34,6 @@ pub struct Container {
 }
 
 impl Container {
-    pub fn new_document_grid(
-        id: usize,
-        position: Vec2,
-        size: Vec2,
-        cards: Vec<CardData>,
-        documents: Vec<DocumentData>,
-    ) -> Self {
-        let content_height = cards
-            .iter()
-            .map(|c| c.position.y - position.y + c.size.y)
-            .fold(0.0f32, f32::max);
-
-        Self {
-            id,
-            position,
-            size,
-            content_height: content_height.max(size.y),
-            scroll_offset: 0.0,
-            container_type: ContainerType::DocumentGrid,
-            cards,
-            documents,
-        }
-    }
-
     pub fn new_git_log(
         id: usize,
         position: Vec2,
@@ -81,7 +56,6 @@ impl Container {
                 document_id: i,
                 stable_key: adapter::stable_item_key_commit(commit),
                 is_selected: false,
-                is_hovered: false,
             });
 
             documents.push(DocumentData {
@@ -137,7 +111,6 @@ impl Container {
                 document_id: i,
                 stable_key: adapter::stable_item_key_search(result),
                 is_selected: false,
-                is_hovered: false,
             });
 
             documents.push(DocumentData {
@@ -197,7 +170,6 @@ impl Container {
                 document_id: i,
                 stable_key: adapter::stable_item_key_code_search(result),
                 is_selected: false,
-                is_hovered: false,
             });
 
             documents.push(DocumentData {
@@ -224,36 +196,6 @@ impl Container {
         }
     }
 
-    pub fn scroll(&mut self, delta: f32) {
-        let max_scroll = (self.content_height - self.size.y).max(0.0);
-        self.scroll_offset = (self.scroll_offset + delta).clamp(0.0, max_scroll);
-    }
-
-    pub fn is_mouse_over(&self, mouse_pos: Vec2) -> bool {
-        mouse_pos.x >= self.position.x
-            && mouse_pos.x <= self.position.x + self.size.x
-            && mouse_pos.y >= self.position.y
-            && mouse_pos.y <= self.position.y + self.size.y
-    }
-
-    pub fn visible_cards(&self) -> impl Iterator<Item = (&CardData, &DocumentData, Vec2)> {
-        let container_top = self.position.y;
-        let container_bottom = self.position.y + self.size.y;
-
-        self.cards.iter().zip(self.documents.iter()).filter_map(
-            move |(card, doc)| {
-                let card_abs_y = self.position.y + card.position.y - self.scroll_offset;
-
-                // Cull cards outside visible area
-                if card_abs_y + card.size.y < container_top || card_abs_y > container_bottom {
-                    return None;
-                }
-
-                let abs_pos = Vec2::new(self.position.x + card.position.x, card_abs_y);
-                Some((card, doc, abs_pos))
-            },
-        )
-    }
 }
 
 

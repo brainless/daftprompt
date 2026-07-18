@@ -107,7 +107,6 @@ pub struct CardData {
     pub document_id: usize,
     pub stable_key: u64,
     pub is_selected: bool,
-    pub is_hovered: bool,
 }
 
 impl AppState {

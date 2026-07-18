@@ -20,14 +20,14 @@
 //
 // Task 5 (containers/cards):
 //   - `render_containers` runs between `render_grid` and `canvas_end`. It
-//     walks `state.containers` and draws each one's background, scroll
-//     area, and virtualized card list. Card backgrounds are pushed
-//     directly to `core.draw_list` (so the `scroll_area_begin` scissor
-//     clips them) at z=0.1; the container background goes through
-//     `painter.push_quad` at z=0.0 (flushed at `canvas_end` behind the
-//     cards). Card text is laid out in a rootless taffy overlay and
-//     rendered with `label`. See the `render_containers` doc comment for
-//     the full layering rationale.
+//     walks `state.containers` and draws each one's background, then opens
+//     a portal (`canvas_portal_begin/end`) + data list
+//     (`data_list_begin/end`) per container. Cards are rendered via
+//     `data_item` which pushes its own quads through the portal-scissored
+//     draw list. Labels use per-item absolute-positioned taffy nodes.
+//     Low-detail containers use `canvas_data_item` for a summary card.
+//     See the `render_containers` doc comment for the full layering
+//     rationale.
 //
 // Task 6 (search):
 //   - `render_search` builds a rootless taffy sub-tree containing a
@@ -120,11 +120,9 @@ pub fn render_canvas(
 
     render_grid(&mut painter, &resp, state);
 
-    // Container/card rendering (Task 5). World-space backgrounds flow
-    // through `painter`; card backgrounds are pushed directly to
-    // `core.draw_list` so the per-container `scroll_area_begin` scissor
-    // clips them to the container rect. See the `render_containers` doc
-    // comment for the z-ordering rationale.
+    // Container/card rendering. World-space backgrounds flow through
+    // `painter`; cards are rendered inside a portal + data list via
+    // `data_item`. See the `render_containers` doc comment for details.
     render_containers(core, &mut *layout, &mut painter, state, &resp.world_to_screen, &resp);
 
     canvas_end(core, painter);
@@ -154,43 +152,26 @@ pub fn render_canvas(
 /// Per-container pipeline:
 ///   1. Push the container's background to the `CanvasPainter` (z=0.0).
 ///      The painter buffers quads and flushes them to `core.draw_list` on
-///      `canvas_end` — that puts the background behind everything else
-///      that already went into `core.draw_list` directly.
-///   2. Open a scroll area (`scroll_area_begin`) which clamps
-///      `container.scroll_offset` and pushes a scissor for the
-///      container's screen rect onto `core.draw_list`.
-    ///   3. Use `list_clip` (from `akar_core`) to pick a `Range<usize>` of
-    ///      cards whose `card.position.y` falls inside the visible viewport,
-    ///      plus one item of padding on each end (per the helper's contract
-    ///      — see `akar-core/src/lib.rs:24`). All cards use the fixed
-    ///      `crate::ui::container::CARD_HEIGHT` (120px) — this is the chosen policy
-    ///      for Epic 017 compatibility. Variable-height virtualization is
-    ///      deferred; any content that exceeds the fixed height is truncated
-    ///      by the label component.
+///      `canvas_end` — that puts the background behind other quads.
+///   2. Evaluate LOD: if the container's screen rect is below the
+///      threshold, render a `canvas_data_item` summary card and skip
+///      the remaining steps.
+///   3. Open a portal (`canvas_portal_begin`) which pushes a combined
+///      canvas+viewport scissor, then open a data list
+///      (`data_list_begin`) which handles wheel scrolling, manages
+///      `container.scroll_offset`, and returns the visible item range.
 ///   4. For each visible card:
-///      * compute its screen-space rect,
-///      * push the card background to `core.draw_list` directly (z=0.1)
-///        so the active scroll-area scissor clips it, and so it sorts
-///        after the painter's z=0.0 quads in `sorted_quads()`,
-///      * update `card.is_hovered` from `core.input.is_hovering`,
-///      * toggle `card.is_selected` from `core.input.is_clicked` (single-
-///        select within a container),
-///      * add a small taffy overlay (rootless absolute node, computed
-///        as a second pass via `layout.compute(overlay_node, ..)`) with
-///        one absolute child per text label (hash/author/date/message).
-///   5. Close the scroll area (`scroll_area_end`) which pops the
-///      container scissor.
-///   6. After the loop, render all collected label nodes with `label`.
-///      Labels go through `core.draw_list.push_text` (not the painter)
-///      and are clipped by whichever scissor is active at the call site
-///      — within a scroll area that means clipped to the container rect.
-///
-/// Card backgrounds are pushed to `core.draw_list` directly (not via the
-/// painter) so the active scissor at the time of the call (the
-/// container's scroll-area scissor) applies. The painter's buffer
-/// doesn't carry a scissor; its quads only get pushed to
-/// `core.draw_list` on `canvas_end` and would otherwise land unclipped
-/// to the container.
+///      * create an absolute-positioned taffy child of the viewport,
+///      * add per-item text label nodes (hash/author/date/message or
+///        file path/line range/identifier),
+///      * push a `data_item` component whose response reports
+///        hover/click; hover is derived from `DataItemResponse.hovered`,
+///      * handle single-select clicks by toggling `card.is_selected`.
+///   5. Close the data list (`data_list_end`) and the portal
+///      (`canvas_portal_end`), which pop the nested scissors.
+///   6. Compute the title overlay and render all title labels via
+///      `label` (outside any scissor, so they are never clipped to a
+///      container).
 fn render_containers(
     core: &mut AkarCore,
     layout: &mut Layout,
@@ -264,14 +245,12 @@ fn render_containers(
                 ContainerType::GitLogColumn => "Git Log",
                 ContainerType::SearchResults => "Search Results",
                 ContainerType::CodeSearchResults => "Code Search",
-                ContainerType::DocumentGrid => "Documents",
             };
             let count = container.cards.len();
             let summary_text = match container.container_type {
                 ContainerType::GitLogColumn => format!("{count} commits"),
                 ContainerType::SearchResults => format!("{count} results"),
                 ContainerType::CodeSearchResults => format!("{count} symbols"),
-                ContainerType::DocumentGrid => format!("{count} documents"),
             };
 
             let canvas_input = CanvasInput::new(&core.input, &canvas_resp.screen_to_world);
@@ -293,7 +272,6 @@ fn render_containers(
             ContainerType::GitLogColumn => "Git Log",
             ContainerType::SearchResults => "Search Results",
             ContainerType::CodeSearchResults => "Code Search",
-            ContainerType::DocumentGrid => "Documents",
         };
         let title_node = layout.new_leaf(Style {
             position: Position::Absolute,
@@ -574,7 +552,6 @@ fn render_containers(
                     layout.add_child(item_node, node);
                     labels.push((node, doc.title.clone(), theme.base_content));
                 }
-                ContainerType::DocumentGrid => {}
             }
 
             render_items.push(ItemRenderData {
