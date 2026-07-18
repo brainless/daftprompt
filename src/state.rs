@@ -105,6 +105,7 @@ pub struct CardData {
     pub position: Vec2,
     pub size: Vec2,
     pub document_id: usize,
+    pub stable_key: u64,
     pub is_selected: bool,
     pub is_hovered: bool,
 }

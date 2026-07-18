@@ -1,6 +1,6 @@
 # Epic 006: Refactor Canvas Containers to akar Data Items and Lists
 
-**Status:** In Progress (Task 1 complete, Task 2 in progress)
+**Status:** In Progress (Task 1 complete, Task 2 in progress, Task 3 complete)
 **Goal:** Replace sugacode's canvas-coupled git-log, search-result, and code-search card renderer with the reusable akar data-item and data-list APIs introduced by akar Epic 017, while retaining sugacode ownership of all domain data and UI policy.
 
 **Prerequisite:** sugacode Epic 005 is complete and akar Epic 017 has shipped the required APIs.

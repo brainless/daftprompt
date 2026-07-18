@@ -50,10 +50,12 @@ use akar_components::{
     CanvasResponse, DrawerEdge,
 };
 use akar_components::{
-    akar_badge as badge, akar_text_input as text_input, drawer_begin, drawer_end,
-    scroll_area_begin, scroll_area_end, BadgeVariant,
+    akar_badge as badge, akar_text_input as text_input, drawer_begin, drawer_end, BadgeVariant,
 };
-use akar_core::{list_clip, AkarCore, QuadCall};
+use akar_components::{
+    akar_data_item, data_list_begin, data_list_end, DataItemStyle, DataListState,
+};
+use akar_core::{AkarCore, QuadCall};
 use akar_layout::{
     auto, length, CanvasTransform, Layout, NodeId, Position, Rect, Size, Style, WorldRect,
 };
@@ -195,13 +197,16 @@ fn render_containers(
         state::SystemTheme::Light => akar_components::AKAR_THEME_LIGHT,
     };
 
-    // Rootless taffy overlay whose absolute children are the label
-    // rectangles. Each label is a leaf with `inset.left`/`inset.top`
-    // pointing at the desired screen-space position; we compute the
-    // subtree once and then walk it with `label(...)`. Rootless means
-    // `Layout::rect` traverses no parent chain and returns the
-    // inset-based screen rect directly.
-    let overlay_node = layout.new_leaf(Style {
+    const TITLE_HEIGHT: f32 = 28.0;
+    const HEADER_LINE_HEIGHT: f32 = 18.0;
+    const SEPARATOR_HEIGHT: f32 = 8.0;
+    const LABEL_GAP: f32 = 4.0;
+    const SEPARATOR_Z: f32 = 0.15;
+    const PAD: f32 = 12.0;
+
+    // Rootless overlay for title labels (one per container), rendered
+    // after all data_lists so they are not clipped by any list scissor.
+    let title_overlay = layout.new_leaf(Style {
         position: Position::Absolute,
         size: Size {
             width: length(state.window_size.x),
@@ -209,26 +214,20 @@ fn render_containers(
         },
         ..Default::default()
     });
+    let mut title_labels: Vec<(NodeId, String, u32)> = Vec::new();
 
-    // Collected (node, text, color) tuples. Rendered after the subtree
-    // is computed.
-    let mut labels: Vec<(NodeId, String, u32)> = Vec::new();
-
-    // Geometry constants.
-    const TITLE_HEIGHT: f32 = 28.0;
-    const HEADER_LINE_HEIGHT: f32 = 18.0;
-    const SEPARATOR_HEIGHT: f32 = 8.0;
-    const LABEL_GAP: f32 = 4.0;
-    const CARD_BG_Z: f32 = 0.1;
-    const SEPARATOR_Z: f32 = 0.15;
+    // Shared render-data type for visible items.
+    struct ItemRenderData {
+        item_node: NodeId,
+        key: u64,
+        card_index: usize,
+        is_selected: bool,
+        labels: Vec<(NodeId, String, u32)>,
+    }
 
     for ci in 0..state.containers.len() {
         let container = &mut state.containers[ci];
 
-        // Container screen rect. `container.position`/`size` are glam
-        // 0.30 Vec2; `WorldRect` is constructed from f32s to dodge the
-        // version-mismatch error (akar pulls in glam 0.33 transitively
-        // — see the E0308 note from the `Vec2` import).
         let container_world_rect = WorldRect::from_xywh(
             container.position.x,
             container.position.y,
@@ -238,10 +237,7 @@ fn render_containers(
         let container_screen_rect = world_to_screen.apply_rect(container_world_rect);
         let [cx, cy, cw, ch] = container_screen_rect;
 
-        // Container background (panel-style). Pushed to the painter at
-        // z=0.0 — it's flushed at `canvas_end` behind the cards. Already
-        // pulls fill, border, and radii from `theme` (Task 8 confirmation:
-        // theme.base_200 / base_300 / radius_box — no hardcoded colors).
+        // Container background (panel-style). Pushed to painter at z=0.0.
         painter.push_quad(
             container_world_rect,
             theme.base_200,
@@ -272,239 +268,315 @@ fn render_containers(
             },
             ..Default::default()
         });
-        layout.add_child(overlay_node, title_node);
-        labels.push((title_node, title_text.to_string(), theme.base_content));
+        layout.add_child(title_overlay, title_node);
+        title_labels.push((title_node, title_text.to_string(), theme.base_content));
 
-        // Scroll area. Pushes a scissor for the container rect and
-        // clamps `container.scroll_offset` to `[0, content_height - ch]`.
-        // Wheel events over the container advance the offset.
-        let scroll_resp = scroll_area_begin(
+        // Viewport layout node — absolute positioned at the container's
+        // screen-space rect (below the title). This is the viewport for
+        // data_list_begin.
+        let title_bottom = cy + TITLE_HEIGHT + 6.0;
+        let list_y = title_bottom;
+        let list_h = (cy + ch - title_bottom).max(0.0);
+
+        let viewport_node = layout.new_leaf(Style {
+            position: Position::Absolute,
+            inset: Rect {
+                left: length(cx),
+                top: length(list_y),
+                right: auto(),
+                bottom: auto(),
+            },
+            size: Size {
+                width: length(cw),
+                height: length(list_h),
+            },
+            ..Default::default()
+        });
+
+        // Collect stable keys for all cards.
+        let keys: Vec<u64> = container.cards.iter().map(|c| c.stable_key).collect();
+
+        // DataListState initialized from the container's scroll offset.
+        let mut list_state = DataListState {
+            scroll_y: container.scroll_offset,
+        };
+
+        // data_list_begin handles wheel scrolling, pushes a scissor for
+        // the viewport rect, and returns the visible range + content origin.
+        let list_resp = data_list_begin(
             core,
-            container_screen_rect,
-            &mut container.scroll_offset,
-            container.content_height,
-        );
-
-        // Virtualized visible range. `list_clip` returns
-        // `start..end` with one-item padding on each end; cards outside
-        // are skipped entirely.
-        //
-        // Fixed height policy for Epic 017 — all cards use
-        // `container::CARD_HEIGHT` (120px). Variable-height
-        // virtualization is deferred.
-        let visible = list_clip(
+            &*layout,
+            viewport_node,
+            &mut list_state,
             container.cards.len(),
             crate::ui::container::CARD_HEIGHT,
-            container.scroll_offset,
-            ch,
+            &keys,
         );
+        container.scroll_offset = list_state.scroll_y;
 
-        for i in visible {
+        // --- Construction phase: create taffy nodes for visible items ---
+        let mut render_items: Vec<ItemRenderData> = Vec::new();
+
+        for i in list_resp.visible_range {
             if i >= container.cards.len() {
                 break;
             }
 
-            // Read the card fields we need first so we can release the
-            // mutable borrow before the (potential) selection-mutate
-            // loop and the long match below.
-            let card_pos = container.cards[i].position;
-            let card_size = container.cards[i].size;
-            let document_id = container.cards[i].document_id;
-
-            // Card screen rect. `card.position` is in world space
-            // relative to the container; `scroll_resp.content_y` is the
-            // container's screen y minus the scroll offset.
-            let card_screen_x = cx + card_pos.x;
-            let card_screen_y = scroll_resp.content_y + card_pos.y;
-            let card_screen_rect = [card_screen_x, card_screen_y, card_size.x, card_size.y];
-
-            // Hover/select. Updating `is_hovered` is a single-field
-            // write that doesn't conflict with the iter_mut loop
-            // because we drop the &mut borrow before starting it.
-            let hovered = core.input.is_hovering(card_screen_rect);
-            let clicked = core.input.is_clicked(card_screen_rect);
-            container.cards[i].is_hovered = hovered;
-            if clicked {
-                for (j, c2) in container.cards.iter_mut().enumerate() {
-                    c2.is_selected = j == i;
-                }
-            }
-
-            // Read selection state AFTER the potential iter_mut above,
-            // so the fill reflects the click that just happened (not
-            // the previous frame's state).
-            let is_selected = container.cards[i].is_selected;
-
-            // Borrow the document immutably for rendering. This is safe
-            // because the iter_mut on cards above has completed, releasing
-            // the mutable borrow on container.
+            let card = &container.cards[i];
+            let key = card.stable_key;
+            let is_selected = card.is_selected;
+            let document_id = card.document_id;
             let doc = &container.documents[document_id];
 
-            // Card background. Pushed to `core.draw_list` directly (z=0.1)
-            // so the active scroll-area scissor clips it to the
-            // container, and so it sorts after the z=0.0 quads in
-            // `draw_list.sorted_quads()`.
-            //
-            // Task 8 visual polish: the *values* come from
-            // `BoxStyle::card(&theme)` (fill = base_100, border = base_300,
-            // border_width = theme.border_width, corner_radii = radius_box,
-            // shadow = subtle 12px blur, 4px y-offset). Cards are
-            // positioned in screen space, not via taffy nodes, so the
-            // `container(...)` helper (which reads `layout.rect(node)`)
-            // doesn't apply — Option A: keep the direct `push_quad` and
-            // copy the BoxStyle fields into the QuadCall. Selected and
-            // hover states override fill/border for visual feedback.
-            // - Selected: theme.primary at ~25% alpha (0x40) — the
-            //   previous full-alpha primary was almost invisible against
-            //   the saturated base_100 card body.
-            // - Hover: theme.base_300, a step lighter than the default.
-            let default_card = BoxStyle::card(&theme);
-            let (fill, border, border_width, corner_radii, shadow) = if is_selected {
-                // theme.primary is 0xRRGGBBAA; zero the AA byte and set it
-                // to 0x40 (~25% alpha). The earlier `(& 0x00FFFFFF) | 0x40_00_00_00`
-                // formula wrote 0x40 to the RR byte instead — left a fully
-                // opaque slightly-lighter blue, which defeats the purpose.
-                let primary_tint = (theme.primary & 0xFFFF_FF00) | 0x40;
-                (
-                    primary_tint,
-                    theme.primary,
-                    theme.border_width,
-                    [theme.radius_box; 4],
-                    None,
-                )
-            } else if hovered {
-                (
-                    theme.base_300,
-                    theme.base_300,
-                    theme.border_width,
-                    [theme.radius_box; 4],
-                    None,
-                )
-            } else {
-                (
-                    default_card.fill,
-                    default_card.border_color,
-                    default_card.border_width,
-                    default_card.corner_radii,
-                    default_card.shadow,
-                )
-            };
-            let (shadow_blur, shadow_spread, shadow_color, shadow_offset) = match shadow {
-                Some(s) => (s.blur, s.spread, color_to_f32(s.color), s.offset),
-                None => (0.0, 0.0, [0.0; 4], [0.0; 2]),
-            };
-            core.draw_list.push_quad(QuadCall {
-                rect: card_screen_rect,
-                fill: color_to_f32(fill),
-                border_color: color_to_f32(border),
-                corner_radii,
-                border_width,
-                z: CARD_BG_Z,
-                shadow_blur,
-                shadow_spread,
-                shadow_color,
-                shadow_offset,
-                _pad: [0.0; 2],
+            // Item node — absolute child of viewport, positioned at
+            // content_origin[1] + i * CARD_HEIGHT, relative to viewport.
+            let item_rel_y = list_resp.content_origin[1] - list_y
+                + i as f32 * crate::ui::container::CARD_HEIGHT;
+            let item_node = layout.new_leaf(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(0.0),
+                    top: length(item_rel_y),
+                    right: auto(),
+                    bottom: auto(),
+                },
+                size: Size {
+                    width: length(cw),
+                    height: length(crate::ui::container::CARD_HEIGHT),
+                },
+                ..Default::default()
             });
+            layout.add_child(viewport_node, item_node);
 
-            // Card content. Position labels in screen space inside the
-            // card, with 12px left/right padding from the card edges.
-            let pad = 12.0;
-            let label_x = card_screen_x + pad;
-            let mut label_y = card_screen_y + pad;
-            let label_w = (card_size.x - pad * 2.0).max(20.0);
+            let mut labels: Vec<(NodeId, String, u32)> = Vec::new();
 
             match container.container_type {
                 ContainerType::GitLogColumn | ContainerType::SearchResults => {
-                    // Parse the content string for hash/author/date. The
-                    // constructors write either
-                    //   "<hash>\nAuthor: <name>\nDate: <time>"
-                    // (git log, search results) or similar; we extract
-                    // the first line as hash and any "Author:" / "Date:"
-                    // lines after it.
                     let mut hash = "";
                     let mut author = "";
-                    let mut date = "";
+                    let mut date_val = "";
                     for line in doc.content.lines() {
                         if let Some(rest) = line.strip_prefix("Author: ") {
                             author = rest;
                         } else if let Some(rest) = line.strip_prefix("Date: ") {
-                            date = rest;
+                            date_val = rest;
                         } else if hash.is_empty() && !line.is_empty() {
                             hash = line;
                         }
                     }
 
-                    // Hash — small, cyan.
+                    // Hash — cyan
                     if !hash.is_empty() {
                         let node = layout.new_leaf(Style {
                             position: Position::Absolute,
                             inset: Rect {
-                                left: length(label_x),
-                                top: length(label_y),
+                                left: length(PAD),
+                                top: length(PAD),
                                 right: auto(),
                                 bottom: auto(),
                             },
                             size: Size {
-                                width: length(label_w),
+                                width: length((cw - PAD * 2.0).max(20.0)),
                                 height: length(HEADER_LINE_HEIGHT),
                             },
                             ..Default::default()
                         });
-                        layout.add_child(overlay_node, node);
+                        layout.add_child(item_node, node);
                         labels.push((node, hash.to_string(), theme.info));
-                        label_y += HEADER_LINE_HEIGHT;
                     }
 
-                    // Author — gray, smaller line.
+                    // Author — gray
                     if !author.is_empty() {
                         let node = layout.new_leaf(Style {
                             position: Position::Absolute,
                             inset: Rect {
-                                left: length(label_x),
-                                top: length(label_y),
+                                left: length(PAD),
+                                top: length(PAD + HEADER_LINE_HEIGHT),
                                 right: auto(),
                                 bottom: auto(),
                             },
                             size: Size {
-                                width: length(label_w),
+                                width: length((cw - PAD * 2.0).max(20.0)),
                                 height: length(HEADER_LINE_HEIGHT),
                             },
                             ..Default::default()
                         });
-                        layout.add_child(overlay_node, node);
+                        layout.add_child(item_node, node);
                         labels.push((node, author.to_string(), theme.neutral_content));
-                        label_y += HEADER_LINE_HEIGHT;
                     }
 
-                    // Date — gray.
-                    if !date.is_empty() {
+                    // Date — gray
+                    if !date_val.is_empty() {
                         let node = layout.new_leaf(Style {
                             position: Position::Absolute,
                             inset: Rect {
-                                left: length(label_x),
-                                top: length(label_y),
+                                left: length(PAD),
+                                top: length(PAD + 2.0 * HEADER_LINE_HEIGHT),
                                 right: auto(),
                                 bottom: auto(),
                             },
                             size: Size {
-                                width: length(label_w),
+                                width: length((cw - PAD * 2.0).max(20.0)),
                                 height: length(HEADER_LINE_HEIGHT),
                             },
                             ..Default::default()
                         });
-                        layout.add_child(overlay_node, node);
-                        labels.push((node, date.to_string(), theme.neutral_content));
-                        label_y += HEADER_LINE_HEIGHT;
+                        layout.add_child(item_node, node);
+                        labels.push((node, date_val.to_string(), theme.neutral_content));
                     }
 
-                    // Thin separator quad between header and message.
-                    let sep_y = label_y + LABEL_GAP;
+                    // Message — positioned below the separator.
+                    // Separator is drawn in the render pass.
+                    let sep_y_rel = PAD + 3.0 * HEADER_LINE_HEIGHT + LABEL_GAP;
+                    let msg_y_rel = sep_y_rel + SEPARATOR_HEIGHT;
+                    let msg_h_rel =
+                        (crate::ui::container::CARD_HEIGHT - msg_y_rel - PAD).max(18.0);
+                    let msg = if doc.title.is_empty() {
+                        doc.content.clone()
+                    } else {
+                        doc.title.clone()
+                    };
+                    let node = layout.new_leaf(Style {
+                        position: Position::Absolute,
+                        inset: Rect {
+                            left: length(PAD),
+                            top: length(msg_y_rel),
+                            right: auto(),
+                            bottom: auto(),
+                        },
+                        size: Size {
+                            width: length((cw - PAD * 2.0).max(20.0)),
+                            height: length(msg_h_rel),
+                        },
+                        ..Default::default()
+                    });
+                    layout.add_child(item_node, node);
+                    labels.push((node, msg, theme.base_content));
+                }
+                ContainerType::CodeSearchResults => {
+                    let mut content_lines = doc.content.lines();
+                    let file_path = content_lines.next().unwrap_or("");
+                    let line_range = content_lines.next().unwrap_or("");
+
+                    // File path — gray
+                    if !file_path.is_empty() {
+                        let node = layout.new_leaf(Style {
+                            position: Position::Absolute,
+                            inset: Rect {
+                                left: length(PAD),
+                                top: length(PAD),
+                                right: auto(),
+                                bottom: auto(),
+                            },
+                            size: Size {
+                                width: length((cw - PAD * 2.0).max(20.0)),
+                                height: length(HEADER_LINE_HEIGHT),
+                            },
+                            ..Default::default()
+                        });
+                        layout.add_child(item_node, node);
+                        labels.push((node, file_path.to_string(), theme.neutral_content));
+                    }
+
+                    // Line range — faint
+                    if !line_range.is_empty() {
+                        let node = layout.new_leaf(Style {
+                            position: Position::Absolute,
+                            inset: Rect {
+                                left: length(PAD),
+                                top: length(PAD + HEADER_LINE_HEIGHT),
+                                right: auto(),
+                                bottom: auto(),
+                            },
+                            size: Size {
+                                width: length((cw - PAD * 2.0).max(20.0)),
+                                height: length(HEADER_LINE_HEIGHT),
+                            },
+                            ..Default::default()
+                        });
+                        layout.add_child(item_node, node);
+                        labels.push((node, line_range.to_string(), theme.neutral));
+                    }
+
+                    // Identifier (title) — prominent text
+                    let id_y_rel = PAD + 2.0 * HEADER_LINE_HEIGHT + LABEL_GAP;
+                    let id_h_rel =
+                        (crate::ui::container::CARD_HEIGHT - id_y_rel - PAD).max(18.0);
+                    let node = layout.new_leaf(Style {
+                        position: Position::Absolute,
+                        inset: Rect {
+                            left: length(PAD),
+                            top: length(id_y_rel),
+                            right: auto(),
+                            bottom: auto(),
+                        },
+                        size: Size {
+                            width: length((cw - PAD * 2.0).max(20.0)),
+                            height: length(id_h_rel),
+                        },
+                        ..Default::default()
+                    });
+                    layout.add_child(item_node, node);
+                    labels.push((node, doc.title.clone(), theme.base_content));
+                }
+                ContainerType::DocumentGrid => {}
+            }
+
+            render_items.push(ItemRenderData {
+                item_node,
+                key,
+                card_index: i,
+                is_selected,
+                labels,
+            });
+        }
+
+        // Compute the viewport subtree (viewport_node + all item subtrees).
+        layout.compute(
+            viewport_node,
+            (Some(cw), Some(list_h)),
+            |_, _, _, _, _| Size::ZERO,
+        );
+
+        // --- Render pass: data_item + labels for each visible item ---
+        for item_data in &render_items {
+            let i = item_data.card_index;
+            let base_style = DataItemStyle::from_theme(&theme);
+            let style = if item_data.is_selected {
+                DataItemStyle {
+                    color_normal: base_style.color_selected,
+                    ..base_style
+                }
+            } else {
+                base_style
+            };
+
+            let item_resp = akar_data_item(
+                core,
+                &*layout,
+                item_data.item_node,
+                item_data.key,
+                &style,
+            );
+
+            // Selection handling (single-select per container).
+            if item_resp.clicked {
+                for (j, c2) in container.cards.iter_mut().enumerate() {
+                    c2.is_selected = j == i;
+                }
+            }
+
+            // Separator quad for GitLog / SearchResults.
+            let item_rect = layout.rect(item_data.item_node);
+            match container.container_type {
+                ContainerType::GitLogColumn | ContainerType::SearchResults => {
+                    let sep_y =
+                        item_rect[1] + PAD + 3.0 * HEADER_LINE_HEIGHT + LABEL_GAP;
                     core.draw_list.push_quad(QuadCall {
                         rect: [
-                            label_x,
+                            item_rect[0] + PAD,
                             sep_y,
-                            label_w,
+                            (item_rect[2] - PAD * 2.0).max(0.0),
                             1.0,
                         ],
                         fill: color_to_f32(theme.base_300),
@@ -518,189 +590,27 @@ fn render_containers(
                         shadow_offset: [0.0; 2],
                         _pad: [0.0; 2],
                     });
-                    label_y = sep_y + SEPARATOR_HEIGHT;
-
-                    // Message — the title string, wrapped by the
-                    // label's own width. Default text color.
-                    let msg = if doc.title.is_empty() {
-                        doc.content.clone()
-                    } else {
-                        doc.title.clone()
-                    };
-                    let remaining_h = (card_size.y - (label_y - card_screen_y) - pad).max(18.0);
-                    let node = layout.new_leaf(Style {
-                        position: Position::Absolute,
-                        inset: Rect {
-                            left: length(label_x),
-                            top: length(label_y),
-                            right: auto(),
-                            bottom: auto(),
-                        },
-                        size: Size {
-                            width: length(label_w),
-                            height: length(remaining_h),
-                        },
-                        ..Default::default()
-                    });
-                    layout.add_child(overlay_node, node);
-                    labels.push((node, msg, theme.base_content));
                 }
-                ContainerType::CodeSearchResults => {
-                    // content is "<file_path>\n<line_start>:<line_end>"
-                    let mut lines = doc.content.lines();
-                    let file_path = lines.next().unwrap_or("");
-                    let line_range = lines.next().unwrap_or("");
+                _ => {}
+            }
 
-                    // File path — gray.
-                    if !file_path.is_empty() {
-                        let node = layout.new_leaf(Style {
-                            position: Position::Absolute,
-                            inset: Rect {
-                                left: length(label_x),
-                                top: length(label_y),
-                                right: auto(),
-                                bottom: auto(),
-                            },
-                            size: Size {
-                                width: length(label_w),
-                                height: length(HEADER_LINE_HEIGHT),
-                            },
-                            ..Default::default()
-                        });
-                        layout.add_child(overlay_node, node);
-                        labels.push((node, file_path.to_string(), theme.neutral_content));
-                        label_y += HEADER_LINE_HEIGHT;
-                    }
-
-                    // Line range — faint gray.
-                    if !line_range.is_empty() {
-                        let node = layout.new_leaf(Style {
-                            position: Position::Absolute,
-                            inset: Rect {
-                                left: length(label_x),
-                                top: length(label_y),
-                                right: auto(),
-                                bottom: auto(),
-                            },
-                            size: Size {
-                                width: length(label_w),
-                                height: length(HEADER_LINE_HEIGHT),
-                            },
-                            ..Default::default()
-                        });
-                        layout.add_child(overlay_node, node);
-                        labels.push((node, line_range.to_string(), theme.neutral));
-                        label_y += HEADER_LINE_HEIGHT;
-                    }
-
-                    // Identifier (title) — the prominent text.
-                    label_y += LABEL_GAP;
-                    let remaining_h = (card_size.y - (label_y - card_screen_y) - pad).max(18.0);
-                    let node = layout.new_leaf(Style {
-                        position: Position::Absolute,
-                        inset: Rect {
-                            left: length(label_x),
-                            top: length(label_y),
-                            right: auto(),
-                            bottom: auto(),
-                        },
-                        size: Size {
-                            width: length(label_w),
-                            height: length(remaining_h),
-                        },
-                        ..Default::default()
-                    });
-                    layout.add_child(overlay_node, node);
-                    labels.push((node, doc.title.clone(), theme.base_content));
-                }
-                ContainerType::DocumentGrid => {
-                    // Icon + title with file-type emoji prefix; then
-                    // content preview (truncated); then a metadata
-                    // footer in small gray text.
-                    let icon = icon_emoji(doc.file_type);
-                    let title_with_icon = format!("{} {}", icon, doc.title);
-                    let node = layout.new_leaf(Style {
-                        position: Position::Absolute,
-                        inset: Rect {
-                            left: length(label_x),
-                            top: length(label_y),
-                            right: auto(),
-                            bottom: auto(),
-                        },
-                        size: Size {
-                            width: length(label_w),
-                            height: length(HEADER_LINE_HEIGHT + 2.0),
-                        },
-                        ..Default::default()
-                    });
-                    layout.add_child(overlay_node, node);
-                    labels.push((node, title_with_icon, theme.base_content));
-                    label_y += HEADER_LINE_HEIGHT + 4.0;
-
-                    // Truncated content preview.
-                    const PREVIEW_MAX_CHARS: usize = 120;
-                    let preview: String = if doc.content.chars().count() > PREVIEW_MAX_CHARS {
-                        let mut s: String = doc.content.chars().take(PREVIEW_MAX_CHARS).collect();
-                        s.push('…');
-                        s
-                    } else {
-                        doc.content.clone()
-                    };
-                    let preview_h = (card_size.y - (label_y - card_screen_y) - pad - HEADER_LINE_HEIGHT).max(18.0);
-                    let node = layout.new_leaf(Style {
-                        position: Position::Absolute,
-                        inset: Rect {
-                            left: length(label_x),
-                            top: length(label_y),
-                            right: auto(),
-                            bottom: auto(),
-                        },
-                        size: Size {
-                            width: length(label_w),
-                            height: length(preview_h),
-                        },
-                        ..Default::default()
-                    });
-                    layout.add_child(overlay_node, node);
-                    labels.push((node, preview, theme.neutral_content));
-
-                    // Metadata footer anchored to the bottom of the card.
-                    let footer = format!("folder {} • {} chars", doc.folder_id, doc.content.chars().count());
-                    let node = layout.new_leaf(Style {
-                        position: Position::Absolute,
-                        inset: Rect {
-                            left: length(label_x),
-                            top: length(card_screen_y + card_size.y - HEADER_LINE_HEIGHT - 4.0),
-                            right: auto(),
-                            bottom: auto(),
-                        },
-                        size: Size {
-                            width: length(label_w),
-                            height: length(HEADER_LINE_HEIGHT),
-                        },
-                        ..Default::default()
-                    });
-                    layout.add_child(overlay_node, node);
-                    labels.push((node, footer, theme.neutral));
-                }
+            // Render text labels (hash, author, date, message,
+            // file_path, line_range, identifier).
+            for (label_node, text, color) in &item_data.labels {
+                label(core, &*layout, *label_node, text, *color, &theme);
             }
         }
 
-        scroll_area_end(core);
+        data_list_end(core);
     }
 
-    // Compute the overlay sub-tree as a second pass — the rest of the
-    // canvas tree (already computed for `canvas_node` in `handle_redraw`)
-    // is unaffected because `overlay_node` is not a descendant.
+    // Compute and render title labels.
     layout.compute(
-        overlay_node,
+        title_overlay,
         (Some(state.window_size.x), Some(state.window_size.y)),
         |_, _, _, _, _| Size::ZERO,
     );
-
-    // Render the collected labels. Each `label` call pushes a TextCall
-    // onto `core.draw_list` and respects the active scissor.
-    for (node, text, color) in labels {
+    for (node, text, color) in title_labels {
         label(core, &*layout, node, &text, color, &theme);
     }
 }

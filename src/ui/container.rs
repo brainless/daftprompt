@@ -2,6 +2,7 @@ use glam::Vec2;
 
 use crate::git_log::CommitInfo;
 use crate::state::{CardData, DocumentData};
+use crate::ui::adapter;
 use sugacode_indexer::{CodeSearchResult, SearchResult};
 
 /// Fixed card height policy for Epic 017 compatibility.
@@ -78,6 +79,7 @@ impl Container {
                 position: Vec2::new(8.0, y_offset),
                 size: Vec2::new(card_width, CARD_HEIGHT),
                 document_id: i,
+                stable_key: adapter::stable_item_key_commit(commit),
                 is_selected: false,
                 is_hovered: false,
             });
@@ -133,6 +135,7 @@ impl Container {
                 position: Vec2::new(8.0, y_offset),
                 size: Vec2::new(card_width, CARD_HEIGHT),
                 document_id: i,
+                stable_key: adapter::stable_item_key_search(result),
                 is_selected: false,
                 is_hovered: false,
             });
@@ -192,6 +195,7 @@ impl Container {
                 position: Vec2::new(8.0, y_offset),
                 size: Vec2::new(card_width, CARD_HEIGHT),
                 document_id: i,
+                stable_key: adapter::stable_item_key_code_search(result),
                 is_selected: false,
                 is_hovered: false,
             });
