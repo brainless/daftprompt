@@ -34,9 +34,9 @@
 //     mode-indicator `badge` (above the box) and the `text_input` (the
 //     search box). Both are absolute-positioned children of a rootless
 //     parent that covers the window. The same `Layout::new()`-per-frame
-//     model that churns `NodeId`s for the canvas tree applies here too,
-//     so `core.input.focused_id` is re-asserted from
-//     `state.search_just_opened` before each `text_input` call (see the
+//     model that churns `NodeId`s for the canvas tree applies here too, so
+//     `core.input.focused_id` is re-asserted with
+//     `layout.widget_id(search_node)` before each `text_input` call (see the
 //     epic Risks row on `focused_id` being u64-keyed).
 //   - The mode indicator uses `badge` (cyan for Commits, green for Code)
 //     — a 16px-tall pill above the search box left-aligned with it.
@@ -975,10 +975,10 @@ fn icon_emoji(icon: IconType) -> &'static str {
 ///
 /// All three nodes (rootless parent, indicator, box) are part of a
 /// **rootless** taffy sub-tree. Per-frame `Layout::new()` churns the
-/// `NodeId` slotmap keys, so a `u64::from(search_node)` from one frame
-/// is meaningless the next; see the epic Risks row on
-/// `focused_id` being u64-keyed. We mitigate by re-asserting focus from
-/// `state.search_just_opened` each frame.
+/// `NodeId` slotmap keys, so a `layout.widget_id(search_node)` from one
+/// frame is meaningless the next; see the epic Risks row on
+/// `focused_id` being u64-keyed. We mitigate by re-asserting focus on every
+/// frame while the search UI is visible.
 ///
 /// Input
 /// -----
@@ -990,14 +990,9 @@ fn icon_emoji(icon: IconType) -> &'static str {
 ///
 /// Focus
 /// -----
-/// Before `text_input` runs we re-assert `core.input.focused_id`:
-///   * on the frame the box opens (`state.search_just_opened`), or
-///   * on any frame where nothing else has claimed focus and the box
-///     is visible. This is the first of the two mitigations in the
-///     Risks row — it lets the box hold focus across frames without
-///     requiring a persistent `Layout`. Side effect: user-click-outside
-///     to unfocus is undone on the same frame; closing the box (Escape)
-///     is the only way out. The spec accepts this trade-off.
+/// Before `text_input` runs we re-assert `core.input.focused_id` whenever
+/// the box is visible. Search is modal, so its input must receive the
+/// keyboard immediately after Cmd+K and throughout the interaction.
 ///
 /// Search execution
 /// ----------------
@@ -1085,19 +1080,15 @@ pub fn render_search(core: &mut AkarCore, layout: &mut Layout, state: &mut AppSt
 
     // Re-assert focus before `text_input`. See the function doc comment
     // and the epic Risks row.
-    let id_u64 = u64::from(search_node);
-    if state.search_just_opened {
-        core.input.focused_id = Some(id_u64);
-        state.search_just_opened = false;
-    } else if (state.search_active || state.code_search_active) && core.input.focused_id.is_none() {
-        // FIXME: click-outside-to-unfocus is broken. This branch re-grabs
-        // focus whenever focused_id is None, even if the user clicked outside
-        // the search box. The per-frame NodeId churn means we can't reliably
-        // detect "user clicked elsewhere" vs "NodeId was recycled." Escape is
-        // the only way to unfocus without closing the search. Documented in
-        // Epic 005 Task 6 review notes; deferred to a future task.
-        core.input.focused_id = Some(id_u64);
-    }
+    // `text_input` keys focus through `Layout::widget_id`, rather than the
+    // raw Taffy node key. This matters when a layout namespace is in use.
+    let widget_id = layout.widget_id(search_node);
+    // Search is a modal-style interaction: while it is visible, its input is
+    // the keyboard target. Re-assert every frame because the immediate-mode
+    // layout rebuilds the node tree. This also makes Cmd+K visibly focused
+    // before the user has to click the field.
+    core.input.focused_id = Some(widget_id);
+    state.search_just_opened = false;
 
     let (value, placeholder): (&mut String, &str) = match state.search_mode {
         state::SearchMode::Commits => (&mut state.search_query, "Search documents... (Cmd+K)"),

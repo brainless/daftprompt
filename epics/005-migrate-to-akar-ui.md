@@ -570,7 +570,7 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 **Review note (post-implementation):**
 - `render_search` is now a real implementation. It builds a rootless taffy sub-tree (window-sized parent + 16px-tall mode-indicator child + 500×50px search-box child), computes it, then calls `akar_components::text_input` with the active mode's query string and shared `state.cursor_pos`.
 - **Bug fix from spec**: typing characters into the search box now actually updates the query (the old `src/ui/search.rs` only rendered; no input capture). `text_input` reads `core.input.chars` and `core.input.keys_pressed` natively.
-- **Focus persistence via re-assert.** `core.input.focused_id` is set to `Some(u64::from(search_node))` on `state.search_just_opened` (the first frame) and re-asserted each frame as long as `search_active || code_search_active` and no other widget has claimed focus. This is option A from the Risks row — option B (persistent `Layout`) would require restructuring `main.rs::handle_redraw`'s per-frame `Layout::new()`, which is out of scope.
+- **Focus persistence via re-assert.** `core.input.focused_id` is set to `Some(layout.widget_id(search_node))` every frame while search is visible. Search is modal, so this gives it immediate keyboard focus after Cmd+K and makes the focused border visible without a mouse click.
 - **Click-outside-to-unfocus is broken in practice** as the sub-agent flagged: the per-frame `NodeId` churn means the re-assert branch keeps grabbing focus whenever `focused_id` is `None`, even if the user clicked outside. Escape is the only way to unfocus without the box closing. Documented for Task 8.
 - **Mode indicator** is a `badge` ("Commits" = `BadgeVariant::Info` cyan, "Code" = `BadgeVariant::Success` green) 4px above the search box, left-aligned. Avoids needing a new accent-border component.
 - **Search execution** in `execute_search(state)`: empty query → remove results container; non-empty + indexer present → call `search_hybrid` / `search_code_hybrid` and push a `Container::new_search_results` / `new_code_search_results` at world `(620, 20)`, width 500, height `window_h - 40`. Container id is reused from the previous results container if one exists (so the id space stays small and selection state isn't orphaned).
@@ -620,12 +620,12 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
 
     // Focus management (see focus-persistence note in step 3):
     if state.search_just_opened {
-        core.input.focused_id = Some(u64::from(search_node));
+        core.input.focused_id = Some(layout.widget_id(search_node));
         state.search_just_opened = false;
     }
     // Re-grab focus if the user hasn't clicked elsewhere this frame.
     if state.search_active && core.input.focused_id.is_none() {
-        core.input.focused_id = Some(u64::from(search_node));
+        core.input.focused_id = Some(layout.widget_id(search_node));
     }
 
     let resp = text_input(
@@ -639,14 +639,14 @@ This epic migrates sugacode's rendering layer from its hand-rolled wgpu + glypho
         execute_search(state);
     }
     ```
-    Note: `text_input` self-manages focus via `core.input.focused_id == Some(u64::from(node_id))` (`akar-components/src/text_input.rs:56-69`): clicking it sets focus, pressing mouse outside while down clears it. To force focus from a Cmd+K handler, set `core.input.focused_id = Some(u64::from(search_node))` **before** calling `text_input`.
+    Note: `text_input` self-manages focus via `core.input.focused_id == Some(layout.widget_id(node_id))` (`akar-components/src/text_input.rs:56-69`): clicking it sets focus, pressing mouse outside while down clears it. To force focus from a Cmd+K handler, set `core.input.focused_id = Some(layout.widget_id(search_node))` **before** calling `text_input`.
 
 3. Wire up keyboard shortcuts. These run at the **top of the frame** (before `text_input`) and lean on the `cmd_or_ctrl` / `shift` state added in Task 1 step 5:
    - `Cmd+K`: detect `state.cmd_or_ctrl && core.input.chars.contains(&'k')`. Set `state.search_active = true`, set `state.search_mode = SearchMode::Commits`, set `state.search_just_opened = true` so step 2 forces focus on the next frame.
    - `Cmd+Shift+K`: additionally require `state.shift`. Same activation flow but `SearchMode::Code`.
    - `Escape`: scan `core.input.keys_pressed.contains(&akar_core::Key::Escape)` — `Escape` is one of the named keys in akar's `Key` enum. Clear `state.search_active`, `state.code_search_active`, set `core.input.focused_id = None`, and clear search-result containers.
 
-> **Focus persistence across frames (subtle).** `Layout::new()` is called per-frame and `NodeId = taffy::NodeId` is a slotmap key, so the u64 backing `search_node` changes every frame if the layout tree is rebuilt from scratch. `core.input.focused_id` is `Option<u64>` and akar compares via `u64::from(node_id)`, so a stale `focused_id` from the previous frame will silently fail to match the new `search_node`, dropping focus. Two robust mitigations (pick one):
+> **Focus persistence across frames (subtle).** `Layout::new()` is called per-frame and `NodeId = taffy::NodeId` is a slotmap key, so the widget ID for `search_node` changes every frame if the layout tree is rebuilt from scratch. `core.input.focused_id` is `Option<u64>` and akar compares via `layout.widget_id(node_id)`, so a stale `focused_id` from the previous frame will silently fail to match the new `search_node`, dropping focus. Two robust mitigations (pick one):
 > - **Re-assert focus each frame** based on a sugacode-side flag (`state.search_active && !clicked_outside_this_frame` → set `focused_id` before `text_input`), as shown in step 2's pseudocode; or
 > - **Reuse the `Layout` instance across frames** (call `Layout::new()` once in `AppState::new()` and call `layout.compute()` every frame with updated sizes). This keeps NodeIds stable, so `focused_id` survives frame boundaries naturally.
 >
@@ -879,7 +879,7 @@ The migration is complete when:
 | akar's canvas does not support `push_text` in world space | Grid coordinate labels cannot be rendered | Use `push_quad` for grid lines only; coordinate labels deferred to akar Epic 015+ (verified: only `push_quad` exists on `CanvasPainter`) |
 | akar is pre-alpha; API may change | Breaking changes during migration | Pin to specific commit; path dependency allows local fixes |
 | Layout tree rebuilt per-frame may be slower than retained | Performance regression with many cards | Use `list_clip` (in `akar-core`, not akar-components) to minimize draw calls; profile early |
-| akar's `text_input` may not support Cmd+K shortcut pre-focus | Search activation flow differs | Set `core.input.focused_id = Some(u64::from(search_node))` before calling `text_input` (Task 6 step 2). Confirmed: `text_input.rs:56-69` matches focus via `u64::from(node_id)` |
+| akar's `text_input` may not support Cmd+K shortcut pre-focus | Search activation flow differs | Set `core.input.focused_id = Some(layout.widget_id(search_node))` before calling `text_input` (Task 6 step 2). Confirmed: `text_input.rs:56-69` matches focus via `layout.widget_id(node_id)` |
 | **`akar_winit` does not expose Cmd/Ctrl modifier state** | Cmd+K shortcut and Cmd+left-drag pan don't work | Track `cmd_or_ctrl: bool` in `AppState` via a `WindowEvent::ModifiersChanged` arm in `main.rs`, separate from `akar_winit::process_window_event` (Task 1 step 5 + Task 2 step 4). `InputState` has no `modifiers` field |
 | **`taffy 0.11` has no `Val::Px`/`Val::Percent` enum** | Pseudocode using `Val::Px` will not compile | Use `length(x)` / `percent(p)` helpers (re-exported via `akar_layout::pub use taffy::prelude::*`). Offset fields live in `Style.inset: Rect<LengthPercentageAuto>`, not standalone `left`/`top` (Task 6 step 2) |
 | **`Layout::compute` needs a mandatory measure closure** | The third arg cannot be `None` | Always pass `|_,_,_,_,_| Size::ZERO` for nodes with fixed sizes (no content measuring) — see Task 2 step 1 |

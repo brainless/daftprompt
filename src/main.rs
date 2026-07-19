@@ -498,6 +498,11 @@ impl Application {
         let cmd_or_ctrl = state.cmd_or_ctrl;
         let shift = state.shift_pressed;
         if cmd_or_ctrl && (core.input.chars.contains(&'k') || core.input.chars.contains(&'K')) {
+            // `akar-winit` correctly forwards the textual "k" from the
+            // shortcut as input. It opens the search UI, not part of the
+            // search query, so consume it before `text_input` reads the
+            // frame's characters below.
+            core.input.chars.retain(|&c| c != 'k' && c != 'K');
             if shift {
                 // Cmd+Shift+K: toggle code search.
                 state.code_search_active = !state.code_search_active;
@@ -516,6 +521,9 @@ impl Application {
                 // toggle and the "fresh open" case where the query was left
                 // over from a previous session).
                 state.code_search_query.clear();
+                state.cursor_pos = 0;
+                state.cursor_timer = 0.0;
+                state.cursor_visible = true;
                 state.code_search_results.clear();
                 state
                     .containers
@@ -535,6 +543,9 @@ impl Application {
                         .retain(|c| c.container_type != ContainerType::CodeSearchResults);
                 }
                 state.search_query.clear();
+                state.cursor_pos = 0;
+                state.cursor_timer = 0.0;
+                state.cursor_visible = true;
                 state.search_results.clear();
                 state
                     .containers
@@ -546,6 +557,7 @@ impl Application {
                 state.code_search_active = false;
                 state.code_search_just_opened = false;
                 state.code_search_query.clear();
+                state.cursor_pos = 0;
                 state.code_search_results.clear();
                 state
                     .containers
@@ -554,6 +566,7 @@ impl Application {
                 state.search_active = false;
                 state.search_just_opened = false;
                 state.search_query.clear();
+                state.cursor_pos = 0;
                 state.search_results.clear();
                 state
                     .containers
