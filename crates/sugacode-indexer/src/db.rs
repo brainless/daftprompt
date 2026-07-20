@@ -61,6 +61,19 @@ pub fn init_schema(db: &Connection, dim: usize) -> anyhow::Result<()> {
         ),
         [],
     )?;
+    // Document embeddings — separate vec0 table for source isolation.
+    // Rejected alternative: share vec_items across all source types and
+    // post-filter by source_type. That wastes KNN slots on non-document
+    // results and makes the effective result count unpredictable. A
+    // dedicated vec_documents table keeps the cosine-distance index small
+    // and focused, consistent with the vec_code isolation in Epic 004.
+    db.execute(
+        &format!(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS vec_documents USING vec0(\
+                item_id INTEGER PRIMARY KEY, embedding float[{dim}] distance_metric=cosine)"
+        ),
+        [],
+    )?;
     Ok(())
 }
 
@@ -375,6 +388,112 @@ pub fn delete_source_vec(
     Ok(())
 }
 
+// --- Document file tracking (analogous to code_files) ---
+
+pub fn document_file_get(
+    db: &Connection,
+    file_path: &str,
+) -> anyhow::Result<Option<(i64, String)>> {
+    let mut stmt =
+        db.prepare("SELECT mtime, content_hash FROM document_files WHERE file_path = ?")?;
+    let mut rows = stmt.query_map([file_path], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })?;
+    match rows.next() {
+        Some(Ok(v)) => Ok(Some(v)),
+        Some(Err(e)) => Err(e.into()),
+        None => Ok(None),
+    }
+}
+
+pub fn document_file_upsert(
+    db: &Connection,
+    file_path: &str,
+    mtime: i64,
+    content_hash: &str,
+) -> anyhow::Result<()> {
+    let indexed_at = Utc::now().to_rfc3339();
+    db.execute(
+        "INSERT INTO document_files(file_path, mtime, content_hash, indexed_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(file_path) DO UPDATE SET mtime = excluded.mtime, content_hash = excluded.content_hash, indexed_at = excluded.indexed_at",
+        rusqlite::params![file_path, mtime, content_hash, indexed_at],
+    )?;
+    Ok(())
+}
+
+pub fn document_file_delete(db: &Connection, file_path: &str) -> anyhow::Result<()> {
+    db.execute(
+        "DELETE FROM document_files WHERE file_path = ?",
+        [file_path],
+    )?;
+    Ok(())
+}
+
+pub fn document_files_all(db: &Connection) -> anyhow::Result<Vec<String>> {
+    let mut stmt = db.prepare("SELECT file_path FROM document_files")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut paths = Vec::new();
+    for row in rows {
+        paths.push(row?);
+    }
+    Ok(paths)
+}
+
+pub fn delete_document_file_items(db: &Connection, file_path: &str) -> anyhow::Result<()> {
+    let escaped = escape_like_pattern(file_path);
+    let pattern = format!("{}::%", escaped);
+
+    let mut stmt = db.prepare(
+        "SELECT id FROM items WHERE source_type = 'document' AND identifier LIKE ? ESCAPE '\\'",
+    )?;
+    let ids: Vec<i64> = stmt
+        .query_map([&pattern], |row| row.get::<_, i64>(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    for chunk in ids.chunks(500) {
+        let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
+        let sql = format!(
+            "DELETE FROM vec_documents WHERE item_id IN ({})",
+            placeholders.join(",")
+        );
+        let mut stmt = db.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> = chunk
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
+        stmt.execute(params.as_slice())?;
+    }
+
+    db.execute(
+        "DELETE FROM items WHERE source_type = 'document' AND identifier LIKE ? ESCAPE '\\'",
+        [&pattern],
+    )?;
+    Ok(())
+}
+
+pub fn search_vec_documents(
+    db: &Connection,
+    query_embedding: &[f32],
+    limit: usize,
+) -> anyhow::Result<Vec<(i64, f64)>> {
+    // Partitioning approach: vec_documents is a separate vec0 table scoped to
+    // document items, so no post-filter is needed — every row is already a
+    // document item. Same rationale as vec_code isolation (Epic 004).
+    let mut stmt = db.prepare(
+        "SELECT item_id, distance FROM vec_documents WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+    )?;
+    let rows = stmt.query_map(
+        rusqlite::params![query_embedding.as_bytes(), limit as i64],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)),
+    )?;
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,5 +556,51 @@ mod tests {
         let h2 = content_hash(data);
         assert_eq!(h1, h2);
         assert_eq!(h1.len(), 16);
+    }
+
+    // --- Document file tracking tests ---
+
+    #[test]
+    fn test_document_file_upsert_and_get() {
+        let db = test_db();
+        document_file_upsert(&db, "docs/readme.md", 1000, "abc123").unwrap();
+        let result = document_file_get(&db, "docs/readme.md").unwrap();
+        assert_eq!(result, Some((1000, "abc123".to_string())));
+    }
+
+    #[test]
+    fn test_document_file_get_missing() {
+        let db = test_db();
+        let result = document_file_get(&db, "nope.md").unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_document_file_upsert_updates() {
+        let db = test_db();
+        document_file_upsert(&db, "docs/readme.md", 1000, "hash_old").unwrap();
+        document_file_upsert(&db, "docs/readme.md", 2000, "hash_new").unwrap();
+        let result = document_file_get(&db, "docs/readme.md").unwrap();
+        assert_eq!(result, Some((2000, "hash_new".to_string())));
+    }
+
+    #[test]
+    fn test_document_file_delete() {
+        let db = test_db();
+        document_file_upsert(&db, "docs/readme.md", 1000, "abc").unwrap();
+        document_file_delete(&db, "docs/readme.md").unwrap();
+        let result = document_file_get(&db, "docs/readme.md").unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_document_files_all() {
+        let db = test_db();
+        document_file_upsert(&db, "docs/a.md", 1, "h1").unwrap();
+        document_file_upsert(&db, "docs/b.txt", 2, "h2").unwrap();
+        document_file_upsert(&db, "docs/c.rst", 3, "h3").unwrap();
+        let mut paths = document_files_all(&db).unwrap();
+        paths.sort();
+        assert_eq!(paths, vec!["docs/a.md", "docs/b.txt", "docs/c.rst"]);
     }
 }

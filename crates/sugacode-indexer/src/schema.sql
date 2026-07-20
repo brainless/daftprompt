@@ -37,3 +37,10 @@ CREATE TABLE IF NOT EXISTS code_files (
     content_hash TEXT NOT NULL,
     indexed_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS document_files (
+    file_path TEXT PRIMARY KEY,
+    mtime INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,
+    indexed_at TEXT NOT NULL
+);

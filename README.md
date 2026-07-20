@@ -2,7 +2,7 @@
 
 ## Overview
 
-This is a text repository explorer built with Rust and akar (a GPU UI component library) on top of wgpu and glyphon. The application provides an infinite canvas interface for exploring text documents in a visual, card-based layout, with hybrid commit and code search.
+This is a text repository explorer built with Rust and akar (a GPU UI component library) on top of wgpu and glyphon. The application provides an infinite canvas interface for exploring text documents in a visual, card-based layout, with hybrid commit, code, and document search.
 
 ## Features Implemented
 
@@ -27,10 +27,10 @@ This is a text repository explorer built with Rust and akar (a GPU UI component 
 
 ✅ **Global Search Box**
 - Fixed at bottom center of screen
-- Cmd+K / Ctrl+K keyboard shortcut (commit search)
-- Cmd+Shift+K / Ctrl+Shift+K (code search)
-- Real-time filtering (now functional — hybrid FTS5 + vector KNN via the indexer)
+- Cmd+K / Ctrl+K keyboard shortcut (unified search — all sources)
+- Real-time filtering across git log, code, and documents (hybrid FTS5 + vector KNN via the indexer)
 - Result count display
+- Three result containers on canvas (git log, codebase, documents)
 - Clear button
 
 ✅ **System Theme Support**
@@ -50,8 +50,7 @@ cargo run
 - **Pan**: Middle mouse button OR Cmd/Ctrl + left mouse button
 - **Select Card**: Left click on card
 - **Select Folder**: Left click on folder icon in drawer
-- **Open Commit Search**: Cmd+K (Mac) or Ctrl+K (Windows/Linux)
-- **Open Code Search**: Cmd+Shift+K (Mac) or Ctrl+Shift+K (Windows/Linux)
+- **Open Unified Search**: Cmd+K (Mac) or Ctrl+K (Windows/Linux) — searches git log, code, and documents
 - **Close Search**: Escape key
 - **Deselect All**: Escape key (when search is closed)
 
@@ -66,16 +65,18 @@ sugacode/
 │   ├── git_log.rs                # git commit reader (gitoxide)
 │   └── ui/
 │       ├── mod.rs                # module tree (container, render)
+│       ├── adapter.rs            # stable card key hashing
 │       ├── container.rs          # data model (Container, CardData, DocumentData, ContainerType)
 │       └── render.rs             # immediate-mode render functions (canvas, drawer, search, containers)
 ├── crates/
 │   └── sugacode-indexer/
 │       ├── Cargo.toml
 │       └── src/
-│           ├── lib.rs            # Indexer public API
+│           ├── lib.rs            # Indexer public API (commits, code, documents, unified search)
 │           ├── db.rs             # SQLite schema, FTS5, vec0, queries
 │           ├── embed.rs          # model2vec-rs wrapper
 │           ├── code.rs           # tree-sitter code parsing
+│           ├── documents.rs      # document discovery, chunking, incremental indexing
 │           └── schema.sql        # SQL schema definition
 └── epics/                        # feature epic specifications
 ```

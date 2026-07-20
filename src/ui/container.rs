@@ -3,7 +3,7 @@ use glam::Vec2;
 use crate::git_log::CommitInfo;
 use crate::state::{CardData, DocumentData};
 use crate::ui::adapter;
-use sugacode_indexer::{CodeSearchResult, SearchResult};
+use sugacode_indexer::{CodeSearchResult, DocumentSearchResult, SearchResult};
 
 /// Fixed card height policy for Epic 017 compatibility.
 ///
@@ -20,6 +20,7 @@ pub enum ContainerType {
     GitLogColumn,
     SearchResults,
     CodeSearchResults,
+    DocumentSearchResults,
 }
 
 pub struct Container {
@@ -154,6 +155,45 @@ impl Container {
             size: Vec2::new(width, viewport_height),
             scroll_offset: 0.0,
             container_type: ContainerType::CodeSearchResults,
+            cards,
+            documents,
+        }
+    }
+
+    pub fn new_document_search_results(
+        id: usize,
+        position: Vec2,
+        width: f32,
+        viewport_height: f32,
+        results: Vec<DocumentSearchResult>,
+    ) -> Self {
+        let mut cards = Vec::new();
+        let mut documents = Vec::new();
+
+        for (i, result) in results.iter().enumerate() {
+            let title = result.file_path.clone();
+            let preview = result.text.lines().next().unwrap_or("").to_string();
+
+            cards.push(CardData {
+                document_id: i,
+                stable_key: adapter::stable_item_key_document_search(result),
+                is_selected: false,
+            });
+
+            documents.push(DocumentData {
+                title,
+                content: preview,
+                file_type: crate::state::IconType::Document,
+                folder_id: 0,
+            });
+        }
+
+        Self {
+            id,
+            position,
+            size: Vec2::new(width, viewport_height),
+            scroll_offset: 0.0,
+            container_type: ContainerType::DocumentSearchResults,
             cards,
             documents,
         }

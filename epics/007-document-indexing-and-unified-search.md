@@ -167,7 +167,7 @@ Do not introduce or expand GUI startup indexing in this epic. Preserve the exist
 ### Task 1: Define CLI migration and shared operation types
 
 **Priority:** High  
-**Status:** ⬜ Not Started
+**Status:** ✅ Complete
 
 - Add generic all-source and explicit source-specific Clap arguments.
 - Add conflict/dependency validation and update `--help` text.
@@ -176,14 +176,14 @@ Do not introduce or expand GUI startup indexing in this epic. Preserve the exist
 
 **Acceptance Criteria:**
 
-- [ ] Generic and source-specific commands match the CLI contract above.
-- [ ] Ambiguous duplicate-source combinations fail with actionable Clap errors.
-- [ ] Generic search output is one combined rank order with a source label on every result.
+- [x] Generic and source-specific commands match the CLI contract above.
+- [x] Ambiguous duplicate-source combinations fail with actionable Clap errors.
+- [x] Generic search output is one combined rank order with a source label on every result.
 
 ### Task 2: Add document schema and vector isolation
 
 **Priority:** High  
-**Status:** ⬜ Not Started
+**Status:** ✅ Complete
 
 - Add `document_files` and lazy `vec_documents` creation.
 - Add source-aware vector cleanup for document deletes/reindexes.
@@ -191,14 +191,14 @@ Do not introduce or expand GUI startup indexing in this epic. Preserve the exist
 
 **Acceptance Criteria:**
 
-- [ ] Existing git-log and code indexes remain queryable after schema initialization.
-- [ ] Document vectors cannot appear in git-log or code KNN results.
-- [ ] Deleting/replacing a document removes its old vector and FTS entry through the established invariants.
+- [x] Existing git-log and code indexes remain queryable after schema initialization.
+- [x] Document vectors cannot appear in git-log or code KNN results.
+- [x] Deleting/replacing a document removes its old vector and FTS entry through the established invariants.
 
 ### Task 3: Implement document discovery and incremental indexing
 
 **Priority:** High  
-**Status:** ⬜ Not Started
+**Status:** ✅ Complete
 
 - Implement eligible-file discovery, path normalization, UTF-8 handling, xxh3 tracking, stale-file removal, and per-file transactions.
 - Implement `index_documents`, `reindex_documents`, and `DocumentIndexReport`.
@@ -206,15 +206,15 @@ Do not introduce or expand GUI startup indexing in this epic. Preserve the exist
 
 **Acceptance Criteria:**
 
-- [ ] Eligible Markdown/plain-text files are indexed once under `source_type = 'document'`.
-- [ ] A touch without content change does not re-embed the file.
-- [ ] Changed/deleted files update/remove all corresponding data.
-- [ ] One bad file logs and does not abort the remaining index run.
+- [x] Eligible Markdown/plain-text files are indexed once under `source_type = 'document'`.
+- [x] A touch without content change does not re-embed the file.
+- [x] Changed/deleted files update/remove all corresponding data.
+- [x] One bad file logs and does not abort the remaining index run.
 
 ### Task 4: Implement document hybrid search and unified search API
 
 **Priority:** High  
-**Status:** ⬜ Not Started
+**Status:** ✅ Complete
 
 - Implement FTS-only, vector-only, and RRF document search methods.
 - Implement all-source hybrid search with global candidate ranking followed by RRF, returning both the combined result list and groups derived from it.
@@ -222,14 +222,14 @@ Do not introduce or expand GUI startup indexing in this epic. Preserve the exist
 
 **Acceptance Criteria:**
 
-- [ ] A document can be found by keyword and by semantically related query when embeddings are available.
-- [ ] Document search falls back to FTS5 when embeddings are unavailable.
-- [ ] Unified search returns a combined, cross-source hybrid rank and source groups derived from the same result set.
+- [x] A document can be found by keyword and by semantically related query when embeddings are available.
+- [x] Document search falls back to FTS5 when embeddings are unavailable.
+- [x] Unified search returns a combined, cross-source hybrid rank and source groups derived from the same result set.
 
 ### Task 5: Wire CLI indexing and search
 
 **Priority:** High  
-**Status:** ⬜ Not Started
+**Status:** ✅ Complete
 
 - Replace the current generic git-log-only control flow with the all-source flow.
 - Wire all explicit source commands, retaining clean output formatting per result type.
@@ -237,14 +237,14 @@ Do not introduce or expand GUI startup indexing in this epic. Preserve the exist
 
 **Acceptance Criteria:**
 
-- [ ] `--index`, `--reindex`, and `--search` exercise all three sources; generic search output is combined and source-labelled.
-- [ ] `--index-git-log` and `--search-git-log` retain git-log-only behavior.
-- [ ] Code and document source-specific commands work independently.
+- [x] `--index`, `--reindex`, and `--search` exercise all three sources; generic search output is combined and source-labelled.
+- [x] `--index-git-log` and `--search-git-log` retain git-log-only behavior.
+- [x] Code and document source-specific commands work independently.
 
 ### Task 6: Add reusable document and unified GUI result containers
 
 **Priority:** High  
-**Status:** ⬜ Not Started
+**Status:** ✅ Complete
 
 - Add `DocumentSearchResults` and its card adapter/rendering.
 - Change primary GUI search to the shared all-source search function.
@@ -253,15 +253,15 @@ Do not introduce or expand GUI startup indexing in this epic. Preserve the exist
 
 **Acceptance Criteria:**
 
-- [ ] One GUI query displays separate git-log, codebase, and document result containers when each has results.
-- [ ] Repeated query edits do not increase the number of result containers.
-- [ ] Document cards show path and preview.
-- [ ] Existing card selection/click handling remains valid after in-place result updates.
+- [x] One GUI query displays separate git-log, codebase, and document result containers when each has results.
+- [x] Repeated query edits do not increase the number of result containers.
+- [x] Document cards show path and preview.
+- [x] Existing card selection/click handling remains valid after in-place result updates.
 
 ### Task 7: Startup indexing, documentation, and verification
 
 **Priority:** Medium  
-**Status:** ⬜ Not Started
+**Status:** ✅ Complete
 
 - Preserve GUI startup indexing semantics; when it indexes, ensure it calls the shared all-source indexing operations.
 - Update `AGENTS.md`, `DEVELOP.md`, `README.md`, CLI help examples, and architecture comments.
@@ -269,24 +269,24 @@ Do not introduce or expand GUI startup indexing in this epic. Preserve the exist
 
 **Acceptance Criteria:**
 
-- [ ] Existing GUI startup-indexing behavior remains intact; any startup indexing uses the shared operation.
-- [ ] `--no-index` retains its existing behavior.
-- [ ] `cargo check --workspace` and `cargo test --workspace` pass.
-- [ ] Documentation accurately describes three sources and the changed CLI contract.
+- [x] Existing GUI startup-indexing behavior remains intact; any startup indexing uses the shared operation.
+- [x] `--no-index` retains its existing behavior.
+- [x] `cargo check --workspace` and `cargo test --workspace` pass.
+- [x] Documentation accurately describes three sources and the changed CLI contract.
 
 ## File-change Summary
 
 | File | Change |
 |---|---|
-| `src/main.rs` | New CLI contract; generic all-source orchestration; git-log-specific flags. |
-| `src/state.rs` | Unified search state/results and background indexing status as needed. |
-| `src/ui/container.rs` | Document result container and stable in-place update helpers. |
-| `src/ui/adapter.rs` | Stable document-card keys/adapters. |
-| `src/ui/render.rs` | Unified search execution; three reusable result containers; document cards. |
-| `crates/sugacode-indexer/src/lib.rs` | Document indexing/search API and combined all-source search types. |
-| `crates/sugacode-indexer/src/db.rs` | Document FTS/vector operations and source-aware cleanup. |
-| `crates/sugacode-indexer/src/documents.rs` | New discovery, tracking, extraction, and indexing module. |
-| `crates/sugacode-indexer/src/schema.sql` | `document_files` table. |
+| `src/main.rs` | New CLI contract; generic all-source orchestration; git-log-specific and document-specific flags; startup indexing includes documents. |
+| `src/state.rs` | Removed `SearchMode` and `code_search_active`/`code_search_query`; unified search state with single `search_query`/`search_active`; added `document_search_results`. |
+| `src/ui/container.rs` | Added `DocumentSearchResults` variant and `new_document_search_results` constructor. |
+| `src/ui/adapter.rs` | Added `stable_item_key_document_search` function with tests. |
+| `src/ui/render.rs` | Unified search execution via `search_all_hybrid`; three reusable result containers (git log, code, documents); document card rendering. |
+| `crates/sugacode-indexer/src/lib.rs` | Added `documents` module; `DocumentSearchResult`, `DocumentIndexReport`, `AllSourceSearchResult`, `UnifiedSearchHit` types; `index_documents`, `reindex_documents`, `search_document_*`, `search_all_hybrid` methods. |
+| `crates/sugacode-indexer/src/db.rs` | Added `document_files` CRUD functions; `vec_documents` table creation; `search_vec_documents` and `delete_document_file_items` functions. |
+| `crates/sugacode-indexer/src/documents.rs` | New module: discovery (git-tracked files), chunking (Markdown headings, plain text paragraphs), incremental indexing with xxh3 tracking. |
+| `crates/sugacode-indexer/src/schema.sql` | Added `document_files` table. |
 | `AGENTS.md`, `DEVELOP.md`, `README.md` | Three-source architecture and revised CLI documentation. |
 
 ## Decisions Resolved from Review

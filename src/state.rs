@@ -9,12 +9,6 @@ pub enum SystemTheme {
     Dark,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SearchMode {
-    Commits,
-    Code,
-}
-
 pub struct AppState {
     // Window state
     pub window_size: Vec2,
@@ -47,7 +41,6 @@ pub struct AppState {
     pub hover_index: Option<usize>,
     pub search_query: String,
     pub search_active: bool,
-    pub search_mode: SearchMode,
     pub search_just_opened: bool,
 
     // Text-input cursor (Task 6: read/written by search box)
@@ -63,14 +56,8 @@ pub struct AppState {
     // Indexer state
     pub indexer: Option<sugacode_indexer::Indexer>,
     pub search_results: Vec<sugacode_indexer::SearchResult>,
-
-    // Code search state
-    pub code_search_active: bool,
-    pub code_search_just_opened: bool,
-    pub code_search_query: String,
     pub code_search_results: Vec<sugacode_indexer::CodeSearchResult>,
-    #[allow(dead_code)]
-    pub code_indexing_in_progress: bool,
+    pub document_search_results: Vec<sugacode_indexer::DocumentSearchResult>,
 }
 
 #[derive(Debug, Clone)]
@@ -136,7 +123,6 @@ impl AppState {
             hover_index: None,
             search_query: String::new(),
             search_active: false,
-            search_mode: SearchMode::Commits,
             search_just_opened: false,
 
             cursor_pos: 0,
@@ -148,12 +134,8 @@ impl AppState {
 
             indexer: None,
             search_results: Vec::new(),
-
-            code_search_active: false,
-            code_search_just_opened: false,
-            code_search_query: String::new(),
             code_search_results: Vec::new(),
-            code_indexing_in_progress: false,
+            document_search_results: Vec::new(),
         }
     }
 

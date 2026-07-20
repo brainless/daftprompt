@@ -250,12 +250,14 @@ fn render_containers(
                 ContainerType::GitLogColumn => "Git Log",
                 ContainerType::SearchResults => "Search Results",
                 ContainerType::CodeSearchResults => "Code Search",
+                ContainerType::DocumentSearchResults => "Documents",
             };
             let count = container.cards.len();
             let summary_text = match container.container_type {
                 ContainerType::GitLogColumn => format!("{count} commits"),
                 ContainerType::SearchResults => format!("{count} results"),
                 ContainerType::CodeSearchResults => format!("{count} symbols"),
+                ContainerType::DocumentSearchResults => format!("{count} documents"),
             };
 
             let canvas_input = CanvasInput::new(&core.input, &canvas_resp.screen_to_world);
@@ -277,6 +279,7 @@ fn render_containers(
             ContainerType::GitLogColumn => "Git Log",
             ContainerType::SearchResults => "Search Results",
             ContainerType::CodeSearchResults => "Code Search",
+            ContainerType::DocumentSearchResults => "Documents",
         };
         let title_node = layout.new_leaf(Style {
             position: Position::Absolute,
@@ -564,6 +567,49 @@ fn render_containers(
                     });
                     layout.add_child(item_node, node);
                     labels.push((node, doc.title.clone(), theme.base_content));
+                }
+                ContainerType::DocumentSearchResults => {
+                    // File path — gray
+                    if !doc.title.is_empty() {
+                        let node = layout.new_leaf(Style {
+                            position: Position::Absolute,
+                            inset: Rect {
+                                left: length(PAD),
+                                top: length(PAD),
+                                right: auto(),
+                                bottom: auto(),
+                            },
+                            size: Size {
+                                width: length((cw - PAD * 2.0).max(20.0)),
+                                height: length(HEADER_LINE_HEIGHT),
+                            },
+                            ..Default::default()
+                        });
+                        layout.add_child(item_node, node);
+                        labels.push((node, doc.title.clone(), theme.neutral_content));
+                    }
+
+                    // Preview text — body content
+                    let preview_y_rel = PAD + HEADER_LINE_HEIGHT + LABEL_GAP;
+                    let preview_h_rel =
+                        (crate::ui::container::CARD_HEIGHT - preview_y_rel - PAD).max(18.0);
+                    let preview = doc.content.clone();
+                    let node = layout.new_leaf(Style {
+                        position: Position::Absolute,
+                        inset: Rect {
+                            left: length(PAD),
+                            top: length(preview_y_rel),
+                            right: auto(),
+                            bottom: auto(),
+                        },
+                        size: Size {
+                            width: length((cw - PAD * 2.0).max(20.0)),
+                            height: length(preview_h_rel),
+                        },
+                        ..Default::default()
+                    });
+                    layout.add_child(item_node, node);
+                    labels.push((node, preview, theme.base_content));
                 }
             }
 
@@ -963,15 +1009,15 @@ fn icon_emoji(icon: IconType) -> &'static str {
     }
 }
 
-/// Renders the search box (commit search via Cmd+K, code search via
-/// Cmd+Shift+K) and, when the query has changed, runs the search and
-/// (re)creates the results container on the canvas.
+/// Renders the unified search box (Cmd+K searches all sources: git log,
+/// code, and documents) and, when the query has changed, runs the search
+/// and (re)creates up to three results containers on the canvas.
 ///
 /// Layout
 /// ------
 /// The box is 500×50px, centered horizontally, 70px above the window
-/// bottom. A 16px-tall mode indicator (a `badge` reading "Commits" or
-/// "Code") sits 4px above the box, left-aligned with its left edge.
+/// bottom. A 16px-tall indicator badge ("All") sits 4px above the box,
+/// left-aligned with its left edge.
 ///
 /// All three nodes (rootless parent, indicator, box) are part of a
 /// **rootless** taffy sub-tree. Per-frame `Layout::new()` churns the
@@ -984,9 +1030,7 @@ fn icon_emoji(icon: IconType) -> &'static str {
 /// -----
 /// `text_input` mutates `value` (typed/deleted characters) and
 /// `cursor_pos` (arrow/Home/End), and reports `changed` / `submitted`
-/// via its response. The `value` and placeholder are picked from
-/// `state.search_mode`; `cursor_pos` is shared across both modes
-/// because only one search box is visible at a time.
+/// via its response.
 ///
 /// Focus
 /// -----
@@ -997,10 +1041,10 @@ fn icon_emoji(icon: IconType) -> &'static str {
 /// Search execution
 /// ----------------
 /// `resp.changed` (typed/backspaced) and `resp.submitted` (Enter) both
-/// trigger `execute_search`. An empty query removes the
-/// `SearchResults` / `CodeSearchResults` container; a non-empty query
-/// runs hybrid search and replaces-or-creates the container at
-/// world-space `(620, 20)`, width 500, height `window_size.y - 40`.
+/// trigger `execute_search`. An empty query removes all three results
+/// containers; a non-empty query runs unified hybrid search and
+/// replaces-or-creates up to three containers (git log, code, documents)
+/// at fixed world-space positions.
 ///
 /// `dt` is the frame delta (already computed by the drawer's animation
 /// block in `handle_redraw`). It drives the cursor blink at a 0.5s
@@ -1090,34 +1134,24 @@ pub fn render_search(core: &mut AkarCore, layout: &mut Layout, state: &mut AppSt
     core.input.focused_id = Some(widget_id);
     state.search_just_opened = false;
 
-    let (value, placeholder): (&mut String, &str) = match state.search_mode {
-        state::SearchMode::Commits => (&mut state.search_query, "Search documents... (Cmd+K)"),
-        state::SearchMode::Code => (&mut state.code_search_query, "Search code... (Cmd+Shift+K)"),
-    };
-
     let resp = text_input(
         core,
         &*layout,
         search_node,
-        value,
+        &mut state.search_query,
         &mut state.cursor_pos,
-        placeholder,
+        "Search everything... (Cmd+K)",
         state.cursor_visible,
         &theme,
     );
 
-    // Mode indicator (cyan = Commits, green = Code). Rendered after the
-    // input so its quad lands on top of any overlapping background.
-    let (badge_variant, badge_text) = match state.search_mode {
-        state::SearchMode::Commits => (BadgeVariant::Info, "Commits"),
-        state::SearchMode::Code => (BadgeVariant::Success, "Code"),
-    };
+    // Mode indicator — unified "All" badge (cyan).
     badge(
         core,
         &*layout,
         indicator_node,
-        badge_text,
-        badge_variant,
+        "All",
+        BadgeVariant::Info,
         &theme,
     );
 
@@ -1126,91 +1160,107 @@ pub fn render_search(core: &mut AkarCore, layout: &mut Layout, state: &mut AppSt
     }
 }
 
-/// Run the search for the active mode using `state.search_query` /
-/// `state.code_search_query`. Empty query → remove the results
-/// container; otherwise call the indexer and (re)create the container
-/// at a fixed world-space position so the user sees a stable results
-/// panel as they type.
+/// Run unified search across all three sources (git log, code, documents)
+/// using `state.search_query`. Empty query → remove all result containers;
+/// otherwise call `search_all_hybrid` and (re)create up to three result
+/// containers at fixed world-space positions.
 ///
-/// Both the `SearchResults` and `CodeSearchResults` containers use a
-/// (id, position, width, viewport_height, results) constructor. The id
-/// is reused from the previous container if one exists, so the id
-/// space stays small and the card-click handlers in
-/// `render_containers` don't see their selection state orphaned to a
-/// ghost container.
+/// Each source's container has a stable id (reused from the previous query
+/// if one exists), so repeated query edits do not increase the number of
+/// containers. A source with no results has its container removed.
 fn execute_search(state: &mut AppState) {
-    match state.search_mode {
-        state::SearchMode::Commits => {
-            if state.search_query.is_empty() {
-                state.search_results.clear();
-                state
-                    .containers
-                    .retain(|c| c.container_type != ContainerType::SearchResults);
-                return;
+    if state.search_query.is_empty() {
+        state.search_results.clear();
+        state.code_search_results.clear();
+        state.document_search_results.clear();
+        state
+            .containers
+            .retain(|c| c.container_type != ContainerType::SearchResults);
+        state
+            .containers
+            .retain(|c| c.container_type != ContainerType::CodeSearchResults);
+        state
+            .containers
+            .retain(|c| c.container_type != ContainerType::DocumentSearchResults);
+        return;
+    }
+
+    let Some(indexer) = state.indexer.as_ref() else {
+        return;
+    };
+
+    match indexer.search_all_hybrid(&state.search_query, 20) {
+        Ok(results) => {
+            let window_h = state.window_size.y - 40.0;
+
+            // --- Git log container ---
+            let existing_git_id = state
+                .containers
+                .iter()
+                .find(|c| c.container_type == ContainerType::SearchResults)
+                .map(|c| c.id);
+            state
+                .containers
+                .retain(|c| c.container_type != ContainerType::SearchResults);
+            if !results.git_log.is_empty() {
+                let id = existing_git_id.unwrap_or_else(|| {
+                    state.containers.iter().map(|c| c.id).max().unwrap_or(0) + 1
+                });
+                state.containers.push(Container::new_search_results(
+                    id,
+                    Vec2::new(620.0, 20.0),
+                    500.0,
+                    window_h,
+                    results.git_log,
+                ));
             }
-            if let Some(indexer) = state.indexer.as_ref() {
-                match indexer.search_hybrid(&state.search_query, 20) {
-                    Ok(results) => {
-                        let existing_id = state
-                            .containers
-                            .iter()
-                            .find(|c| c.container_type == ContainerType::SearchResults)
-                            .map(|c| c.id);
-                        state
-                            .containers
-                            .retain(|c| c.container_type != ContainerType::SearchResults);
-                        let id = existing_id.unwrap_or_else(|| {
-                            state.containers.iter().map(|c| c.id).max().unwrap_or(0) + 1
-                        });
-                        state.containers.push(Container::new_search_results(
-                            id,
-                            Vec2::new(620.0, 20.0),
-                            500.0,
-                            state.window_size.y - 40.0,
-                            results,
-                        ));
-                    }
-                    Err(e) => {
-                        log::warn!("Commit search failed: {e}");
-                    }
-                }
+
+            // --- Code container ---
+            let existing_code_id = state
+                .containers
+                .iter()
+                .find(|c| c.container_type == ContainerType::CodeSearchResults)
+                .map(|c| c.id);
+            state
+                .containers
+                .retain(|c| c.container_type != ContainerType::CodeSearchResults);
+            if !results.code.is_empty() {
+                let id = existing_code_id.unwrap_or_else(|| {
+                    state.containers.iter().map(|c| c.id).max().unwrap_or(0) + 1
+                });
+                state.containers.push(Container::new_code_search_results(
+                    id,
+                    Vec2::new(1140.0, 20.0),
+                    500.0,
+                    window_h,
+                    results.code,
+                ));
+            }
+
+            // --- Document container ---
+            let existing_doc_id = state
+                .containers
+                .iter()
+                .find(|c| c.container_type == ContainerType::DocumentSearchResults)
+                .map(|c| c.id);
+            state
+                .containers
+                .retain(|c| c.container_type != ContainerType::DocumentSearchResults);
+            if !results.documents.is_empty() {
+                let id = existing_doc_id.unwrap_or_else(|| {
+                    state.containers.iter().map(|c| c.id).max().unwrap_or(0) + 1
+                });
+                state.containers.push(Container::new_document_search_results(
+                    id,
+                    Vec2::new(1660.0, 20.0),
+                    500.0,
+                    window_h,
+                    results.documents,
+                ));
             }
         }
-        state::SearchMode::Code => {
-            if state.code_search_query.is_empty() {
-                state.code_search_results.clear();
-                state
-                    .containers
-                    .retain(|c| c.container_type != ContainerType::CodeSearchResults);
-                return;
-            }
-            if let Some(indexer) = state.indexer.as_ref() {
-                match indexer.search_code_hybrid(&state.code_search_query, 20) {
-                    Ok(results) => {
-                        let existing_id = state
-                            .containers
-                            .iter()
-                            .find(|c| c.container_type == ContainerType::CodeSearchResults)
-                            .map(|c| c.id);
-                        state
-                            .containers
-                            .retain(|c| c.container_type != ContainerType::CodeSearchResults);
-                        let id = existing_id.unwrap_or_else(|| {
-                            state.containers.iter().map(|c| c.id).max().unwrap_or(0) + 1
-                        });
-                        state.containers.push(Container::new_code_search_results(
-                            id,
-                            Vec2::new(620.0, 20.0),
-                            500.0,
-                            state.window_size.y - 40.0,
-                            results,
-                        ));
-                    }
-                    Err(e) => {
-                        log::warn!("Code search failed: {e}");
-                    }
-                }
-            }
+        Err(e) => {
+            log::warn!("Unified search failed: {e}");
         }
     }
 }

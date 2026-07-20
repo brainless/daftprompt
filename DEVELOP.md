@@ -59,10 +59,14 @@ To use a local checkout instead of the published version, add or uncomment a `[p
 cargo check --workspace        # type-check everything
 cargo run                      # launch the GUI
 cargo run -- --repo ~/some-repo  # open a specific git repo
-cargo run -- --repo . --index  # index commits into search DB
-cargo run -- --repo . --search "fix crash"  # CLI hybrid search (no GUI)
-cargo run -- --repo . --index-code  # index Rust source code (Epic 004)
-cargo run -- --repo . --search-code "render pipeline"  # CLI code search (Epic 004)
+cargo run -- --repo . --index  # index all sources (git log, code, documents)
+cargo run -- --repo . --search "fix crash"  # CLI unified hybrid search (all sources)
+cargo run -- --repo . --index-code  # index Rust source code only
+cargo run -- --repo . --search-code "render pipeline"  # CLI code search only
+cargo run -- --repo . --index-documents  # index documents (Markdown, plain text) only
+cargo run -- --repo . --search-documents "setup guide"  # CLI document search only
+cargo run -- --repo . --index-git-log  # index git log only
+cargo run -- --repo . --search-git-log "fix crash"  # CLI git-log search only
 cargo run --release -- --screenshot /tmp/sugacode.png --exit  # capture one frame to PNG and quit (visual regression)
 RUST_LOG=debug cargo run       # run with debug logging
 cargo test --workspace         # run all tests
@@ -79,16 +83,18 @@ sugacode/
 │   ├── git_log.rs                # git commit reader (gitoxide)
 │   └── ui/
 │       ├── mod.rs                # module tree (container, render)
+│       ├── adapter.rs            # stable card key hashing
 │       ├── container.rs          # data model (Container, CardData, DocumentData, ContainerType)
 │       └── render.rs             # immediate-mode render functions (canvas, drawer, search, containers)
 ├── crates/
 │   └── sugacode-indexer/
 │       ├── Cargo.toml
 │       └── src/
-│           ├── lib.rs            # Indexer public API
+│           ├── lib.rs            # Indexer public API (commits, code, documents, unified search)
 │           ├── db.rs             # SQLite schema, FTS5, vec0, queries
 │           ├── embed.rs          # model2vec-rs wrapper
 │           ├── code.rs           # tree-sitter code parsing
+│           ├── documents.rs      # document discovery, chunking, incremental indexing
 │           └── schema.sql        # SQL schema definition
 └── epics/                        # feature epic specifications
 ```
@@ -99,6 +105,6 @@ sugacode/
 - **Per-repo SQLite DB**: Each indexed repository gets its own DB file in the OS cache directory (`~/Library/Caches/sugacode/{repo_slug}.db` on macOS).
 - **Hybrid search**: Combines FTS5 (keyword) and sqlite-vec (vector KNN) via Reciprocal Rank Fusion.
 - **Graceful degradation**: If the embedding model fails to load, search falls back to FTS5-only. In non-git folders, Cmd+K falls back to substring matching.
-- **Separate search modes**: Commit search (`Cmd+K`) and code search (`Cmd+Shift+K`) are independent APIs and UI modes (Epic 004).
+- **Unified search**: Cmd+K searches all three sources (git log, code, documents) simultaneously and displays results in three separate containers. Source-specific CLI flags (`--search-code`, `--search-documents`, `--search-git-log`) are also available.
 - **UI is rendered by akar** (post-Epic 005): sugacode owns application state + the winit window; akar owns the wgpu pipeline, draw list, input state, layout, and components. `src/ui/render.rs` is the immediate-mode render layer; the per-frame `Layout::new()` rebuilds the taffy tree every frame.
 - **Screenshot mode** (post-Task 8): `cargo run --release -- --screenshot <path> --exit` waits 5 s for the UI to settle, captures one frame via akar's `core.take_screenshot`, PNG-encodes the result, and exits. Useful for visual regression testing.

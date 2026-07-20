@@ -22,12 +22,18 @@ cargo test --workspace         # all tests
 RUST_LOG=debug cargo run       # debug logging
 
 # CLI modes (no GUI):
-cargo run -- --repo . --index                       # index commits
-cargo run -- --repo . --reindex                     # drop + rebuild commit index
-cargo run -- --repo . --search "fix crash"          # CLI hybrid commit search
+cargo run -- --repo . --index                       # index all sources (git log, code, documents)
+cargo run -- --repo . --reindex                     # drop + rebuild all indexes
+cargo run -- --repo . --search "fix crash"          # CLI unified hybrid search (all sources)
 cargo run -- --repo . --index-code                  # index Rust source (tree-sitter)
 cargo run -- --repo . --reindex-code
 cargo run -- --repo . --search-code "render pipeline"
+cargo run -- --repo . --index-documents             # index documents (Markdown, plain text)
+cargo run -- --repo . --reindex-documents
+cargo run -- --repo . --search-documents "setup guide"
+cargo run -- --repo . --index-git-log               # index git log only
+cargo run -- --repo . --reindex-git-log
+cargo run -- --repo . --search-git-log "fix crash"
 cargo run -- -- --no-index                          # GUI but skip startup auto-index
 ```
 
@@ -44,7 +50,7 @@ Canvas > Container > Card      ← cards cannot exist directly on the canvas
 Per-repo SQLite DB             ← ~/Library/Caches/sugacode/{repo_slug}.db (macOS)
 Hybrid search                  ← FTS5 (keyword) + sqlite-vec (vector KNN) via Reciprocal Rank Fusion
 Graceful degradation           ← embedding model load failure → FTS5-only; non-git folder → substring search
-Separate search modes          ← Cmd+K = commits, Cmd+Shift+K = code (independent APIs + UI + vec0 tables)
+Unified search                 ← Cmd+K searches all three sources (git log, code, documents) simultaneously
 ```
 
 ### Workspace layout
@@ -56,23 +62,27 @@ src/                    main binary (CLI + GUI)
   git_log.rs            git commit reader (gitoxide) — read_log, read_log_all_branches
   ui/
     mod.rs              module tree (container, render)
+    adapter.rs          stable card key hashing (commit, code, document results)
     container.rs        Container abstraction + CardData (business logic, keep across migrations)
     render.rs           immediate-mode render functions (canvas, drawer, search, containers)
 crates/sugacode-indexer/  standalone indexing + search crate
   src/
-    lib.rs              Indexer public API (index_commits, index_code, search_hybrid, search_code_hybrid)
-    db.rs               SQLite schema, FTS5, vec0/vec_code, queries
+    lib.rs              Indexer public API (index_commits, index_code, index_documents,
+                        search_hybrid, search_code_hybrid, search_document_hybrid, search_all_hybrid)
+    db.rs               SQLite schema, FTS5, vec0/vec_code/vec_documents, queries
     embed.rs            model2vec-rs wrapper
     code.rs             tree-sitter symbol extraction (Rust)
-    schema.sql          items, items_fts (external-content), vec_items, vec_code, code_files, triggers
+    documents.rs        document discovery, chunking, incremental indexing
+    schema.sql          items, items_fts (external-content), vec_items, vec_code, vec_documents,
+                        code_files, document_files, triggers
 ```
 
 ### DB schema invariants (do not break)
 
 - `items` is the single source of truth for text; `items_fts` is an external-content FTS5 index kept in sync by AFTER INSERT/UPDATE/DELETE triggers — never write to `items_fts` directly.
-- `vec_items` holds commit vectors; `vec_code` holds code vectors. Partitioned per `source_type` for exact KNN isolation (no over-fetch-and-filter). See Epic 004 "Search Isolation".
+- `vec_items` holds commit vectors; `vec_code` holds code vectors; `vec_documents` holds document vectors. Partitioned per `source_type` for exact KNN isolation (no over-fetch-and-filter). See Epic 004 "Search Isolation" and Epic 007.
 - Per-repo DB files: one repo = one `.db` file, filename = slug of repo path. KNN is naturally scoped, no `repo_id` column.
-- Increparency: `code_files` tracks `mtime` + `content_hash` (xxh3, **not** `DefaultHasher` — no stability guarantee across Rust versions). `touch` without content change must not re-index.
+- Increparency: `code_files` and `document_files` track `mtime` + `content_hash` (xxh3, **not** `DefaultHasher` — no stability guarantee across Rust versions). `touch` without content change must not re-index.
 
 When implementing, keep **rejected alternatives as comments in code** (Epic 004 Design Decisions #1–8) — they are deliberate tuning knobs, not dead code.
 

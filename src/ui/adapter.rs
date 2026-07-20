@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use crate::git_log::CommitInfo;
-use sugacode_indexer::{CodeSearchResult, SearchResult};
+use sugacode_indexer::{CodeSearchResult, DocumentSearchResult, SearchResult};
 
 pub fn stable_item_key_commit(commit: &CommitInfo) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -22,12 +22,18 @@ pub fn stable_item_key_code_search(result: &CodeSearchResult) -> u64 {
     hasher.finish()
 }
 
+pub fn stable_item_key_document_search(result: &DocumentSearchResult) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    result.identifier.hash(&mut hasher);
+    hasher.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::git_log::CommitInfo;
     use crate::state::CardData;
-    use sugacode_indexer::{CodeSearchResult, MatchType, SearchResult, SymbolKind};
+    use sugacode_indexer::{CodeSearchResult, DocumentSearchResult, MatchType, SearchResult, SymbolKind};
 
     // --- stable_item_key_commit ---
 
@@ -230,5 +236,44 @@ mod tests {
 
         assert!(cards[0].is_selected);
         assert!(!cards[1].is_selected);
+    }
+
+    // --- stable_item_key_document_search ---
+
+    #[test]
+    fn stable_item_key_document_search_is_deterministic() {
+        let r = DocumentSearchResult {
+            identifier: "docs/readme.md".to_string(),
+            file_path: "docs/readme.md".to_string(),
+            text: "# Hello World\n\nWelcome.".to_string(),
+            score: 0.9,
+            match_type: MatchType::Hybrid,
+        };
+        let key1 = stable_item_key_document_search(&r);
+        let key2 = stable_item_key_document_search(&r);
+        assert_eq!(key1, key2);
+        assert_ne!(key1, 0);
+    }
+
+    #[test]
+    fn stable_item_key_document_search_different_inputs() {
+        let a = DocumentSearchResult {
+            identifier: "docs/a.md".to_string(),
+            file_path: String::new(),
+            text: String::new(),
+            score: 0.0,
+            match_type: MatchType::Fts,
+        };
+        let b = DocumentSearchResult {
+            identifier: "docs/b.md".to_string(),
+            file_path: String::new(),
+            text: String::new(),
+            score: 0.0,
+            match_type: MatchType::Fts,
+        };
+        assert_ne!(
+            stable_item_key_document_search(&a),
+            stable_item_key_document_search(&b)
+        );
     }
 }

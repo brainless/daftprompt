@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use clap::Parser;
 use state::AppState;
-use sugacode_indexer::{CommitData, Indexer, IndexerConfig, SymbolKind};
+use sugacode_indexer::{CommitData, Indexer, IndexerConfig, SymbolKind, UnifiedSearchHit};
 use ui::container::{Container, ContainerType};
 use ui::render::{render_canvas, render_drawer, render_search};
 
@@ -20,26 +20,59 @@ struct Args {
     #[arg(short, long)]
     count: Option<usize>,
 
+    /// Index all sources (git log, code, documents) incrementally.
     #[arg(long)]
     index: bool,
 
+    /// Rebuild all indexes (git log, code, documents).
     #[arg(long)]
     reindex: bool,
 
     #[arg(long)]
     no_index: bool,
 
+    /// Hybrid-search all sources and print one combined, cross-source ranked result list.
     #[arg(long)]
     search: Option<String>,
 
+    // --- Source-specific git-log commands ---
+    /// Incrementally index git log only.
+    #[arg(long)]
+    index_git_log: bool,
+
+    /// Drop and rebuild git-log index only.
+    #[arg(long)]
+    reindex_git_log: bool,
+
+    /// Hybrid-search git log only.
+    #[arg(long)]
+    search_git_log: Option<String>,
+
+    // --- Source-specific code commands ---
+    /// Incrementally index Rust source code only.
     #[arg(long)]
     index_code: bool,
 
+    /// Drop and rebuild code index only.
     #[arg(long)]
     reindex_code: bool,
 
+    /// Hybrid-search code only.
     #[arg(long)]
     search_code: Option<String>,
+
+    // --- Source-specific document commands ---
+    /// Incrementally index documents (Markdown, plain text) only.
+    #[arg(long)]
+    index_documents: bool,
+
+    /// Drop and rebuild document index only.
+    #[arg(long)]
+    reindex_documents: bool,
+
+    /// Hybrid-search documents only.
+    #[arg(long)]
+    search_documents: Option<String>,
 
     /// Task 8: capture one frame to a PNG file after a 5s settle delay.
     /// Combine with `--exit` to terminate the GUI after the capture.
@@ -72,6 +105,60 @@ fn main() -> anyhow::Result<()> {
 
     let indexer_config = IndexerConfig::default();
 
+    // Validate: reject ambiguous combinations of generic + source-specific flags.
+    let has_generic_index = args.index || args.reindex;
+    let has_source_index =
+        args.index_code || args.reindex_code || args.index_git_log || args.reindex_git_log
+            || args.index_documents || args.reindex_documents;
+    if has_generic_index && has_source_index {
+        eprintln!("Error: cannot combine --index/--reindex with source-specific index flags.");
+        std::process::exit(1);
+    }
+    let has_generic_search = args.search.is_some();
+    let has_source_search =
+        args.search_code.is_some() || args.search_git_log.is_some() || args.search_documents.is_some();
+    if has_generic_search && has_source_search {
+        eprintln!("Error: cannot combine --search with source-specific search flags.");
+        std::process::exit(1);
+    }
+
+    // --- Source-specific git-log operations ---
+    if args.index_git_log || args.reindex_git_log {
+        let mut commits = git_log::read_log_all_branches(&args.repo)?;
+        if let Some(count) = args.count {
+            commits.truncate(count);
+        }
+        let commit_data: Vec<CommitData> = commits.iter().map(Into::into).collect();
+        let mut indexer = Indexer::new(&args.repo, &indexer_config)?;
+        let n = if args.reindex_git_log {
+            indexer.reindex_commits(&commit_data)?
+        } else {
+            indexer.index_commits(&commit_data)?
+        };
+        println!("Indexed {} commits", n);
+        if args.search_git_log.is_none() {
+            return Ok(());
+        }
+    }
+
+    if let Some(query) = &args.search_git_log {
+        let indexer = Indexer::new(&args.repo, &indexer_config)?;
+        let results = indexer.search_hybrid(query, 10)?;
+        for r in &results {
+            let id = r.short_hash.as_str();
+            let title = r.text.lines().next().unwrap_or("");
+            println!(
+                "[{:.3}] {:<7} {} — {} [Git log]",
+                r.score,
+                id,
+                r.author.as_deref().unwrap_or(""),
+                title
+            );
+        }
+        return Ok(());
+    }
+
+    // --- Source-specific code operations ---
     if args.index_code || args.reindex_code {
         let mut indexer = Indexer::new(&args.repo, &indexer_config)?;
         let report = if args.reindex_code {
@@ -112,7 +199,7 @@ fn main() -> anyhow::Result<()> {
                 SymbolKind::Imports => "imports",
             };
             println!(
-                "[{:.3}] {:<8} {}:{}       {} — {}",
+                "[{:.3}] {:<8} {}:{}       {} — {} [Code]",
                 r.score,
                 kind_abbr,
                 r.file_path,
@@ -124,19 +211,84 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // --- Source-specific document operations ---
+    if args.index_documents || args.reindex_documents {
+        let mut indexer = Indexer::new(&args.repo, &indexer_config)?;
+        let report = if args.reindex_documents {
+            indexer.reindex_documents()?
+        } else {
+            indexer.index_documents()?
+        };
+        println!(
+            "Document index: {} files scanned, {} changed, {} deleted, {} chunks indexed",
+            report.files_scanned,
+            report.files_changed,
+            report.files_deleted,
+            report.chunks_indexed
+        );
+        if args.search_documents.is_none() {
+            return Ok(());
+        }
+    }
+
+    if let Some(query) = &args.search_documents {
+        let indexer = Indexer::new(&args.repo, &indexer_config)?;
+        let results = indexer.search_document_hybrid(query, 10)?;
+        for r in &results {
+            let title = r.text.lines().next().unwrap_or("");
+            println!(
+                "[{:.3}] {} — {} [Documents]",
+                r.score, r.file_path, title
+            );
+        }
+        return Ok(());
+    }
+
+    // --- Generic all-source operations ---
     if args.index || args.reindex {
+        let mut indexer = Indexer::new(&args.repo, &indexer_config)?;
+
+        // Git log
         let mut commits = git_log::read_log_all_branches(&args.repo)?;
         if let Some(count) = args.count {
             commits.truncate(count);
         }
         let commit_data: Vec<CommitData> = commits.iter().map(Into::into).collect();
-        let mut indexer = Indexer::new(&args.repo, &indexer_config)?;
         let n = if args.reindex {
             indexer.reindex_commits(&commit_data)?
         } else {
             indexer.index_commits(&commit_data)?
         };
-        println!("Indexed {} commits", n);
+        println!("Git log: indexed {} commits", n);
+
+        // Code
+        let code_report = if args.reindex {
+            indexer.reindex_code()?
+        } else {
+            indexer.index_code()?
+        };
+        println!(
+            "Code: {} files scanned, {} changed, {} deleted, {} symbols indexed",
+            code_report.files_scanned,
+            code_report.files_changed,
+            code_report.files_deleted,
+            code_report.symbols_indexed
+        );
+
+        // Documents
+        let doc_report = if args.reindex {
+            indexer.reindex_documents()?
+        } else {
+            indexer.index_documents()?
+        };
+        println!(
+            "Documents: {} files scanned, {} changed, {} deleted, {} chunks indexed",
+            doc_report.files_scanned,
+            doc_report.files_changed,
+            doc_report.files_deleted,
+            doc_report.chunks_indexed
+        );
+
         if args.search.is_none() {
             return Ok(());
         }
@@ -144,17 +296,59 @@ fn main() -> anyhow::Result<()> {
 
     if let Some(query) = &args.search {
         let indexer = Indexer::new(&args.repo, &indexer_config)?;
-        let results = indexer.search_hybrid(query, 10)?;
-        for r in &results {
-            let id = r.short_hash.as_str();
-            let title = r.text.lines().next().unwrap_or("");
-            println!(
-                "[{:.3}] {:<7} {} — {}",
-                r.score,
-                id,
-                r.author.as_deref().unwrap_or(""),
-                title
-            );
+        let results = indexer.search_all_hybrid(query, 10)?;
+        for (i, hit) in results.combined.iter().enumerate() {
+            match hit {
+                UnifiedSearchHit::GitLog(r) => {
+                    let id = r.short_hash.as_str();
+                    let title = r.text.lines().next().unwrap_or("");
+                    println!(
+                        "{:<3} [{:.3}] {:<7} {} — {} [Git log]",
+                        i + 1,
+                        r.score,
+                        id,
+                        r.author.as_deref().unwrap_or(""),
+                        title
+                    );
+                }
+                UnifiedSearchHit::Code(r) => {
+                    let kind_abbr = match r.symbol_kind {
+                        SymbolKind::Function => "fn",
+                        SymbolKind::Struct => "struct",
+                        SymbolKind::Enum => "enum",
+                        SymbolKind::Trait => "trait",
+                        SymbolKind::ImplMethod => "fn",
+                        SymbolKind::TraitMethod => "fn",
+                        SymbolKind::TypeAlias => "type",
+                        SymbolKind::Const => "const",
+                        SymbolKind::Static => "static",
+                        SymbolKind::Module => "mod",
+                        SymbolKind::Macro => "macro",
+                        SymbolKind::Comments => "comments",
+                        SymbolKind::Imports => "imports",
+                    };
+                    println!(
+                        "{:<3} [{:.3}] {:<8} {}:{}       {} — {} [Code]",
+                        i + 1,
+                        r.score,
+                        kind_abbr,
+                        r.file_path,
+                        r.line_start,
+                        r.identifier.split("::").last().unwrap_or(""),
+                        r.text.lines().next().unwrap_or("")
+                    );
+                }
+                UnifiedSearchHit::Document(r) => {
+                    let title = r.text.lines().next().unwrap_or("");
+                    println!(
+                        "{:<3} [{:.3}] {} — {} [Documents]",
+                        i + 1,
+                        r.score,
+                        r.file_path,
+                        title
+                    );
+                }
+            }
         }
         return Ok(());
     }
@@ -194,6 +388,14 @@ fn main() -> anyhow::Result<()> {
                         report.files_changed
                     ),
                     Err(e) => log::warn!("Failed to index code: {e}"),
+                }
+                match indexer.index_documents() {
+                    Ok(report) => log::info!(
+                        "Indexed {} document chunks from {} files",
+                        report.chunks_indexed,
+                        report.files_changed
+                    ),
+                    Err(e) => log::warn!("Failed to index documents: {e}"),
                 }
                 Some(indexer)
             }
@@ -496,81 +698,50 @@ impl Application {
         // Also clears `core.input.focused_id` on Escape so any focused text
         // input loses focus (matters once Task 6 wires the search box).
         let cmd_or_ctrl = state.cmd_or_ctrl;
-        let shift = state.shift_pressed;
         if cmd_or_ctrl && (core.input.chars.contains(&'k') || core.input.chars.contains(&'K')) {
             // `akar-winit` correctly forwards the textual "k" from the
             // shortcut as input. It opens the search UI, not part of the
             // search query, so consume it before `text_input` reads the
             // frame's characters below.
             core.input.chars.retain(|&c| c != 'k' && c != 'K');
-            if shift {
-                // Cmd+Shift+K: toggle code search.
-                state.code_search_active = !state.code_search_active;
-                state.code_search_just_opened = state.code_search_active;
-                state.search_mode = state::SearchMode::Code;
-                if state.code_search_active {
-                    // Turning code search ON: clear commit search.
-                    state.search_active = false;
-                    state.search_query.clear();
-                    state.search_results.clear();
-                    state
-                        .containers
-                        .retain(|c| c.container_type != ContainerType::SearchResults);
-                }
-                // Always clear code search's own state (covers both the OFF
-                // toggle and the "fresh open" case where the query was left
-                // over from a previous session).
-                state.code_search_query.clear();
-                state.cursor_pos = 0;
-                state.cursor_timer = 0.0;
-                state.cursor_visible = true;
-                state.code_search_results.clear();
-                state
-                    .containers
-                    .retain(|c| c.container_type != ContainerType::CodeSearchResults);
-            } else {
-                // Cmd+K: toggle commit search.
-                state.search_active = !state.search_active;
-                state.search_just_opened = state.search_active;
-                state.search_mode = state::SearchMode::Commits;
-                if state.search_active {
-                    // Turning commit search ON: clear code search.
-                    state.code_search_active = false;
-                    state.code_search_query.clear();
-                    state.code_search_results.clear();
-                    state
-                        .containers
-                        .retain(|c| c.container_type != ContainerType::CodeSearchResults);
-                }
-                state.search_query.clear();
-                state.cursor_pos = 0;
-                state.cursor_timer = 0.0;
-                state.cursor_visible = true;
-                state.search_results.clear();
-                state
-                    .containers
-                    .retain(|c| c.container_type != ContainerType::SearchResults);
-            }
+            // Cmd+K: toggle unified search (all sources).
+            state.search_active = !state.search_active;
+            state.search_just_opened = state.search_active;
+            state.search_query.clear();
+            state.cursor_pos = 0;
+            state.cursor_timer = 0.0;
+            state.cursor_visible = true;
+            state.search_results.clear();
+            state.code_search_results.clear();
+            state.document_search_results.clear();
+            state
+                .containers
+                .retain(|c| c.container_type != ContainerType::SearchResults);
+            state
+                .containers
+                .retain(|c| c.container_type != ContainerType::CodeSearchResults);
+            state
+                .containers
+                .retain(|c| c.container_type != ContainerType::DocumentSearchResults);
         }
         if core.input.keys_pressed.contains(&akar_core::Key::Escape) {
-            if state.code_search_active {
-                state.code_search_active = false;
-                state.code_search_just_opened = false;
-                state.code_search_query.clear();
-                state.cursor_pos = 0;
-                state.code_search_results.clear();
-                state
-                    .containers
-                    .retain(|c| c.container_type != ContainerType::CodeSearchResults);
-            } else if state.search_active {
+            if state.search_active {
                 state.search_active = false;
                 state.search_just_opened = false;
                 state.search_query.clear();
                 state.cursor_pos = 0;
                 state.search_results.clear();
+                state.code_search_results.clear();
+                state.document_search_results.clear();
                 state
                     .containers
                     .retain(|c| c.container_type != ContainerType::SearchResults);
+                state
+                    .containers
+                    .retain(|c| c.container_type != ContainerType::CodeSearchResults);
+                state
+                    .containers
+                    .retain(|c| c.container_type != ContainerType::DocumentSearchResults);
             } else {
                 // Deselect all (cascade terminator).
                 state.selected_folder = None;
@@ -648,7 +819,7 @@ impl Application {
         if state.drawer_open {
             render_drawer(core, &mut layout, state);
         }
-        if state.search_active || state.code_search_active {
+        if state.search_active {
             render_search(core, &mut layout, state, dt);
         }
 
