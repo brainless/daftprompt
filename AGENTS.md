@@ -1,10 +1,10 @@
 # AGENTS.md
 
-Guide for AI coding agents (and humans) working on sugacode. Read this before touching the code.
+Guide for AI coding agents (and humans) working on daftprompt. Read this before touching the code.
 
 ## Project Overview
 
-sugacode ("Text Explorer") is a Rust app for exploring text repositories (git repos, document folders) via an infinite-canvas, card-based UI. It uses **akar** (a GPU UI component library on wgpu + glyphon + taffy) for rendering, combined with a git commit reader (gitoxide) and a hybrid search indexer (SQLite FTS5 + sqlite-vec embeddings).
+daftprompt is a Rust app for exploring text repositories (git repos, document folders) via an infinite-canvas, card-based UI. It uses **akar** (a GPU UI component library on wgpu + glyphon + taffy) for rendering, combined with a git commit reader (gitoxide) and a hybrid search indexer (SQLite FTS5 + sqlite-vec embeddings).
 
 **Status:** early stage. APIs unstable, architecture evolving. Expect breaking changes.
 
@@ -47,7 +47,7 @@ Several dependency crates have their full source cloned under `~/Projects/` and 
 
 ```
 Canvas > Container > Card      ← cards cannot exist directly on the canvas
-Per-repo SQLite DB             ← ~/Library/Caches/sugacode/{repo_slug}.db (macOS)
+Per-repo SQLite DB             ← ~/Library/Caches/daftprompt/{repo_slug}.db (macOS)
 Hybrid search                  ← FTS5 (keyword) + sqlite-vec (vector KNN) via Reciprocal Rank Fusion
 Graceful degradation           ← embedding model load failure → FTS5-only; non-git folder → substring search
 Unified search                 ← Cmd+K searches all three sources (git log, code, documents) simultaneously
@@ -65,7 +65,7 @@ src/                    main binary (CLI + GUI)
     adapter.rs          stable card key hashing (commit, code, document results)
     container.rs        Container abstraction + CardData (business logic, keep across migrations)
     render.rs           immediate-mode render functions (canvas, drawer, search, containers)
-crates/sugacode-indexer/  standalone indexing + search crate
+crates/daftprompt-indexer/  standalone indexing + search crate
   src/
     lib.rs              Indexer public API (index_commits, index_code, index_documents,
                         search_hybrid, search_code_hybrid, search_document_hybrid, search_all_hybrid)
@@ -96,7 +96,7 @@ When implementing, keep **rejected alternatives as comments in code** (Epic 004 
 - **Tree-sitter queries** are compiled once at construction and reused for every file (per-file compilation is a startup-error bug).
 - **Trait default methods** (with bodies) are indexed individually as `TraitMethod`; signature-only methods are folded into the parent `Trait` item. Identifiers carry the full canonical namespace (`file_path::module_path::TypeName::method`).
 
-- **UI is rendered by akar** (post-Epic 005): sugacode owns application state + the winit window; akar owns the wgpu pipeline, draw list, input state, layout, and components. `src/ui/render.rs` is the immediate-mode render layer; the per-frame `Layout::new()` rebuilds the taffy tree every frame.
+- **UI is rendered by akar** (post-Epic 005): daftprompt owns application state + the winit window; akar owns the wgpu pipeline, draw list, input state, layout, and components. `src/ui/render.rs` is the immediate-mode render layer; the per-frame `Layout::new()` rebuilds the taffy tree every frame.
 - **Screenshot mode** (post-Task 8): `cargo run --release -- --screenshot <path> --exit` waits 5 s for the UI to settle, captures one frame via akar's `core.take_screenshot`, PNG-encodes the result, and exits. Useful for visual regression testing.
 
 ## Epics

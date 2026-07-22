@@ -3,7 +3,7 @@ use glam::Vec2;
 use crate::git_log::CommitInfo;
 use crate::state::{CardData, DocumentData};
 use crate::ui::adapter;
-use sugacode_indexer::{CodeSearchResult, DocumentSearchResult, SearchResult};
+use daftprompt_indexer::{CodeSearchResult, DocumentSearchResult, SearchResult};
 
 /// Fixed card height policy for Epic 017 compatibility.
 ///

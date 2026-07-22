@@ -17,7 +17,7 @@ pub fn register_sqlite_vec() {
 pub fn db_path_for_repo(repo_path: &Path) -> anyhow::Result<PathBuf> {
     let cache_dir = dirs::cache_dir()
         .ok_or_else(|| anyhow::anyhow!("Cannot determine cache directory"))?
-        .join("sugacode");
+        .join("daftprompt");
     std::fs::create_dir_all(&cache_dir)?;
 
     let abs_path = std::fs::canonicalize(repo_path)?;

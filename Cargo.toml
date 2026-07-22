@@ -1,8 +1,8 @@
 [workspace]
-members = [".", "crates/sugacode-indexer"]
+members = [".", "crates/daftprompt-indexer"]
 
 [package]
-name = "text-explorer"
+name = "daftprompt"
 version = "0.1.0"
 edition = "2021"
 
@@ -19,7 +19,7 @@ env_logger = "0.11"
 glam = { path = "../glam-rs" }
 gix = { path = "../gitoxide/gix", default-features = false, features = ["basic", "sha1"] }
 clap = { version = "4", features = ["derive"] }
-sugacode-indexer = { path = "crates/sugacode-indexer" }
+daftprompt-indexer = { path = "crates/daftprompt-indexer" }
 anyhow = "1"
 serde_json = "1"
 png = "0.17"

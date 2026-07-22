@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use crate::git_log::CommitInfo;
-use sugacode_indexer::{CodeSearchResult, DocumentSearchResult, SearchResult};
+use daftprompt_indexer::{CodeSearchResult, DocumentSearchResult, SearchResult};
 
 pub fn stable_item_key_commit(commit: &CommitInfo) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -33,7 +33,7 @@ mod tests {
     use super::*;
     use crate::git_log::CommitInfo;
     use crate::state::CardData;
-    use sugacode_indexer::{CodeSearchResult, DocumentSearchResult, MatchType, SearchResult, SymbolKind};
+    use daftprompt_indexer::{CodeSearchResult, DocumentSearchResult, MatchType, SearchResult, SymbolKind};
 
     // --- stable_item_key_commit ---
 

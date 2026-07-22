@@ -1,4 +1,4 @@
-# Text Explorer (sugacode)
+# daftprompt
 
 ## Overview
 
@@ -40,7 +40,7 @@ This is a text repository explorer built with Rust and akar (a GPU UI component 
 ## Running the Application
 
 ```bash
-# From the sugacode directory
+# From the daftprompt directory
 cargo run
 ```
 
@@ -57,7 +57,7 @@ cargo run
 ## Project Structure
 
 ```
-sugacode/
+daftprompt/
 ├── Cargo.toml                    # workspace root + main binary
 ├── src/
 │   ├── main.rs                   # entry point, CLI args, event loop, screenshot flow
@@ -69,7 +69,7 @@ sugacode/
 │       ├── container.rs          # data model (Container, CardData, DocumentData, ContainerType)
 │       └── render.rs             # immediate-mode render functions (canvas, drawer, search, containers)
 ├── crates/
-│   └── sugacode-indexer/
+│   └── daftprompt-indexer/
 │       ├── Cargo.toml
 │       └── src/
 │           ├── lib.rs            # Indexer public API (commits, code, documents, unified search)
@@ -89,7 +89,7 @@ sugacode/
 - **glam** — Mathematics library for transforms
 - **pollster** — Async runtime
 - **gix** (gitoxide) — Git repository access (path dep)
-- **sugacode-indexer** — in-workspace indexer crate (FTS5 + sqlite-vec + model2vec-rs)
+- **daftprompt-indexer** — in-workspace indexer crate (FTS5 + sqlite-vec + model2vec-rs)
 - **tree-sitter / tree-sitter-rust** — Rust source parsing (in the indexer crate, Epic 004)
 - **png** — PNG encoding for `--screenshot` output
 - **clap** — CLI argument parsing
@@ -108,7 +108,7 @@ The previous "Next Steps" list (real-data integration, document parsing, file wa
 ## Known Limitations
 
 - Card dragging is not yet implemented (cards are positioned in world space; drag-to-move is a future epic).
-- Per-repo indexer DBs are persisted in the OS cache directory (`~/Library/Caches/sugacode/{slug}.db` on macOS), but window state and canvas pan/zoom are not.
+- Per-repo indexer DBs are persisted in the OS cache directory (`~/Library/Caches/daftprompt/{slug}.db` on macOS), but window state and canvas pan/zoom are not.
 - `akar-winit` does not expose Cmd/Ctrl modifier state; modifier tracking is done manually in `AppState` via a `WindowEvent::ModifiersChanged` arm.
 
 ## Development
@@ -121,7 +121,7 @@ cargo check --workspace
 RUST_LOG=debug cargo run
 
 # Capture one frame to PNG (visual regression)
-cargo run --release -- --screenshot /tmp/sugacode.png --exit
+cargo run --release -- --screenshot /tmp/daftprompt.png --exit
 
 # Run tests
 cargo test --workspace

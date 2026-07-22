@@ -7,12 +7,12 @@ use std::time::Instant;
 
 use clap::Parser;
 use state::AppState;
-use sugacode_indexer::{CommitData, Indexer, IndexerConfig, SymbolKind, UnifiedSearchHit};
+use daftprompt_indexer::{CommitData, Indexer, IndexerConfig, SymbolKind, UnifiedSearchHit};
 use ui::container::{Container, ContainerType};
 use ui::render::{render_canvas, render_drawer, render_search};
 
 #[derive(Parser)]
-#[command(name = "text-explorer", about = "A text repository explorer")]
+#[command(name = "daftprompt", about = "A text repository explorer")]
 struct Args {
     #[arg(short, long, default_value = ".")]
     repo: PathBuf,
@@ -492,7 +492,7 @@ impl winit::application::ApplicationHandler for Application {
             state.containers.push(container);
         }
 
-        // wgpu setup (sugacode owns the window; akar owns the GPU pipeline)
+        // wgpu setup (daftprompt owns the window; akar owns the GPU pipeline)
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
             Box::new(event_loop.owned_display_handle()),
         ));
@@ -760,7 +760,7 @@ impl Application {
         // Render layers. Order: canvas → drawer → search (search is on top).
 
         // Cmd+Left-drag pan (Task 3). akar's `PanButton` enum is only
-        // `Middle`/`Right` (akar-components/src/canvas.rs:9), so sugacode's
+        // `Middle`/`Right` (akar-components/src/canvas.rs:9), so daftprompt's
         // existing Cmd+Left-drag-to-pan convention is not covered by
         // `canvas_begin`. Furthermore, `canvas_begin` resets
         // `CanvasState::is_panning` every frame the configured button isn't

@@ -12,12 +12,12 @@ Several dependencies are cloned locally under `~/Projects/` and referenced via p
 
 | Crate | Local path | Used by |
 |---|---|---|
-| **akar-core** | `~/Projects/akar/crates/akar-core` | `text-explorer` (wgpu pipeline, draw list, input state) |
-| **akar-layout** | `~/Projects/akar/crates/akar-layout` | `text-explorer` (taffy flexbox layout) |
-| **akar-components** | `~/Projects/akar/crates/akar-components` | `text-explorer` (buttons, inputs, drawer, canvas, etc.) |
-| **akar-winit** | `~/Projects/akar/crates/akar-winit` | `text-explorer` (winit event routing) |
-| **glam** | `~/Projects/glam-rs` | `text-explorer` (math/transforms) |
-| **gix** (gitoxide) | `~/Projects/gitoxide/gix` | `text-explorer` (git repository access) |
+| **akar-core** | `~/Projects/akar/crates/akar-core` | `daftprompt` (wgpu pipeline, draw list, input state) |
+| **akar-layout** | `~/Projects/akar/crates/akar-layout` | `daftprompt` (taffy flexbox layout) |
+| **akar-components** | `~/Projects/akar/crates/akar-components` | `daftprompt` (buttons, inputs, drawer, canvas, etc.) |
+| **akar-winit** | `~/Projects/akar/crates/akar-winit` | `daftprompt` (winit event routing) |
+| **glam** | `~/Projects/glam-rs` | `daftprompt` (math/transforms) |
+| **gix** (gitoxide) | `~/Projects/gitoxide/gix` | `daftprompt` (git repository access) |
 
 ### Other relevant dependencies cloned locally
 
@@ -29,8 +29,8 @@ These are not currently path dependencies but are available locally for referenc
 | **glyphon** | `~/Projects/glyphon` | Text shaping/atlas — transitive via `akar-core`; no longer a direct dep |
 | **wgpu** | `~/Projects/wgpu` | GPU rendering pipeline (v29.0.0 from crates.io, source available locally) |
 | **taffy** | (via `akar-layout`) | CSS Flexbox layout engine used by akar |
-| **sqlite-vec** | `~/Projects/sqlite-vec` | Vector similarity search extension (v0.0.1-alpha.33, used in `sugacode-indexer`) |
-| **model2vec-rs** | `~/Projects/model2vec-rs` | Static text embeddings (v0.2.1, used in `sugacode-indexer`) |
+| **sqlite-vec** | `~/Projects/sqlite-vec` | Vector similarity search extension (v0.0.1-alpha.33, used in `daftprompt-indexer`) |
+| **model2vec-rs** | `~/Projects/model2vec-rs` | Static text embeddings (v0.2.1, used in `daftprompt-indexer`) |
 | **tree-sitter** | `~/Projects/tree-sitter` | Source code parsing with tree-sitter (Epic 004 — done) |
 | **xilem** | `~/Projects/xilem` | Rust-native UI framework (under evaluation) |
 | **sqlx** | `~/Projects/sqlx` | Async SQL toolkit (potential future use) |
@@ -67,7 +67,7 @@ cargo run -- --repo . --index-documents  # index documents (Markdown, plain text
 cargo run -- --repo . --search-documents "setup guide"  # CLI document search only
 cargo run -- --repo . --index-git-log  # index git log only
 cargo run -- --repo . --search-git-log "fix crash"  # CLI git-log search only
-cargo run --release -- --screenshot /tmp/sugacode.png --exit  # capture one frame to PNG and quit (visual regression)
+cargo run --release -- --screenshot /tmp/daftprompt.png --exit  # capture one frame to PNG and quit (visual regression)
 RUST_LOG=debug cargo run       # run with debug logging
 cargo test --workspace         # run all tests
 ```
@@ -75,7 +75,7 @@ cargo test --workspace         # run all tests
 ## Project Structure
 
 ```
-sugacode/
+daftprompt/
 ├── Cargo.toml                    # workspace root + main binary
 ├── src/
 │   ├── main.rs                   # entry point, CLI args, event loop, screenshot flow
@@ -87,7 +87,7 @@ sugacode/
 │       ├── container.rs          # data model (Container, CardData, DocumentData, ContainerType)
 │       └── render.rs             # immediate-mode render functions (canvas, drawer, search, containers)
 ├── crates/
-│   └── sugacode-indexer/
+│   └── daftprompt-indexer/
 │       ├── Cargo.toml
 │       └── src/
 │           ├── lib.rs            # Indexer public API (commits, code, documents, unified search)
@@ -102,9 +102,9 @@ sugacode/
 ## Architecture Notes
 
 - **Canvas > Container > Card** hierarchy: Cards cannot exist directly on the canvas; they must be inside a Container.
-- **Per-repo SQLite DB**: Each indexed repository gets its own DB file in the OS cache directory (`~/Library/Caches/sugacode/{repo_slug}.db` on macOS).
+- **Per-repo SQLite DB**: Each indexed repository gets its own DB file in the OS cache directory (`~/Library/Caches/daftprompt/{repo_slug}.db` on macOS).
 - **Hybrid search**: Combines FTS5 (keyword) and sqlite-vec (vector KNN) via Reciprocal Rank Fusion.
 - **Graceful degradation**: If the embedding model fails to load, search falls back to FTS5-only. In non-git folders, Cmd+K falls back to substring matching.
 - **Unified search**: Cmd+K searches all three sources (git log, code, documents) simultaneously and displays results in three separate containers. Source-specific CLI flags (`--search-code`, `--search-documents`, `--search-git-log`) are also available.
-- **UI is rendered by akar** (post-Epic 005): sugacode owns application state + the winit window; akar owns the wgpu pipeline, draw list, input state, layout, and components. `src/ui/render.rs` is the immediate-mode render layer; the per-frame `Layout::new()` rebuilds the taffy tree every frame.
+- **UI is rendered by akar** (post-Epic 005): daftprompt owns application state + the winit window; akar owns the wgpu pipeline, draw list, input state, layout, and components. `src/ui/render.rs` is the immediate-mode render layer; the per-frame `Layout::new()` rebuilds the taffy tree every frame.
 - **Screenshot mode** (post-Task 8): `cargo run --release -- --screenshot <path> --exit` waits 5 s for the UI to settle, captures one frame via akar's `core.take_screenshot`, PNG-encodes the result, and exits. Useful for visual regression testing.

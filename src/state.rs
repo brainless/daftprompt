@@ -54,10 +54,10 @@ pub struct AppState {
     pub containers: Vec<Container>,
 
     // Indexer state
-    pub indexer: Option<sugacode_indexer::Indexer>,
-    pub search_results: Vec<sugacode_indexer::SearchResult>,
-    pub code_search_results: Vec<sugacode_indexer::CodeSearchResult>,
-    pub document_search_results: Vec<sugacode_indexer::DocumentSearchResult>,
+    pub indexer: Option<daftprompt_indexer::Indexer>,
+    pub search_results: Vec<daftprompt_indexer::SearchResult>,
+    pub code_search_results: Vec<daftprompt_indexer::CodeSearchResult>,
+    pub document_search_results: Vec<daftprompt_indexer::DocumentSearchResult>,
 }
 
 #[derive(Debug, Clone)]
