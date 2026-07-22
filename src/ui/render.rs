@@ -1250,13 +1250,15 @@ fn execute_search(state: &mut AppState) {
                 let id = existing_doc_id.unwrap_or_else(|| {
                     state.containers.iter().map(|c| c.id).max().unwrap_or(0) + 1
                 });
-                state.containers.push(Container::new_document_search_results(
-                    id,
-                    Vec2::new(1660.0, 20.0),
-                    500.0,
-                    window_h,
-                    results.documents,
-                ));
+                state
+                    .containers
+                    .push(Container::new_document_search_results(
+                        id,
+                        Vec2::new(1660.0, 20.0),
+                        500.0,
+                        window_h,
+                        results.documents,
+                    ));
             }
         }
         Err(e) => {

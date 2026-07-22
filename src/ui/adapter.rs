@@ -33,7 +33,9 @@ mod tests {
     use super::*;
     use crate::git_log::CommitInfo;
     use crate::state::CardData;
-    use daftprompt_indexer::{CodeSearchResult, DocumentSearchResult, MatchType, SearchResult, SymbolKind};
+    use daftprompt_indexer::{
+        CodeSearchResult, DocumentSearchResult, MatchType, SearchResult, SymbolKind,
+    };
 
     // --- stable_item_key_commit ---
 

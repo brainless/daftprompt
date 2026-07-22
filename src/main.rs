@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use clap::Parser;
-use state::AppState;
 use daftprompt_indexer::{CommitData, Indexer, IndexerConfig, SymbolKind, UnifiedSearchHit};
+use state::AppState;
 use ui::container::{Container, ContainerType};
 use ui::render::{render_canvas, render_drawer, render_search};
 
@@ -107,16 +107,20 @@ fn main() -> anyhow::Result<()> {
 
     // Validate: reject ambiguous combinations of generic + source-specific flags.
     let has_generic_index = args.index || args.reindex;
-    let has_source_index =
-        args.index_code || args.reindex_code || args.index_git_log || args.reindex_git_log
-            || args.index_documents || args.reindex_documents;
+    let has_source_index = args.index_code
+        || args.reindex_code
+        || args.index_git_log
+        || args.reindex_git_log
+        || args.index_documents
+        || args.reindex_documents;
     if has_generic_index && has_source_index {
         eprintln!("Error: cannot combine --index/--reindex with source-specific index flags.");
         std::process::exit(1);
     }
     let has_generic_search = args.search.is_some();
-    let has_source_search =
-        args.search_code.is_some() || args.search_git_log.is_some() || args.search_documents.is_some();
+    let has_source_search = args.search_code.is_some()
+        || args.search_git_log.is_some()
+        || args.search_documents.is_some();
     if has_generic_search && has_source_search {
         eprintln!("Error: cannot combine --search with source-specific search flags.");
         std::process::exit(1);
@@ -221,10 +225,7 @@ fn main() -> anyhow::Result<()> {
         };
         println!(
             "Document index: {} files scanned, {} changed, {} deleted, {} chunks indexed",
-            report.files_scanned,
-            report.files_changed,
-            report.files_deleted,
-            report.chunks_indexed
+            report.files_scanned, report.files_changed, report.files_deleted, report.chunks_indexed
         );
         if args.search_documents.is_none() {
             return Ok(());
@@ -236,10 +237,7 @@ fn main() -> anyhow::Result<()> {
         let results = indexer.search_document_hybrid(query, 10)?;
         for r in &results {
             let title = r.text.lines().next().unwrap_or("");
-            println!(
-                "[{:.3}] {} — {} [Documents]",
-                r.score, r.file_path, title
-            );
+            println!("[{:.3}] {} — {} [Documents]", r.score, r.file_path, title);
         }
         return Ok(());
     }

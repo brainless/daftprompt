@@ -78,6 +78,19 @@ const RUST_QUERY: &str = r#"
 "#;
 
 pub fn extract_symbols(file_path: &Path, source: &str) -> anyhow::Result<Vec<CodeSymbol>> {
+    let repo_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    extract_symbols_in_repo(&repo_path, file_path, source)
+}
+
+/// Extract symbols with identifiers relative to `repo_path`.
+///
+/// Indexing must use the configured repository rather than the process CWD:
+/// callers can index any repository without changing global process state.
+pub fn extract_symbols_in_repo(
+    repo_path: &Path,
+    file_path: &Path,
+    source: &str,
+) -> anyhow::Result<Vec<CodeSymbol>> {
     let mut parser = Parser::new();
     let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
     parser.set_language(&language)?;
@@ -95,10 +108,7 @@ pub fn extract_symbols(file_path: &Path, source: &str) -> anyhow::Result<Vec<Cod
     let mut standalone_comment_ranges: Vec<(usize, usize)> = Vec::new();
     let mut import_nodes: Vec<usize> = Vec::new();
 
-    let file_path_str = canonicalize_file_path(
-        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        file_path,
-    );
+    let file_path_str = canonicalize_file_path(repo_path, file_path);
 
     while let Some(m) = matches.next() {
         let captures = m.captures;
@@ -793,7 +803,11 @@ use std::sync::Arc;
         let symbols = super::extract_symbols(file_path, CHECKOUT_FIXTURE)
             .expect("should extract symbols from checkout fixture");
 
-        let sym = find_symbol(&symbols, &super::SymbolKind::Function, "create_checkout_session");
+        let sym = find_symbol(
+            &symbols,
+            &super::SymbolKind::Function,
+            "create_checkout_session",
+        );
 
         assert_eq!(sym.identifier, "src/checkout.rs::create_checkout_session");
         assert_eq!(sym.file_path, "src/checkout.rs");
@@ -810,7 +824,9 @@ use std::sync::Arc;
 
         // signature in symbol text
         assert!(
-            sym.text.contains("fn create_checkout_session(cart: &HashMap<String, i32>) -> Result<String, String>"),
+            sym.text.contains(
+                "fn create_checkout_session(cart: &HashMap<String, i32>) -> Result<String, String>"
+            ),
             "text should contain signature; got:\n{}",
             sym.text
         );
@@ -826,8 +842,8 @@ use std::sync::Arc;
     #[test]
     fn extract_symbols_supporting_type() {
         let file_path = std::path::Path::new("src/checkout.rs");
-        let symbols = super::extract_symbols(file_path, CHECKOUT_FIXTURE)
-            .expect("should extract symbols");
+        let symbols =
+            super::extract_symbols(file_path, CHECKOUT_FIXTURE).expect("should extract symbols");
 
         let gw = find_symbol(&symbols, &super::SymbolKind::Struct, "PaymentGateway");
         assert_eq!(gw.identifier, "src/checkout.rs::PaymentGateway");
@@ -845,8 +861,8 @@ use std::sync::Arc;
     #[test]
     fn extract_symbols_nested_module_and_impl() {
         let file_path = std::path::Path::new("src/checkout.rs");
-        let symbols = super::extract_symbols(file_path, CHECKOUT_FIXTURE)
-            .expect("should extract symbols");
+        let symbols =
+            super::extract_symbols(file_path, CHECKOUT_FIXTURE).expect("should extract symbols");
 
         let helper = find_symbol(&symbols, &super::SymbolKind::Function, "payments::helper");
         assert_eq!(helper.identifier, "src/checkout.rs::payments::helper");
@@ -855,7 +871,10 @@ use std::sync::Arc;
         assert!(helper.embed);
 
         let method = find_symbol(&symbols, &super::SymbolKind::ImplMethod, "process_payment");
-        assert_eq!(method.identifier, "src/checkout.rs::PaymentGateway::process_payment");
+        assert_eq!(
+            method.identifier,
+            "src/checkout.rs::PaymentGateway::process_payment"
+        );
         assert_eq!(method.line_start, 27);
         assert_eq!(method.line_end, 29);
         assert!(method.embed);
@@ -864,8 +883,8 @@ use std::sync::Arc;
     #[test]
     fn extract_symbols_standalone_comments_contract() {
         let file_path = std::path::Path::new("src/checkout.rs");
-        let symbols = super::extract_symbols(file_path, CHECKOUT_FIXTURE)
-            .expect("should extract symbols");
+        let symbols =
+            super::extract_symbols(file_path, CHECKOUT_FIXTURE).expect("should extract symbols");
 
         let comments: Vec<_> = symbols
             .iter()
@@ -891,8 +910,8 @@ use std::sync::Arc;
     #[test]
     fn extract_symbols_imports_contract() {
         let file_path = std::path::Path::new("src/checkout.rs");
-        let symbols = super::extract_symbols(file_path, CHECKOUT_FIXTURE)
-            .expect("should extract symbols");
+        let symbols =
+            super::extract_symbols(file_path, CHECKOUT_FIXTURE).expect("should extract symbols");
 
         let imports: Vec<_> = symbols
             .iter()

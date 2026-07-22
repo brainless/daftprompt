@@ -165,7 +165,8 @@ fn chunk_markdown(file_path: &str, source: &str) -> Vec<DocumentChunk> {
 
         // If the section itself is too large, split at paragraph boundaries
         if text.len() > MAX_CHUNK_BYTES {
-            let sub_chunks = split_at_paragraphs(file_path, &text, start_line, heading_path.as_deref());
+            let sub_chunks =
+                split_at_paragraphs(file_path, &text, start_line, heading_path.as_deref());
             for mut chunk in sub_chunks {
                 chunk.ordinal = *ordinal;
                 *ordinal += 1;
@@ -191,10 +192,7 @@ fn chunk_markdown(file_path: &str, source: &str) -> Vec<DocumentChunk> {
         let line_no = i + 1;
 
         // Detect ATX headings: lines starting with 1-6 '#' characters
-        let heading_level = line
-            .chars()
-            .take_while(|&c| c == '#')
-            .count();
+        let heading_level = line.chars().take_while(|&c| c == '#').count();
 
         if heading_level >= 1 && heading_level <= 6 {
             // Check that there's a space after the hashes (or it's the whole line)
@@ -259,12 +257,8 @@ fn chunk_plain_text(file_path: &str, source: &str) -> Vec<DocumentChunk> {
             // Paragraph boundary
             let text = current_lines.join("\n");
             if text.len() > MAX_CHUNK_BYTES {
-                let sub_chunks = split_at_bounded_windows(
-                    file_path,
-                    &text,
-                    current_start,
-                    &mut ordinal,
-                );
+                let sub_chunks =
+                    split_at_bounded_windows(file_path, &text, current_start, &mut ordinal);
                 chunks.extend(sub_chunks);
             } else {
                 let end_line = current_start + current_lines.len() - 1;

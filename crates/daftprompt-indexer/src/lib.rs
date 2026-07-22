@@ -236,7 +236,13 @@ impl Indexer {
             let abs_str = abs_path.to_string_lossy();
             let stem: String = abs_str
                 .chars()
-                .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+                .map(|c| {
+                    if c.is_alphanumeric() {
+                        c.to_ascii_lowercase()
+                    } else {
+                        '_'
+                    }
+                })
                 .collect();
             let hash = {
                 let mut h: u64 = 0;
@@ -395,12 +401,6 @@ impl Indexer {
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
 
-            if let Some((stored_mtime, _stored_hash)) = db::code_file_get(&self.db, &canonical)? {
-                if stored_mtime == mtime {
-                    continue;
-                }
-            }
-
             let source = match std::fs::read_to_string(file_path) {
                 Ok(s) => s,
                 Err(e) => {
@@ -411,6 +411,8 @@ impl Indexer {
 
             let hash = db::content_hash(source.as_bytes());
 
+            // Content hashes are authoritative: filesystem mtimes may have
+            // only second precision, so an edit can share its prior mtime.
             if let Some((_stored_mtime, stored_hash)) = db::code_file_get(&self.db, &canonical)? {
                 if stored_hash == hash {
                     db::code_file_upsert(&self.db, &canonical, mtime, &hash)?;
@@ -422,7 +424,7 @@ impl Indexer {
 
             db::delete_code_file_items(&tx, &canonical)?;
 
-            let symbols = match code::extract_symbols(file_path, &source) {
+            let symbols = match code::extract_symbols_in_repo(&self.repo_path, file_path, &source) {
                 Ok(s) => s,
                 Err(e) => {
                     log::warn!("Failed to parse {}: {}", file_path.display(), e);
@@ -761,8 +763,7 @@ impl Indexer {
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
 
-            if let Some((stored_mtime, _stored_hash)) =
-                db::document_file_get(&self.db, &canonical)?
+            if let Some((stored_mtime, _stored_hash)) = db::document_file_get(&self.db, &canonical)?
             {
                 if stored_mtime == mtime {
                     continue;
@@ -783,8 +784,7 @@ impl Indexer {
 
             let hash = db::content_hash(source.as_bytes());
 
-            if let Some((_stored_mtime, stored_hash)) =
-                db::document_file_get(&self.db, &canonical)?
+            if let Some((_stored_mtime, stored_hash)) = db::document_file_get(&self.db, &canonical)?
             {
                 if stored_hash == hash {
                     db::document_file_upsert(&self.db, &canonical, mtime, &hash)?;
@@ -798,8 +798,7 @@ impl Indexer {
                 .unwrap_or("")
                 .to_ascii_lowercase();
 
-            let chunks =
-                documents::extract_document_chunks(&canonical, &source, &extension);
+            let chunks = documents::extract_document_chunks(&canonical, &source, &extension);
 
             let tx = self.db.transaction()?;
 
@@ -989,21 +988,19 @@ impl Indexer {
         // Gather FTS candidates from all three sources
         let fts_commits = db::search_fts_filtered(&self.db, query, "commit", limit_per_source)?;
         let fts_code = db::search_fts_filtered(&self.db, query, "code", limit_per_source)?;
-        let fts_documents =
-            db::search_fts_filtered(&self.db, query, "document", limit_per_source)?;
+        let fts_documents = db::search_fts_filtered(&self.db, query, "document", limit_per_source)?;
 
         // Gather vector candidates from all three vec tables
-        let (vec_commits, vec_code, vec_documents) =
-            if let Some(ref embedder) = self.embedder {
-                let query_embedding = embedder.encode_single(query);
-                (
-                    db::search_vec(&self.db, &query_embedding, limit_per_source)?,
-                    db::search_vec_code(&self.db, &query_embedding, limit_per_source)?,
-                    db::search_vec_documents(&self.db, &query_embedding, limit_per_source)?,
-                )
-            } else {
-                (Vec::new(), Vec::new(), Vec::new())
-            };
+        let (vec_commits, vec_code, vec_documents) = if let Some(ref embedder) = self.embedder {
+            let query_embedding = embedder.encode_single(query);
+            (
+                db::search_vec(&self.db, &query_embedding, limit_per_source)?,
+                db::search_vec_code(&self.db, &query_embedding, limit_per_source)?,
+                db::search_vec_documents(&self.db, &query_embedding, limit_per_source)?,
+            )
+        } else {
+            (Vec::new(), Vec::new(), Vec::new())
+        };
 
         // Build source_type lookup for all candidate IDs
         let all_fts = [&fts_commits[..], &fts_code[..], &fts_documents[..]].concat();
@@ -1137,11 +1134,6 @@ mod tests {
     use super::*;
     use std::fs;
     use std::process::Command;
-    use std::sync::Mutex;
-
-    /// Serializes tests that change CWD (process-global, so parallel tests
-    /// would race on it). All end-to-end indexer tests acquire this lock.
-    static CWD_MUTEX: Mutex<()> = Mutex::new(());
 
     /// Fixture: a small Rust source file with a function, struct, and comment.
     const FIXTURE_A: &str = r#"
@@ -1205,23 +1197,16 @@ fn calculate_total(prices: &HashMap<String, f64>) -> f64 {
     }
 
     /// Build an Indexer pointing at the repo with FTS5-only (empty model name).
-    /// Also sets CWD to the repo dir so `extract_symbols` (which uses
-    /// `std::env::current_dir()`) produces identifiers consistent with
-    /// `index_code`'s `self.repo_path` canonicalization.
     fn make_indexer(repo_dir: &std::path::Path, cache_dir: &std::path::Path) -> Indexer {
         let config = IndexerConfig {
             cache_dir: Some(cache_dir.to_path_buf()),
             model_name: String::new(),
         };
-        // extract_symbols uses CWD for identifier canonicalization; index_code
-        // uses self.repo_path. They must agree, so set CWD = repo_dir.
-        std::env::set_current_dir(repo_dir).expect("set_current_dir to repo");
         Indexer::new(repo_dir, &config).expect("Indexer::new")
     }
 
     #[test]
     fn first_index_all_tracked_files() {
-        let _guard = CWD_MUTEX.lock().unwrap();
         let (repo_dir, cache_dir) = setup_repo();
         let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
 
@@ -1244,7 +1229,6 @@ fn calculate_total(prices: &HashMap<String, f64>) -> f64 {
 
     #[test]
     fn second_unchanged_run_reports_zero_changes() {
-        let _guard = CWD_MUTEX.lock().unwrap();
         let (repo_dir, cache_dir) = setup_repo();
         let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
 
@@ -1260,7 +1244,6 @@ fn calculate_total(prices: &HashMap<String, f64>) -> f64 {
 
     #[test]
     fn touch_without_content_change_does_not_reindex() {
-        let _guard = CWD_MUTEX.lock().unwrap();
         let (repo_dir, cache_dir) = setup_repo();
         let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
 
@@ -1286,7 +1269,8 @@ fn calculate_total(prices: &HashMap<String, f64>) -> f64 {
         assert_eq!(report.symbols_indexed, 0);
 
         // code_files tracking row should still exist with the same hash
-        let canonical = code::canonicalize_file_path(repo_dir.path(), std::path::Path::new("src/cart.rs"));
+        let canonical =
+            code::canonicalize_file_path(repo_dir.path(), std::path::Path::new("src/cart.rs"));
         let db_path = {
             // open the DB directly to inspect code_files
             let db_file = {
@@ -1294,7 +1278,13 @@ fn calculate_total(prices: &HashMap<String, f64>) -> f64 {
                 let abs_str = abs.to_string_lossy();
                 let stem: String = abs_str
                     .chars()
-                    .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+                    .map(|c| {
+                        if c.is_alphanumeric() {
+                            c.to_ascii_lowercase()
+                        } else {
+                            '_'
+                        }
+                    })
                     .collect();
                 let mut h: u64 = 0;
                 for b in abs_str.bytes() {
@@ -1325,7 +1315,6 @@ fn calculate_total(prices: &HashMap<String, f64>) -> f64 {
 
     #[test]
     fn content_edit_replaces_evidence_records() {
-        let _guard = CWD_MUTEX.lock().unwrap();
         let (repo_dir, cache_dir) = setup_repo();
         let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
 
@@ -1378,7 +1367,6 @@ struct Warehouse {
 
     #[test]
     fn file_deletion_removes_records() {
-        let _guard = CWD_MUTEX.lock().unwrap();
         let (repo_dir, cache_dir) = setup_repo();
         let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
 
@@ -1466,7 +1454,6 @@ use std::sync::Arc;
 
     #[test]
     fn search_checkout_validation_returns_evidence() {
-        let _guard = CWD_MUTEX.lock().unwrap();
         let (repo_dir, cache_dir) = setup_checkout_repo();
         let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
         indexer.index_code().expect("index_code");
@@ -1504,7 +1491,6 @@ use std::sync::Arc;
 
     #[test]
     fn search_payment_gateway_returns_evidence() {
-        let _guard = CWD_MUTEX.lock().unwrap();
         let (repo_dir, cache_dir) = setup_checkout_repo();
         let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
         indexer.index_code().expect("index_code");
@@ -1539,7 +1525,6 @@ use std::sync::Arc;
 
     #[test]
     fn search_temporary_limitation_returns_comment_evidence() {
-        let _guard = CWD_MUTEX.lock().unwrap();
         let (repo_dir, cache_dir) = setup_checkout_repo();
         let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
         indexer.index_code().expect("index_code");
@@ -1577,7 +1562,6 @@ use std::sync::Arc;
 
     #[test]
     fn untracked_rs_file_is_excluded() {
-        let _guard = CWD_MUTEX.lock().unwrap();
         let (repo_dir, cache_dir) = setup_repo();
 
         // Write an untracked .rs file (not git-added)
