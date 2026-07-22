@@ -1132,6 +1132,7 @@ fn chrono_now() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use filetime::{set_file_mtime, FileTime};
     use std::fs;
     use std::process::Command;
 
@@ -1249,68 +1250,33 @@ fn calculate_total(prices: &HashMap<String, f64>) -> f64 {
 
         indexer.index_code().expect("first index");
 
-        // Touch a file: update mtime but keep content identical
         let path = repo_dir.path().join("src/cart.rs");
         let content = fs::read_to_string(&path).unwrap();
-        // Write same content back — filesystem mtime will update
-        fs::write(&path, &content).unwrap();
+        let canonical =
+            code::canonicalize_file_path(repo_dir.path(), std::path::Path::new("src/cart.rs"));
+        let (old_mtime, old_hash) = db::code_file_get(&indexer.db, &canonical)
+            .expect("read initial code_files row")
+            .expect("initial code_files row should exist");
 
-        // Re-add to git index so it's still tracked
-        git(repo_dir.path(), &["add", "src/cart.rs"]);
+        // Set a known later timestamp rather than relying on filesystem clock
+        // precision; content remains identical, so this must not re-index items.
+        let updated_mtime = old_mtime + 2;
+        set_file_mtime(&path, FileTime::from_unix_time(updated_mtime, 0)).expect("set later mtime");
 
         let report = indexer.index_code().expect("second index after touch");
 
-        // The mtime changed, so the file passes the mtime check, but the
-        // content hash is the same so the indexer skips re-inserting items.
         assert_eq!(
             report.files_changed, 0,
             "touch-only should not count as changed"
         );
         assert_eq!(report.symbols_indexed, 0);
 
-        // code_files tracking row should still exist with the same hash
-        let canonical =
-            code::canonicalize_file_path(repo_dir.path(), std::path::Path::new("src/cart.rs"));
-        let db_path = {
-            // open the DB directly to inspect code_files
-            let db_file = {
-                let abs = fs::canonicalize(repo_dir.path()).unwrap();
-                let abs_str = abs.to_string_lossy();
-                let stem: String = abs_str
-                    .chars()
-                    .map(|c| {
-                        if c.is_alphanumeric() {
-                            c.to_ascii_lowercase()
-                        } else {
-                            '_'
-                        }
-                    })
-                    .collect();
-                let mut h: u64 = 0;
-                for b in abs_str.bytes() {
-                    h = h.wrapping_mul(31).wrapping_add(b as u64);
-                }
-                let hash = format!("{:06x}", h & 0xFFFFFF);
-                let slug = format!("{}_{}", stem, hash);
-                cache_dir.path().join(format!("{}.db", slug))
-            };
-            let conn = rusqlite::Connection::open_with_flags(
-                &db_file,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-            )
-            .unwrap();
-            let row: Option<(i64, String)> = conn
-                .query_row(
-                    "SELECT mtime, content_hash FROM code_files WHERE file_path = ?",
-                    [&canonical],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .ok();
-            row
-        };
-        assert!(db_path.is_some(), "code_files row should exist");
-        let (_, hash) = db_path.unwrap();
-        assert_eq!(hash, db::content_hash(content.as_bytes()));
+        let (stored_mtime, stored_hash) = db::code_file_get(&indexer.db, &canonical)
+            .expect("read updated code_files row")
+            .expect("updated code_files row should exist");
+        assert_eq!(stored_mtime, updated_mtime, "tracking mtime should update");
+        assert_eq!(stored_hash, old_hash, "content hash should not change");
+        assert_eq!(stored_hash, db::content_hash(content.as_bytes()));
     }
 
     #[test]

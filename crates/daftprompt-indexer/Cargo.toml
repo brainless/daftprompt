@@ -20,3 +20,4 @@ gix = { path = "../../../gitoxide/gix", default-features = false, features = ["b
 
 [dev-dependencies]
 tempfile = "3"
+filetime = "0.2"
