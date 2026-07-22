@@ -80,7 +80,7 @@ All fixtures should be intentionally small and describe a user-visible capabilit
 ### Task 3: Add deterministic evidence-retrieval tests
 
 **Priority:** High  
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 
 - Use the end-to-end fixture repository to test `search_code_text()` / FTS5-only retrieval.
 - Add a small set of wording that reflects the intended user questions, including at least one product-focused query and one implementation-focused query.
@@ -97,9 +97,9 @@ All fixtures should be intentionally small and describe a user-visible capabilit
 
 **Acceptance Criteria:**
 
-- [ ] Each query returns at least one expected code evidence record via FTS5 without an embedder.
-- [ ] Assertions verify the result is inspectable evidence, not merely a keyword-containing row.
-- [ ] The test suite does not depend on the current embedding model or its exact ranking behavior.
+- [x] Each query returns at least one expected code evidence record via FTS5 without an embedder.
+- [x] Assertions verify the result is inspectable evidence, not merely a keyword-containing row.
+- [x] The test suite does not depend on the current embedding model or its exact ranking behavior.
 
 ### Task 4: Verify and document the test foundation
 
@@ -149,6 +149,6 @@ These are intentionally deferred. Revisit them after the test foundation is comp
 | File | Change |
 |---|---|
 | `crates/daftprompt-indexer/src/code.rs` | Extend Rust evidence-extraction tests and add/reuse fixture helpers as appropriate. |
-| `crates/daftprompt-indexer/src/lib.rs` | Modified `Indexer::new` to respect `config.cache_dir` when set (test-friendly DB path). Fixed init_schema ordering (call before repo_meta_get so fresh DBs work). Added 6 end-to-end integration tests: first index, unchanged re-index, touch-without-content-change, content edit, file deletion, untracked file exclusion. |
+| `crates/daftprompt-indexer/src/lib.rs` | Modified `Indexer::new` to respect `config.cache_dir` when set (test-friendly DB path). Fixed init_schema ordering (call before repo_meta_get so fresh DBs work). Added 6 end-to-end integration tests: first index, unchanged re-index, touch-without-content-change, content edit, file deletion, untracked file exclusion. Added 3 FTS5-only evidence-retrieval tests using the checkout fixture: checkout validation, payment gateway, temporary limitation. |
 | `crates/daftprompt-indexer/Cargo.toml` | Added `tempfile = "3"` as `[dev-dependencies]`. |
 | `epics/008-code-indexer-test-foundation.md` | Track the test foundation and deferred multi-language/retrieval work. |

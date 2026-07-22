@@ -1403,6 +1403,178 @@ struct Warehouse {
         );
     }
 
+    /// Checkout feature fixture: covers product capability, supporting type,
+    /// nested module, impl method, standalone comment, doc comments, and imports.
+    /// Mirrors the CHECKOUT_FIXTURE in code.rs extraction tests.
+    const CHECKOUT_FIXTURE: &str = r#"use std::collections::HashMap;
+
+/// Process a checkout session for the given cart.
+///
+/// Validates the cart contents, applies any active discounts,
+/// and delegates to the payment provider for charging.
+fn create_checkout_session(cart: &HashMap<String, i32>) -> Result<String, String> {
+    if cart.is_empty() {
+        return Err("cart is empty".into());
+    }
+    let total: i32 = cart.values().sum();
+    if total <= 0 {
+        return Err("total must be positive".into());
+    }
+    Ok(format!("session_{}", total))
+}
+
+mod payments {
+    pub fn helper() -> bool {
+        true
+    }
+}
+
+struct PaymentGateway;
+
+impl PaymentGateway {
+    fn process_payment(&self) -> bool {
+        true
+    }
+}
+
+const MAX_RETRIES: u32 = 3;
+
+// TODO: temporary limitation — only USD currency is supported right now
+use std::sync::Arc;
+"#;
+
+    /// Create a temp Git repo with the checkout fixture committed as src/checkout.rs.
+    /// Returns (repo_dir, cache_dir) — both TempDir so they clean up.
+    fn setup_checkout_repo() -> (tempfile::TempDir, tempfile::TempDir) {
+        let repo_dir = tempfile::tempdir().expect("repo tempdir");
+        let cache_dir = tempfile::tempdir().expect("cache tempdir");
+
+        git(repo_dir.path(), &["init"]);
+        git(repo_dir.path(), &["config", "user.email", "test@test.com"]);
+        git(repo_dir.path(), &["config", "user.name", "Test"]);
+
+        fs::create_dir_all(repo_dir.path().join("src")).unwrap();
+        fs::write(repo_dir.path().join("src/checkout.rs"), CHECKOUT_FIXTURE).unwrap();
+
+        git(repo_dir.path(), &["add", "."]);
+        git(repo_dir.path(), &["commit", "-m", "initial"]);
+
+        (repo_dir, cache_dir)
+    }
+
+    // ── Epic 008 Task 3: Deterministic evidence-retrieval tests ───────────
+
+    #[test]
+    fn search_checkout_validation_returns_evidence() {
+        let _guard = CWD_MUTEX.lock().unwrap();
+        let (repo_dir, cache_dir) = setup_checkout_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        indexer.index_code().expect("index_code");
+
+        // FTS5 default tokenizer (unicode61) doesn't stem, so "validation"
+        // won't match "validates". Using OR ensures either term matches.
+        let results = indexer
+            .search_code_text("checkout OR validation", 10)
+            .expect("search_code_text");
+
+        assert!(
+            !results.is_empty(),
+            "'checkout OR validation' should return at least one result"
+        );
+
+        let hit = results
+            .iter()
+            .find(|r| r.identifier.contains("create_checkout_session"))
+            .expect("expected create_checkout_session in results");
+
+        assert_eq!(hit.file_path, "src/checkout.rs");
+        assert!(hit.line_start > 0, "line_start should be non-zero");
+        assert!(hit.line_end >= hit.line_start, "line_end >= line_start");
+        assert!(
+            matches!(hit.symbol_kind, code::SymbolKind::Function),
+            "expected Function, got {:?}",
+            hit.symbol_kind
+        );
+        assert!(
+            hit.text.contains("checkout") || hit.text.contains("valid"),
+            "text should contain relevant content; got:\n{}",
+            hit.text
+        );
+    }
+
+    #[test]
+    fn search_payment_gateway_returns_evidence() {
+        let _guard = CWD_MUTEX.lock().unwrap();
+        let (repo_dir, cache_dir) = setup_checkout_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        indexer.index_code().expect("index_code");
+
+        // FTS5 unicode61 tokenizes "PaymentGateway" as a single token, so
+        // the phrase "payment gateway" won't match. Using OR catches the
+        // struct via "payment" (in its doc comment and identifier) and the
+        // impl method via "payment" (in its parent type name).
+        let results = indexer
+            .search_code_text("payment OR gateway", 10)
+            .expect("search_code_text");
+
+        assert!(
+            !results.is_empty(),
+            "'payment OR gateway' should return at least one result"
+        );
+
+        let hit = results
+            .iter()
+            .find(|r| {
+                r.identifier.contains("PaymentGateway")
+                    || matches!(r.symbol_kind, code::SymbolKind::Struct)
+                    || matches!(r.symbol_kind, code::SymbolKind::ImplMethod)
+            })
+            .expect("expected PaymentGateway struct or process_payment method in results");
+
+        assert_eq!(hit.file_path, "src/checkout.rs");
+        assert!(hit.line_start > 0);
+        assert!(hit.line_end >= hit.line_start);
+        assert!(!hit.text.is_empty(), "result text should not be empty");
+    }
+
+    #[test]
+    fn search_temporary_limitation_returns_comment_evidence() {
+        let _guard = CWD_MUTEX.lock().unwrap();
+        let (repo_dir, cache_dir) = setup_checkout_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        indexer.index_code().expect("index_code");
+
+        // "temporary limitation" is a contiguous phrase in the standalone
+        // comment, so the phrase query works directly.
+        let results = indexer
+            .search_code_text("temporary limitation", 10)
+            .expect("search_code_text");
+
+        assert!(
+            !results.is_empty(),
+            "'temporary limitation' should return at least one result"
+        );
+
+        let hit = results
+            .iter()
+            .find(|r| r.text.contains("temporary limitation") || r.text.contains("USD"))
+            .expect("expected the standalone comment with 'temporary limitation' in results");
+
+        assert_eq!(hit.file_path, "src/checkout.rs");
+        assert!(hit.line_start > 0);
+        assert!(hit.line_end >= hit.line_start);
+        assert!(
+            matches!(hit.symbol_kind, code::SymbolKind::Comments),
+            "expected Comments kind, got {:?}",
+            hit.symbol_kind
+        );
+        assert!(
+            hit.text.contains("USD currency"),
+            "comment text should mention USD currency; got:\n{}",
+            hit.text
+        );
+    }
+
     #[test]
     fn untracked_rs_file_is_excluded() {
         let _guard = CWD_MUTEX.lock().unwrap();
