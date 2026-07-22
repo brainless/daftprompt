@@ -41,7 +41,7 @@ All fixtures should be intentionally small and describe a user-visible capabilit
 ### Task 1: Add reusable Rust evidence fixtures and extraction assertions
 
 **Priority:** High  
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 
 - Add compact Rust fixtures (inline or file-backed) that model a product capability, a supporting type, imports, attached documentation, standalone comments, nested modules, and an impl method.
 - Extend extraction tests to assert the evidence contract for each produced symbol:
@@ -55,9 +55,9 @@ All fixtures should be intentionally small and describe a user-visible capabilit
 
 **Acceptance Criteria:**
 
-- [ ] A fixture representing a product capability produces symbols and comments that explain both intent and implementation location.
-- [ ] Assertions verify metadata-bearing fields and text content, not only the number of extracted symbols.
-- [ ] Existing Rust extraction behavior remains covered, including nested namespaces and trait default methods.
+- [x] A fixture representing a product capability produces symbols and comments that explain both intent and implementation location.
+- [x] Assertions verify metadata-bearing fields and text content, not only the number of extracted symbols.
+- [x] Existing Rust extraction behavior remains covered, including nested namespaces and trait default methods.
 
 ### Task 2: Add no-embedder end-to-end indexing and incremental tests
 

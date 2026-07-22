@@ -725,4 +725,193 @@ trait Greeter {
             "body excerpt should be truncated"
         );
     }
+
+    // ── Epic 008 Task 1: Evidence fixtures and extraction assertions ─────────
+
+    /// Small but realistic "checkout" feature covering all extraction paths:
+    /// product capability function, supporting type, nested module, impl method,
+    /// standalone comment, doc comments, and imports.
+    const CHECKOUT_FIXTURE: &str = r#"use std::collections::HashMap;
+
+/// Process a checkout session for the given cart.
+///
+/// Validates the cart contents, applies any active discounts,
+/// and delegates to the payment provider for charging.
+fn create_checkout_session(cart: &HashMap<String, i32>) -> Result<String, String> {
+    if cart.is_empty() {
+        return Err("cart is empty".into());
+    }
+    let total: i32 = cart.values().sum();
+    if total <= 0 {
+        return Err("total must be positive".into());
+    }
+    Ok(format!("session_{}", total))
+}
+
+mod payments {
+    pub fn helper() -> bool {
+        true
+    }
+}
+
+struct PaymentGateway;
+
+impl PaymentGateway {
+    fn process_payment(&self) -> bool {
+        true
+    }
+}
+
+const MAX_RETRIES: u32 = 3;
+
+// TODO: temporary limitation — only USD currency is supported right now
+use std::sync::Arc;
+"#;
+
+    fn find_symbol<'a>(
+        symbols: &'a [super::CodeSymbol],
+        kind: &super::SymbolKind,
+        name_part: &str,
+    ) -> &'a super::CodeSymbol {
+        symbols
+            .iter()
+            .find(|s| &s.symbol_kind == kind && s.identifier.contains(name_part))
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected {kind:?} symbol containing '{name_part}'; got {:?}",
+                    symbols
+                        .iter()
+                        .map(|s| (&s.symbol_kind, &s.identifier))
+                        .collect::<Vec<_>>()
+                )
+            })
+    }
+
+    #[test]
+    fn extract_symbols_product_capability() {
+        let file_path = std::path::Path::new("src/checkout.rs");
+        let symbols = super::extract_symbols(file_path, CHECKOUT_FIXTURE)
+            .expect("should extract symbols from checkout fixture");
+
+        let sym = find_symbol(&symbols, &super::SymbolKind::Function, "create_checkout_session");
+
+        assert_eq!(sym.identifier, "src/checkout.rs::create_checkout_session");
+        assert_eq!(sym.file_path, "src/checkout.rs");
+        assert_eq!(sym.line_start, 7);
+        assert_eq!(sym.line_end, 16);
+        assert!(sym.embed);
+
+        // doc comment in symbol text
+        assert!(
+            sym.text.contains("/// Process a checkout session"),
+            "text should contain doc comment; got:\n{}",
+            sym.text
+        );
+
+        // signature in symbol text
+        assert!(
+            sym.text.contains("fn create_checkout_session(cart: &HashMap<String, i32>) -> Result<String, String>"),
+            "text should contain signature; got:\n{}",
+            sym.text
+        );
+
+        // body excerpt contains validation logic
+        assert!(
+            sym.text.contains("cart.is_empty()"),
+            "text should contain body excerpt with validation; got:\n{}",
+            sym.text
+        );
+    }
+
+    #[test]
+    fn extract_symbols_supporting_type() {
+        let file_path = std::path::Path::new("src/checkout.rs");
+        let symbols = super::extract_symbols(file_path, CHECKOUT_FIXTURE)
+            .expect("should extract symbols");
+
+        let gw = find_symbol(&symbols, &super::SymbolKind::Struct, "PaymentGateway");
+        assert_eq!(gw.identifier, "src/checkout.rs::PaymentGateway");
+        assert_eq!(gw.file_path, "src/checkout.rs");
+        assert_eq!(gw.line_start, 24);
+        assert_eq!(gw.line_end, 24);
+        assert!(gw.embed);
+
+        let retries = find_symbol(&symbols, &super::SymbolKind::Const, "MAX_RETRIES");
+        assert_eq!(retries.identifier, "src/checkout.rs::MAX_RETRIES");
+        assert!(retries.text.contains("const MAX_RETRIES: u32 = 3"));
+        assert!(retries.embed);
+    }
+
+    #[test]
+    fn extract_symbols_nested_module_and_impl() {
+        let file_path = std::path::Path::new("src/checkout.rs");
+        let symbols = super::extract_symbols(file_path, CHECKOUT_FIXTURE)
+            .expect("should extract symbols");
+
+        let helper = find_symbol(&symbols, &super::SymbolKind::Function, "payments::helper");
+        assert_eq!(helper.identifier, "src/checkout.rs::payments::helper");
+        assert_eq!(helper.line_start, 19);
+        assert_eq!(helper.line_end, 21);
+        assert!(helper.embed);
+
+        let method = find_symbol(&symbols, &super::SymbolKind::ImplMethod, "process_payment");
+        assert_eq!(method.identifier, "src/checkout.rs::PaymentGateway::process_payment");
+        assert_eq!(method.line_start, 27);
+        assert_eq!(method.line_end, 29);
+        assert!(method.embed);
+    }
+
+    #[test]
+    fn extract_symbols_standalone_comments_contract() {
+        let file_path = std::path::Path::new("src/checkout.rs");
+        let symbols = super::extract_symbols(file_path, CHECKOUT_FIXTURE)
+            .expect("should extract symbols");
+
+        let comments: Vec<_> = symbols
+            .iter()
+            .filter(|s| s.symbol_kind == super::SymbolKind::Comments)
+            .collect();
+        assert_eq!(comments.len(), 1, "expected exactly one Comments record");
+
+        let rec = &comments[0];
+        assert!(!rec.embed, "Comments record must have embed=false");
+        assert_eq!(rec.identifier, "src/checkout.rs::__comments__");
+        assert!(
+            rec.text.contains("TODO: temporary limitation"),
+            "comments text should contain TODO; got:\n{}",
+            rec.text
+        );
+        assert!(
+            rec.text.contains("only USD currency"),
+            "comments text should contain the limitation note; got:\n{}",
+            rec.text
+        );
+    }
+
+    #[test]
+    fn extract_symbols_imports_contract() {
+        let file_path = std::path::Path::new("src/checkout.rs");
+        let symbols = super::extract_symbols(file_path, CHECKOUT_FIXTURE)
+            .expect("should extract symbols");
+
+        let imports: Vec<_> = symbols
+            .iter()
+            .filter(|s| s.symbol_kind == super::SymbolKind::Imports)
+            .collect();
+        assert_eq!(imports.len(), 1, "expected exactly one Imports record");
+
+        let rec = &imports[0];
+        assert!(!rec.embed, "Imports record must have embed=false");
+        assert_eq!(rec.identifier, "src/checkout.rs::__imports__");
+        assert!(
+            rec.text.contains("use std::collections::HashMap"),
+            "imports should contain HashMap import; got:\n{}",
+            rec.text
+        );
+        assert!(
+            rec.text.contains("use std::sync::Arc"),
+            "imports should contain Arc import; got:\n{}",
+            rec.text
+        );
+    }
 }
