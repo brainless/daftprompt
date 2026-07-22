@@ -17,3 +17,6 @@ tree-sitter-rust = "0.24"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 chrono = "0.4"
 gix = { path = "../../../gitoxide/gix", default-features = false, features = ["basic", "sha1"] }
+
+[dev-dependencies]
+tempfile = "3"

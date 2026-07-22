@@ -62,7 +62,7 @@ All fixtures should be intentionally small and describe a user-visible capabilit
 ### Task 2: Add no-embedder end-to-end indexing and incremental tests
 
 **Priority:** High  
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 
 - Add a test helper that creates a temporary Git repository, commits tracked Rust fixture files, and constructs an `Indexer` with a temporary cache directory.
 - Run the indexer with no embedder/model download, exercising the same `index_code()` path used in production.
@@ -71,11 +71,11 @@ All fixtures should be intentionally small and describe a user-visible capabilit
 
 **Acceptance Criteria:**
 
-- [ ] Only committed/tracked `.rs` files are indexed; an untracked `.rs` file is excluded.
-- [ ] A second unchanged run reports zero changed files.
-- [ ] A timestamp-only change updates tracking without replacing indexed content.
-- [ ] Content edits replace the affected file's evidence records, and deletion removes its records.
-- [ ] Tests are hermetic: no network access, persistent cache writes, or embedding-model dependency.
+- [x] Only committed/tracked `.rs` files are indexed; an untracked `.rs` file is excluded.
+- [x] A second unchanged run reports zero changed files.
+- [x] A timestamp-only change updates tracking without replacing indexed content.
+- [x] Content edits replace the affected file's evidence records, and deletion removes its records.
+- [x] Tests are hermetic: no network access, persistent cache writes, or embedding-model dependency.
 
 ### Task 3: Add deterministic evidence-retrieval tests
 
@@ -149,6 +149,6 @@ These are intentionally deferred. Revisit them after the test foundation is comp
 | File | Change |
 |---|---|
 | `crates/daftprompt-indexer/src/code.rs` | Extend Rust evidence-extraction tests and add/reuse fixture helpers as appropriate. |
-| `crates/daftprompt-indexer/src/lib.rs` or integration-test module | Add hermetic end-to-end code indexing, incremental update, and deterministic FTS evidence-retrieval tests. |
-| `crates/daftprompt-indexer/Cargo.toml` | Add test-only dependencies only if required for temporary repository/file helpers. |
+| `crates/daftprompt-indexer/src/lib.rs` | Modified `Indexer::new` to respect `config.cache_dir` when set (test-friendly DB path). Fixed init_schema ordering (call before repo_meta_get so fresh DBs work). Added 6 end-to-end integration tests: first index, unchanged re-index, touch-without-content-change, content edit, file deletion, untracked file exclusion. |
+| `crates/daftprompt-indexer/Cargo.toml` | Added `tempfile = "3"` as `[dev-dependencies]`. |
 | `epics/008-code-indexer-test-foundation.md` | Track the test foundation and deferred multi-language/retrieval work. |

@@ -229,8 +229,32 @@ impl Indexer {
             db::register_sqlite_vec();
         });
 
-        let db_path = db::db_path_for_repo(repo_path)?;
+        let db_path = if let Some(ref cache_dir) = config.cache_dir {
+            // Custom cache dir: derive a DB filename from the repo path, same
+            // slug logic as db_path_for_repo but rooted at cache_dir.
+            let abs_path = std::fs::canonicalize(repo_path)?;
+            let abs_str = abs_path.to_string_lossy();
+            let stem: String = abs_str
+                .chars()
+                .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+                .collect();
+            let hash = {
+                let mut h: u64 = 0;
+                for b in abs_str.bytes() {
+                    h = h.wrapping_mul(31).wrapping_add(b as u64);
+                }
+                format!("{:06x}", h & 0xFFFFFF)
+            };
+            let slug = format!("{}_{}", stem, hash);
+            std::fs::create_dir_all(cache_dir)?;
+            cache_dir.join(format!("{}.db", slug))
+        } else {
+            db::db_path_for_repo(repo_path)?
+        };
         let db = Connection::open(&db_path)?;
+
+        // Create tables first so repo_meta reads work on a fresh DB.
+        db::init_schema(&db, 256)?;
 
         let embedder = match Embedder::new(&config.model_name) {
             Ok(e) => Some(e),
@@ -249,7 +273,10 @@ impl Indexer {
             }
         };
 
-        db::init_schema(&db, dim)?;
+        // Re-init with correct dimension if it differs from default.
+        if dim != 256 {
+            db::init_schema(&db, dim)?;
+        }
 
         db::repo_meta_set(&db, "embedding_dimension", &dim.to_string())?;
         db::repo_meta_set(
@@ -1103,4 +1130,304 @@ fn chrono_now() -> String {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default();
     format!("{}", d.as_secs())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::process::Command;
+    use std::sync::Mutex;
+
+    /// Serializes tests that change CWD (process-global, so parallel tests
+    /// would race on it). All end-to-end indexer tests acquire this lock.
+    static CWD_MUTEX: Mutex<()> = Mutex::new(());
+
+    /// Fixture: a small Rust source file with a function, struct, and comment.
+    const FIXTURE_A: &str = r#"
+/// Validates the cart contents before checkout.
+fn validate_cart(items: &[String]) -> bool {
+    !items.is_empty()
+}
+
+struct Cart {
+    items: Vec<String>,
+}
+"#;
+
+    /// Fixture: a second file with different symbols.
+    const FIXTURE_B: &str = r#"
+use std::collections::HashMap;
+
+// Maximum number of items allowed per cart.
+const MAX_ITEMS: usize = 100;
+
+fn calculate_total(prices: &HashMap<String, f64>) -> f64 {
+    prices.values().sum()
+}
+"#;
+
+    /// Run a git command in the given directory, panicking on failure.
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@test.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@test.com")
+            .args(args)
+            .status()
+            .expect("failed to run git");
+        assert!(status.success(), "git {:?} failed", args);
+    }
+
+    /// Create a temp dir with a Git repo, write fixture files, commit them,
+    /// and return (repo_dir, cache_dir) — both TempDir so they clean up.
+    fn setup_repo() -> (tempfile::TempDir, tempfile::TempDir) {
+        let repo_dir = tempfile::tempdir().expect("repo tempdir");
+        let cache_dir = tempfile::tempdir().expect("cache tempdir");
+
+        // init repo
+        git(repo_dir.path(), &["init"]);
+        git(repo_dir.path(), &["config", "user.email", "test@test.com"]);
+        git(repo_dir.path(), &["config", "user.name", "Test"]);
+
+        // Write fixture files
+        fs::create_dir_all(repo_dir.path().join("src")).unwrap();
+        fs::write(repo_dir.path().join("src/cart.rs"), FIXTURE_A).unwrap();
+        fs::write(repo_dir.path().join("src/pricing.rs"), FIXTURE_B).unwrap();
+
+        // commit
+        git(repo_dir.path(), &["add", "."]);
+        git(repo_dir.path(), &["commit", "-m", "initial"]);
+
+        (repo_dir, cache_dir)
+    }
+
+    /// Build an Indexer pointing at the repo with FTS5-only (empty model name).
+    /// Also sets CWD to the repo dir so `extract_symbols` (which uses
+    /// `std::env::current_dir()`) produces identifiers consistent with
+    /// `index_code`'s `self.repo_path` canonicalization.
+    fn make_indexer(repo_dir: &std::path::Path, cache_dir: &std::path::Path) -> Indexer {
+        let config = IndexerConfig {
+            cache_dir: Some(cache_dir.to_path_buf()),
+            model_name: String::new(),
+        };
+        // extract_symbols uses CWD for identifier canonicalization; index_code
+        // uses self.repo_path. They must agree, so set CWD = repo_dir.
+        std::env::set_current_dir(repo_dir).expect("set_current_dir to repo");
+        Indexer::new(repo_dir, &config).expect("Indexer::new")
+    }
+
+    #[test]
+    fn first_index_all_tracked_files() {
+        let _guard = CWD_MUTEX.lock().unwrap();
+        let (repo_dir, cache_dir) = setup_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+
+        let report = indexer.index_code().expect("index_code");
+
+        assert_eq!(report.files_scanned, 2, "should scan 2 tracked .rs files");
+        assert_eq!(report.files_changed, 2, "both files are new");
+        assert_eq!(report.files_deleted, 0);
+        assert!(report.symbols_indexed > 0, "should index some symbols");
+
+        // Verify items exist in DB via FTS search
+        let results = indexer
+            .search_code_text("validate_cart", 10)
+            .expect("search_code_text");
+        assert!(
+            !results.is_empty(),
+            "should find validate_cart via FTS after first index"
+        );
+    }
+
+    #[test]
+    fn second_unchanged_run_reports_zero_changes() {
+        let _guard = CWD_MUTEX.lock().unwrap();
+        let (repo_dir, cache_dir) = setup_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+
+        let first = indexer.index_code().expect("first index");
+        assert_eq!(first.files_changed, 2);
+
+        let second = indexer.index_code().expect("second index");
+        assert_eq!(second.files_scanned, 2);
+        assert_eq!(second.files_changed, 0, "no files changed");
+        assert_eq!(second.files_deleted, 0);
+        assert_eq!(second.symbols_indexed, 0);
+    }
+
+    #[test]
+    fn touch_without_content_change_does_not_reindex() {
+        let _guard = CWD_MUTEX.lock().unwrap();
+        let (repo_dir, cache_dir) = setup_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+
+        indexer.index_code().expect("first index");
+
+        // Touch a file: update mtime but keep content identical
+        let path = repo_dir.path().join("src/cart.rs");
+        let content = fs::read_to_string(&path).unwrap();
+        // Write same content back — filesystem mtime will update
+        fs::write(&path, &content).unwrap();
+
+        // Re-add to git index so it's still tracked
+        git(repo_dir.path(), &["add", "src/cart.rs"]);
+
+        let report = indexer.index_code().expect("second index after touch");
+
+        // The mtime changed, so the file passes the mtime check, but the
+        // content hash is the same so the indexer skips re-inserting items.
+        assert_eq!(
+            report.files_changed, 0,
+            "touch-only should not count as changed"
+        );
+        assert_eq!(report.symbols_indexed, 0);
+
+        // code_files tracking row should still exist with the same hash
+        let canonical = code::canonicalize_file_path(repo_dir.path(), std::path::Path::new("src/cart.rs"));
+        let db_path = {
+            // open the DB directly to inspect code_files
+            let db_file = {
+                let abs = fs::canonicalize(repo_dir.path()).unwrap();
+                let abs_str = abs.to_string_lossy();
+                let stem: String = abs_str
+                    .chars()
+                    .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+                    .collect();
+                let mut h: u64 = 0;
+                for b in abs_str.bytes() {
+                    h = h.wrapping_mul(31).wrapping_add(b as u64);
+                }
+                let hash = format!("{:06x}", h & 0xFFFFFF);
+                let slug = format!("{}_{}", stem, hash);
+                cache_dir.path().join(format!("{}.db", slug))
+            };
+            let conn = rusqlite::Connection::open_with_flags(
+                &db_file,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap();
+            let row: Option<(i64, String)> = conn
+                .query_row(
+                    "SELECT mtime, content_hash FROM code_files WHERE file_path = ?",
+                    [&canonical],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .ok();
+            row
+        };
+        assert!(db_path.is_some(), "code_files row should exist");
+        let (_, hash) = db_path.unwrap();
+        assert_eq!(hash, db::content_hash(content.as_bytes()));
+    }
+
+    #[test]
+    fn content_edit_replaces_evidence_records() {
+        let _guard = CWD_MUTEX.lock().unwrap();
+        let (repo_dir, cache_dir) = setup_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+
+        indexer.index_code().expect("first index");
+
+        // Verify original function is searchable
+        let results = indexer
+            .search_code_text("validate_cart", 10)
+            .expect("search");
+        assert!(!results.is_empty(), "should find validate_cart before edit");
+
+        // Edit the file: replace validate_cart with check_inventory
+        let new_content = r#"
+/// Checks inventory levels before shipping.
+fn check_inventory(sku: &str) -> bool {
+    sku.starts_with("INV")
+}
+
+struct Warehouse {
+    location: String,
+}
+"#;
+        let path = repo_dir.path().join("src/cart.rs");
+        fs::write(&path, new_content).unwrap();
+        git(repo_dir.path(), &["add", "src/cart.rs"]);
+        git(repo_dir.path(), &["commit", "-m", "edit cart"]);
+
+        let report = indexer.index_code().expect("index after edit");
+        assert_eq!(report.files_changed, 1, "one file was edited");
+        assert!(report.symbols_indexed > 0);
+
+        // Old function should no longer be found
+        let old_results = indexer
+            .search_code_text("validate_cart", 10)
+            .expect("search old");
+        assert!(
+            old_results.is_empty(),
+            "old function name should be gone after edit"
+        );
+
+        // New function should be found
+        let new_results = indexer
+            .search_code_text("check_inventory", 10)
+            .expect("search new");
+        assert!(
+            !new_results.is_empty(),
+            "new function should be findable after edit"
+        );
+    }
+
+    #[test]
+    fn file_deletion_removes_records() {
+        let _guard = CWD_MUTEX.lock().unwrap();
+        let (repo_dir, cache_dir) = setup_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+
+        indexer.index_code().expect("first index");
+
+        // Delete a tracked file
+        fs::remove_file(repo_dir.path().join("src/pricing.rs")).unwrap();
+        git(repo_dir.path(), &["add", "-A"]);
+        git(repo_dir.path(), &["commit", "-m", "remove pricing"]);
+
+        let report = indexer.index_code().expect("index after deletion");
+        assert_eq!(report.files_deleted, 1, "one file was deleted");
+        assert_eq!(report.files_scanned, 1, "only cart.rs remains");
+
+        // pricing.rs symbols should no longer be searchable
+        let results = indexer
+            .search_code_text("calculate_total", 10)
+            .expect("search deleted");
+        assert!(
+            results.is_empty(),
+            "deleted file's symbols should not appear"
+        );
+    }
+
+    #[test]
+    fn untracked_rs_file_is_excluded() {
+        let _guard = CWD_MUTEX.lock().unwrap();
+        let (repo_dir, cache_dir) = setup_repo();
+
+        // Write an untracked .rs file (not git-added)
+        fs::write(
+            repo_dir.path().join("src/secret.rs"),
+            "fn leaked_secret() -> &'static str { \"password\" }\n",
+        )
+        .unwrap();
+
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        let report = indexer.index_code().expect("index_code");
+
+        // Only the 2 committed files should be scanned
+        assert_eq!(report.files_scanned, 2, "untracked file must be excluded");
+
+        // The untracked function should not be searchable
+        let results = indexer
+            .search_code_text("leaked_secret", 10)
+            .expect("search");
+        assert!(
+            results.is_empty(),
+            "untracked file's symbols must not be indexed"
+        );
+    }
 }
