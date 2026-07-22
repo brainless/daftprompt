@@ -104,7 +104,7 @@ All fixtures should be intentionally small and describe a user-visible capabilit
 ### Task 4: Verify and document the test foundation
 
 **Priority:** Medium  
-**Status:** ⬜ Not Started
+**Status:** ✅ Done
 
 - Run `cargo test --workspace` and `cargo check --workspace`.
 - Add concise comments only where test helpers encode non-obvious Git/indexer setup constraints.
@@ -112,9 +112,15 @@ All fixtures should be intentionally small and describe a user-visible capabilit
 
 **Acceptance Criteria:**
 
-- [ ] `cargo test --workspace` passes.
-- [ ] `cargo check --workspace` passes.
-- [ ] Test helpers are reusable for a second language without duplicating temporary-repository setup.
+- [x] `cargo test --workspace` passes (57 tests: 46 indexer + 11 main).
+- [x] `cargo check --workspace` passes.
+- [x] Test helpers are reusable for a second language without duplicating temporary-repository setup.
+
+**Multi-language gaps noted:**
+- `extract_symbols()` is hardcoded to `tree_sitter_rust::LANGUAGE` and `RUST_QUERY` — needs language dispatch or per-language variants.
+- `list_tracked_rust_files()` is `.rs`-only — needs a generic `list_tracked_files(repo_path, extension)`.
+- `index_code()` calls Rust-specific discovery/extraction — needs a router mapping extensions to grammar+query sets.
+- `setup_repo()` / `setup_checkout_repo()` helpers hardcode `.rs` paths — parameterize for reuse.
 
 ## Future Follow-ups
 
