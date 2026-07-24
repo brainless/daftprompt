@@ -201,6 +201,14 @@ fn main() -> anyhow::Result<()> {
                 SymbolKind::Macro => "macro",
                 SymbolKind::Comments => "comments",
                 SymbolKind::Imports => "imports",
+                // Epic 009 Task 1: TypeScript/TSX kinds. These never
+                // appear for Rust-only indexes, but the CLI must compile
+                // against the shared `SymbolKind` enum.
+                SymbolKind::Class => "class",
+                SymbolKind::Interface => "iface",
+                SymbolKind::Method => "method",
+                SymbolKind::Variable => "var",
+                SymbolKind::Unknown(_) => "?",
             };
             println!(
                 "[{:.3}] {:<8} {}:{}       {} — {} [Code]",
@@ -324,6 +332,12 @@ fn main() -> anyhow::Result<()> {
                         SymbolKind::Macro => "macro",
                         SymbolKind::Comments => "comments",
                         SymbolKind::Imports => "imports",
+                        // Epic 009 Task 1: TS/TSX kinds + Unknown fallback.
+                        SymbolKind::Class => "class",
+                        SymbolKind::Interface => "iface",
+                        SymbolKind::Method => "method",
+                        SymbolKind::Variable => "var",
+                        SymbolKind::Unknown(_) => "?",
                     };
                     println!(
                         "{:<3} [{:.3}] {:<8} {}:{}       {} — {} [Code]",

@@ -3,7 +3,7 @@ pub mod db;
 pub mod documents;
 pub mod embed;
 
-pub use code::SymbolKind;
+pub use code::{CodeLanguage, SymbolKind};
 
 use std::path::{Path, PathBuf};
 use std::sync::Once;
@@ -104,6 +104,12 @@ pub struct Indexer {
     db: Connection,
     embedder: Option<Embedder>,
     repo_path: PathBuf,
+    /// Per-dialect extractors built once at construction. The Rust
+    /// extractor is always present; TypeScript/Tsx entries land in
+    /// Task 2/3 once their grammars are wired (Epic 009 Task 1 only
+    /// constructs the Rust one, so production indexing stays Rust-only
+    /// for now).
+    rust_extractor: code::CodeExtractor,
 }
 
 struct ItemDetail {
@@ -142,23 +148,13 @@ fn extract_short_hash(metadata: &Option<String>) -> String {
         .unwrap_or_default()
 }
 
+/// Parse a stored symbol-kind key.
+///
+/// Epic 009 Design Decision #3: unknown values no longer collapse to
+/// `Function`; they surface as `SymbolKind::Unknown(original)` so callers
+/// can preserve diagnostic context.
 fn parse_symbol_kind(s: &str) -> code::SymbolKind {
-    match s {
-        "function" => code::SymbolKind::Function,
-        "struct" => code::SymbolKind::Struct,
-        "enum" => code::SymbolKind::Enum,
-        "trait" => code::SymbolKind::Trait,
-        "implmethod" => code::SymbolKind::ImplMethod,
-        "traitmethod" => code::SymbolKind::TraitMethod,
-        "typealias" => code::SymbolKind::TypeAlias,
-        "const" => code::SymbolKind::Const,
-        "static" => code::SymbolKind::Static,
-        "module" => code::SymbolKind::Module,
-        "macro" => code::SymbolKind::Macro,
-        "comments" => code::SymbolKind::Comments,
-        "imports" => code::SymbolKind::Imports,
-        _ => code::SymbolKind::Function,
-    }
+    code::SymbolKind::from_str_key(s)
 }
 
 fn parse_code_search_result(
@@ -297,6 +293,11 @@ impl Indexer {
             db,
             embedder,
             repo_path: std::fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.to_path_buf()),
+            // Build the Rust extractor once at indexer construction
+            // (Epic 009 Design Decision #1: queries are compiled at
+            // construction, not per file). Task 2/3 will register the
+            // TypeScript and TSX extractors alongside this one.
+            rust_extractor: code::CodeExtractor::rust(),
         })
     }
 
@@ -358,7 +359,20 @@ impl Indexer {
     }
 
     pub fn index_code(&mut self) -> anyhow::Result<CodeIndexReport> {
-        let current_files = code::list_tracked_rust_files(&self.repo_path)?;
+        // Epic 009 Design Decision #2: one tracked-file traversal that
+        // accepts the supported extension set. Task 1 only configures
+        // `.rs` here; `.ts` / `.tsx` land in Task 2/3 alongside the
+        // matching extractors. Adding them to this list before those
+        // tasks would feed .ts files into the Rust extractor, so we keep
+        // the list narrow until each dialect can actually parse them.
+        //
+        // Rejected alternative: keep `list_tracked_rust_files` and add a
+        // separate `list_tracked_ts_files` later. That would double the
+        // HEAD-tree walk and complicate deletion-set reconciliation.
+        let current_files = code::list_tracked_code_files(
+            &self.repo_path,
+            &[".rs", ".ts", ".tsx"],
+        )?;
         let indexed_files = db::code_files_all(&self.db)?;
 
         let current_set: std::collections::HashSet<String> = current_files
@@ -386,6 +400,41 @@ impl Indexer {
                 let rel = file_path.strip_prefix(&self.repo_path).unwrap_or(file_path);
                 code::canonicalize_file_path(&self.repo_path, rel)
             };
+
+            // Epic 009 Design Decision #1: production indexing must route
+            // by extension and refuse unsupported dialects rather than
+            // silently falling back to Rust parsing.
+            let extension = file_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            let language = match code::language_for_extension(extension) {
+                Some(lang) => lang,
+                None => {
+                    log::warn!(
+                        "Skipping unsupported code file extension '{}': {}",
+                        extension,
+                        file_path.display()
+                    );
+                    continue;
+                }
+            };
+
+            // Languages whose extractor is not yet wired (Task 2/3) are
+            // skipped explicitly here. The `list_tracked_code_files`
+            // extension set above already includes `.ts`/`.tsx` so we
+            // discover them; until Task 2/3 we just refuse to parse.
+            // Rejected alternative: filter the extension set here to
+            // only `.rs`. That would delay deletion reconciliation for
+            // tracked TypeScript files until Task 2.
+            if !matches!(language, code::CodeLanguage::Rust) {
+                log::warn!(
+                    "{} extractor not yet wired (Task 2/3); skipping {}",
+                    language.as_str(),
+                    file_path.display()
+                );
+                continue;
+            }
 
             let metadata = match std::fs::metadata(file_path) {
                 Ok(m) => m,
@@ -424,10 +473,24 @@ impl Indexer {
 
             db::delete_code_file_items(&tx, &canonical)?;
 
-            let symbols = match code::extract_symbols_in_repo(&self.repo_path, file_path, &source) {
-                Ok(s) => s,
-                Err(e) => {
-                    log::warn!("Failed to parse {}: {}", file_path.display(), e);
+            let symbols = match language {
+                code::CodeLanguage::Rust => match code::extract_symbols_with_extractor(
+                    &self.rust_extractor,
+                    &self.repo_path,
+                    file_path,
+                    &source,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::warn!("Failed to parse {}: {}", file_path.display(), e);
+                        tx.rollback()?;
+                        continue;
+                    }
+                },
+                code::CodeLanguage::TypeScript | code::CodeLanguage::Tsx => {
+                    // Defensive: list-level filter already skipped these,
+                    // but guard the transaction path in case the gate is
+                    // ever moved.
                     tx.rollback()?;
                     continue;
                 }
@@ -438,12 +501,18 @@ impl Indexer {
             let items: Vec<db::ItemRow> = symbols
                 .iter()
                 .map(|s| {
+                    // Epic 009 Design Decision #3: use the explicit
+                    // storage key from `SymbolKind::as_str` instead of
+                    // `format!("{:?}", ...).to_lowercase()`. The debug
+                    // formatting produces unhelpful strings for
+                    // `Unknown(...)` and is otherwise brittle to future
+                    // variant renames.
                     let metadata = serde_json::json!({
                         "file_path": s.file_path,
                         "line_start": s.line_start,
                         "line_end": s.line_end,
-                        "symbol_kind": format!("{:?}", s.symbol_kind).to_lowercase(),
-                        "language": "rust",
+                        "symbol_kind": s.symbol_kind.as_str(),
+                        "language": language.as_str(),
                         "content_hash": hash,
                     })
                     .to_string();

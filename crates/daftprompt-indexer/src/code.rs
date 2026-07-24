@@ -3,6 +3,36 @@ use std::path::{Path, PathBuf};
 use gix::bstr::ByteSlice;
 use tree_sitter::{Parser, Query, QueryCursor, StreamingIterator};
 
+/// Supported source languages for code indexing.
+///
+/// Languages are addressed by canonical lowercase metadata string (see
+/// [`CodeLanguage::as_str`]). New dialects extend this enum and register a
+/// [`LanguageConfig`] via [`CodeExtractor::for_language`] (Task 2/3) — see
+/// the `REGISTRY` comment for the construction site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CodeLanguage {
+    Rust,
+    TypeScript,
+    Tsx,
+}
+
+impl CodeLanguage {
+    /// Canonical lowercase identifier used in stored metadata and external APIs.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CodeLanguage::Rust => "rust",
+            CodeLanguage::TypeScript => "typescript",
+            CodeLanguage::Tsx => "tsx",
+        }
+    }
+}
+
+/// Symbol kinds stored in metadata.
+///
+/// Display formatting (`{:?}`) is intentionally NOT the storage format —
+/// [`SymbolKind::as_str`] / [`SymbolKind::from_str_key`] are the explicit
+/// (de)serialization surface so unknown values do not silently round-trip
+/// through `Function` (Epic 009 Design Decision #3).
 #[derive(Debug, Clone, PartialEq)]
 pub enum SymbolKind {
     Function,
@@ -18,6 +48,70 @@ pub enum SymbolKind {
     Macro,
     Comments,
     Imports,
+    // ── Epic 009 Task 1 ────────────────────────────────────────────────────
+    // TypeScript/TSX evidence shapes. Wired into the Rust symbol search
+    // path as well so callers never see a parse failure for these names.
+    Class,
+    Interface,
+    Method,
+    Variable,
+    /// Stored kind was not recognized during deserialization. Diagnostic-only
+    /// for the lifetime of a single read; never produced by Rust extraction.
+    Unknown(String),
+}
+
+impl SymbolKind {
+    /// Explicit lowercase storage key.
+    pub fn as_str(&self) -> &str {
+        match self {
+            SymbolKind::Function => "function",
+            SymbolKind::Struct => "struct",
+            SymbolKind::Enum => "enum",
+            SymbolKind::Trait => "trait",
+            SymbolKind::ImplMethod => "implmethod",
+            SymbolKind::TraitMethod => "traitmethod",
+            SymbolKind::TypeAlias => "typealias",
+            SymbolKind::Const => "const",
+            SymbolKind::Static => "static",
+            SymbolKind::Module => "module",
+            SymbolKind::Macro => "macro",
+            SymbolKind::Comments => "comments",
+            SymbolKind::Imports => "imports",
+            SymbolKind::Class => "class",
+            SymbolKind::Interface => "interface",
+            SymbolKind::Method => "method",
+            SymbolKind::Variable => "variable",
+            SymbolKind::Unknown(_) => "unknown",
+        }
+    }
+
+    /// Parse a stored kind key.
+    ///
+    /// Unknown strings return [`SymbolKind::Unknown`] with the original
+    /// value preserved for diagnostics; they no longer collapse to
+    /// `Function` (Epic 009 Design Decision #3).
+    pub fn from_str_key(s: &str) -> SymbolKind {
+        match s {
+            "function" => SymbolKind::Function,
+            "struct" => SymbolKind::Struct,
+            "enum" => SymbolKind::Enum,
+            "trait" => SymbolKind::Trait,
+            "implmethod" => SymbolKind::ImplMethod,
+            "traitmethod" => SymbolKind::TraitMethod,
+            "typealias" => SymbolKind::TypeAlias,
+            "const" => SymbolKind::Const,
+            "static" => SymbolKind::Static,
+            "module" => SymbolKind::Module,
+            "macro" => SymbolKind::Macro,
+            "comments" => SymbolKind::Comments,
+            "imports" => SymbolKind::Imports,
+            "class" => SymbolKind::Class,
+            "interface" => SymbolKind::Interface,
+            "method" => SymbolKind::Method,
+            "variable" => SymbolKind::Variable,
+            other => SymbolKind::Unknown(other.to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +123,111 @@ pub struct CodeSymbol {
     pub line_start: usize,
     pub line_end: usize,
     pub embed: bool,
+}
+
+/// Per-dialect configuration: tree-sitter language, canonical extensions,
+/// and the metadata identifier. The compiled [`Query`] lives on the owning
+/// [`CodeExtractor`] so it is built once per process (Epic 009 Design
+/// Decision #1: queries are compiled at construction, not per file).
+#[derive(Debug, Clone, Copy)]
+pub struct LanguageConfig {
+    pub language: CodeLanguage,
+    /// Canonical (lowercase, leading-dot) file extensions routed to this dialect.
+    pub extensions: &'static [&'static str],
+}
+
+impl LanguageConfig {
+    /// Returns true if `extension` (e.g. `"ts"`, `"tsx"`, `"rs"`) is
+    /// supported by this language config. Comparison is case-insensitive.
+    pub fn supports(&self, extension: &str) -> bool {
+        self.extensions
+            .iter()
+            .any(|e| e.eq_ignore_ascii_case(extension))
+    }
+}
+
+/// Built-once extractor for a single dialect.
+///
+/// Constructed at indexer construction time so the tree-sitter query is
+/// compiled once and reused for every file of that dialect. This is the
+/// Epic 009 invariant that supersedes the per-file `Query::new` previously
+/// sitting inside `extract_symbols_in_repo`.
+pub struct CodeExtractor {
+    pub config: LanguageConfig,
+    tree_sitter_language: tree_sitter::Language,
+    query: Query,
+}
+
+impl CodeExtractor {
+    /// Construct a Rust extractor with the canonical query.
+    pub fn rust() -> Self {
+        Self::for_language(CodeLanguage::Rust)
+    }
+
+    /// Construct an extractor for any registered dialect.
+    ///
+    /// Task 2/3 register the TypeScript and TSX dialects here. For now only
+    /// Rust is wired (the grammar dependencies for the others land in
+    /// Task 2 per the Epic plan). Unsupported languages return an error so
+    /// callers cannot accidentally fall back to Rust parsing.
+    pub fn for_language(language: CodeLanguage) -> Self {
+        match language {
+            CodeLanguage::Rust => {
+                let tree_sitter_language: tree_sitter::Language =
+                    tree_sitter_rust::LANGUAGE.into();
+                let query = Query::new(&tree_sitter_language, RUST_QUERY)
+                    .expect("rust tree-sitter query must compile");
+                Self {
+                    config: LanguageConfig {
+                        language,
+                        extensions: &["rs"],
+                    },
+                    tree_sitter_language,
+                    query,
+                }
+            }
+            // TypeScript and TSX extractors arrive in Task 2/3. The Epic
+            // explicitly forbids adding tree-sitter-typescript in Task 1
+            // so dispatch will route through these constructors only once
+            // the grammar dependency is in place.
+            CodeLanguage::TypeScript | CodeLanguage::Tsx => {
+                panic!(
+                    "{:?} extractor not yet wired (introduced in Task 2/3)",
+                    language
+                )
+            }
+        }
+    }
+
+    /// Tree-sitter language (passed to `Parser::set_language`).
+    pub fn tree_sitter_language(&self) -> &tree_sitter::Language {
+        &self.tree_sitter_language
+    }
+
+    /// Compiled query (one allocation per extractor, reused per file).
+    pub fn query(&self) -> &Query {
+        &self.query
+    }
+}
+
+/// Map a canonical lowercase extension to its [`CodeLanguage`].
+///
+/// Returns `None` for unsupported extensions so the caller can refuse to
+/// dispatch rather than silently fall back to Rust (Epic 009 Design
+/// Decision #1: "report unsupported extensions without falling back to Rust").
+///
+/// `.d.ts` is intentionally not recognized as a code source in this epic
+/// (Epic 009 Design Decision #2: ".d.ts declaration files are skipped
+/// initially"). Callers that have already filtered via
+/// [`list_tracked_code_files`] need not check again; this map simply has
+/// no entry for `.d.ts`.
+pub fn language_for_extension(extension: &str) -> Option<CodeLanguage> {
+    match extension.to_ascii_lowercase().as_str() {
+        "rs" => Some(CodeLanguage::Rust),
+        "ts" => Some(CodeLanguage::TypeScript),
+        "tsx" => Some(CodeLanguage::Tsx),
+        _ => None,
+    }
 }
 
 const RUST_QUERY: &str = r#"
@@ -84,23 +283,43 @@ pub fn extract_symbols(file_path: &Path, source: &str) -> anyhow::Result<Vec<Cod
 
 /// Extract symbols with identifiers relative to `repo_path`.
 ///
-/// Indexing must use the configured repository rather than the process CWD:
-/// callers can index any repository without changing global process state.
+/// Rust compatibility wrapper — delegates to [`extract_symbols_with_extractor`]
+/// using a freshly-constructed Rust extractor. Production callers should
+/// hold a single [`CodeExtractor`] at indexer construction time and dispatch
+/// via [`extract_symbols_with_extractor`] instead of re-allocating per call.
 pub fn extract_symbols_in_repo(
     repo_path: &Path,
     file_path: &Path,
     source: &str,
 ) -> anyhow::Result<Vec<CodeSymbol>> {
+    let extractor = CodeExtractor::rust();
+    extract_symbols_with_extractor(&extractor, repo_path, file_path, source)
+}
+
+/// Extract symbols using a pre-built extractor.
+///
+/// This is the language-neutral extraction entry point: the tree-sitter
+/// query is already compiled on `extractor`, so per-file overhead is just
+/// parsing and tree-sitter cursor work (Epic 009 Design Decision #1).
+pub fn extract_symbols_with_extractor(
+    extractor: &CodeExtractor,
+    repo_path: &Path,
+    file_path: &Path,
+    source: &str,
+) -> anyhow::Result<Vec<CodeSymbol>> {
+    // The current implementation only handles Rust — Task 2/3 will add
+    // a match on `extractor.config.language` here.
+    debug_assert_eq!(extractor.config.language, CodeLanguage::Rust);
+
     let mut parser = Parser::new();
-    let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
-    parser.set_language(&language)?;
+    parser.set_language(extractor.tree_sitter_language())?;
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| anyhow::anyhow!("Failed to parse source file: {}", file_path.display()))?;
 
-    let query = Query::new(&language, RUST_QUERY)?;
+    let query = extractor.query();
     let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+    let mut matches = cursor.matches(query, tree.root_node(), source.as_bytes());
 
     let capture_names = query.capture_names();
     let mut symbols: Vec<CodeSymbol> = Vec::new();
@@ -464,6 +683,26 @@ pub fn canonicalize_file_path(repo_path: &Path, file_path: &Path) -> String {
 }
 
 pub fn list_tracked_rust_files(repo_path: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    // Rust compatibility wrapper — production callers should use
+    // `list_tracked_code_files` with an extension set, but this remains
+    // stable for tests and any direct Rust-only callers.
+    list_tracked_code_files(repo_path, &[".rs"])
+}
+
+/// One-pass tracked-file traversal for a configurable set of supported
+/// extensions (Epic 009 Design Decision #2).
+///
+/// - Paths returned are absolute and rooted at the repo workdir.
+/// - Untracked and `.gitignore`-d entries are excluded by virtue of being
+///   outside `HEAD`'s tree.
+/// - `.d.ts` declaration files are explicitly filtered out in this epic
+///   (Epic 009 Design Decision #2: "skip .d.ts declaration files initially").
+/// - `extensions` are compared against the full path suffix, so callers
+///   should pass canonical forms including the leading dot (e.g. `.rs`).
+pub fn list_tracked_code_files(
+    repo_path: &Path,
+    extensions: &[&str],
+) -> anyhow::Result<Vec<PathBuf>> {
     let repo = gix::discover(repo_path)?;
 
     let work_dir = match repo.workdir() {
@@ -476,15 +715,30 @@ pub fn list_tracked_rust_files(repo_path: &Path) -> anyhow::Result<Vec<PathBuf>>
 
     let entries = tree.traverse().breadthfirst.files()?;
 
-    let rust_files: Vec<PathBuf> = entries
+    let mut files: Vec<PathBuf> = entries
         .into_iter()
-        .filter(|entry| {
-            entry.mode.is_blob() && entry.filepath.to_str().is_ok_and(|p| p.ends_with(".rs"))
+        .filter(|entry| entry.mode.is_blob())
+        .filter_map(|entry| {
+            entry
+                .filepath
+                .to_str()
+                .ok()
+                .map(|p| (p.to_string(), work_dir.join(p)))
         })
-        .filter_map(|entry| entry.filepath.to_str().ok().map(|p| work_dir.join(p)))
+        .filter(|(p, _)| {
+            // Reject `.d.ts` (declaration files) regardless of whether `.ts`
+            // was requested. `.d.ts` always sits next to a `.ts` file; skipping
+            // it here keeps the policy in one place.
+            if p.ends_with(".d.ts") {
+                return false;
+            }
+            extensions.iter().any(|ext| p.ends_with(ext))
+        })
+        .map(|(_, abs)| abs)
         .collect();
 
-    Ok(rust_files)
+    files.sort();
+    Ok(files)
 }
 
 #[cfg(test)]
@@ -528,6 +782,134 @@ mod tests {
             files.iter().any(|p| p.ends_with("code.rs")),
             "should find code.rs in the results"
         );
+    }
+
+    // ── Epic 009 Task 1: language-neutral foundation tests ─────────────────
+
+    #[test]
+    fn code_language_as_str_matches_metadata() {
+        assert_eq!(super::CodeLanguage::Rust.as_str(), "rust");
+        assert_eq!(super::CodeLanguage::TypeScript.as_str(), "typescript");
+        assert_eq!(super::CodeLanguage::Tsx.as_str(), "tsx");
+    }
+
+    #[test]
+    fn language_for_extension_routes_canonical_extensions() {
+        assert_eq!(
+            super::language_for_extension("rs"),
+            Some(super::CodeLanguage::Rust)
+        );
+        assert_eq!(
+            super::language_for_extension("ts"),
+            Some(super::CodeLanguage::TypeScript)
+        );
+        assert_eq!(
+            super::language_for_extension("tsx"),
+            Some(super::CodeLanguage::Tsx)
+        );
+        // case-insensitive
+        assert_eq!(
+            super::language_for_extension("RS"),
+            Some(super::CodeLanguage::Rust)
+        );
+        // unsupported — must NOT silently fall back to Rust
+        assert_eq!(super::language_for_extension("js"), None);
+        assert_eq!(super::language_for_extension("d.ts"), None);
+        assert_eq!(super::language_for_extension(""), None);
+    }
+
+    #[test]
+    fn code_extractor_rust_compiles_query_once() {
+        let extractor = super::CodeExtractor::rust();
+        assert_eq!(extractor.config.language, super::CodeLanguage::Rust);
+        assert!(extractor.config.supports("rs"));
+        assert!(!extractor.config.supports("ts"));
+        // Query is compiled: capture names must include the Rust kinds.
+        let names: Vec<&str> = extractor.query().capture_names().to_vec();
+        assert!(names.contains(&"definition.function"));
+        assert!(names.contains(&"definition.struct"));
+        assert!(names.contains(&"definition.trait"));
+    }
+
+    #[test]
+    fn symbol_kind_serde_round_trip() {
+        for kind in [
+            super::SymbolKind::Function,
+            super::SymbolKind::Struct,
+            super::SymbolKind::Enum,
+            super::SymbolKind::Trait,
+            super::SymbolKind::ImplMethod,
+            super::SymbolKind::TraitMethod,
+            super::SymbolKind::TypeAlias,
+            super::SymbolKind::Const,
+            super::SymbolKind::Static,
+            super::SymbolKind::Module,
+            super::SymbolKind::Macro,
+            super::SymbolKind::Comments,
+            super::SymbolKind::Imports,
+        ] {
+            let key = kind.as_str();
+            let parsed = super::SymbolKind::from_str_key(key);
+            assert_eq!(parsed, kind, "round-trip failed for {kind:?} ({key})");
+        }
+    }
+
+    #[test]
+    fn symbol_kind_serde_new_variants_round_trip() {
+        // Epic 009 Task 1: Class / Interface / Method / Variable serialize
+        // and parse back to the same variant.
+        for kind in [
+            super::SymbolKind::Class,
+            super::SymbolKind::Interface,
+            super::SymbolKind::Method,
+            super::SymbolKind::Variable,
+        ] {
+            let parsed = super::SymbolKind::from_str_key(kind.as_str());
+            assert_eq!(parsed, kind, "round-trip failed for {kind:?}");
+        }
+    }
+
+    #[test]
+    fn symbol_kind_unknown_does_not_silently_become_function() {
+        // Epic 009 Design Decision #3: unknown stored kinds must NOT
+        // collapse to Function.
+        let parsed = super::SymbolKind::from_str_key("decorator");
+        assert!(
+            matches!(parsed, super::SymbolKind::Unknown(ref s) if s == "decorator"),
+            "expected Unknown(\"decorator\"), got {parsed:?}"
+        );
+    }
+
+    #[test]
+    fn list_tracked_code_files_supports_multi_extension_set() {
+        // The Rust wrapper and the multi-extension API must agree on the
+        // Rust-only result set against the daftprompt repo.
+        let repo_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
+
+        let rust_only = super::list_tracked_code_files(repo_path, &[".rs"])
+            .expect("list .rs files");
+        let multi = super::list_tracked_code_files(repo_path, &[".rs", ".ts", ".tsx"])
+            .expect("list multi-ext files");
+
+        // Multi must contain every Rust-only file (the repo has no .ts/.tsx).
+        for path in &rust_only {
+            assert!(
+                multi.contains(path),
+                "multi-ext result set should include {path:?}"
+            );
+        }
+
+        // None of the entries should be a `.d.ts` declaration file.
+        for path in &multi {
+            assert!(
+                !path.to_string_lossy().ends_with(".d.ts"),
+                "multi-ext result must not include .d.ts; got {path:?}"
+            );
+        }
     }
 
     #[test]

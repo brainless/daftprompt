@@ -221,7 +221,7 @@ unchanged.
 ### Task 1: Add language-neutral extraction and discovery foundations
 
 **Priority:** High  
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 
 - Introduce `CodeLanguage` and the language configuration/registry.
 - Generalize tracked-file discovery and preserve a Rust compatibility wrapper.
@@ -234,13 +234,13 @@ unchanged.
 
 **Acceptance Criteria:**
 
-- [ ] The production scan discovers tracked `.rs`, `.ts`, and `.tsx` files in
+- [x] The production scan discovers tracked `.rs`, `.ts`, and `.tsx` files in
       one pass and excludes untracked files and `.d.ts`.
-- [ ] Rust extraction and all 46 existing indexer tests still pass unchanged
+- [x] Rust extraction and all 46 existing indexer tests still pass unchanged
       or with mechanical helper migration only.
-- [ ] Queries are compiled once per language/dialect, not once per file.
-- [ ] Unsupported extensions cannot be parsed as Rust accidentally.
-- [ ] Stored metadata reports the actual language/dialect.
+- [x] Queries are compiled once per language/dialect, not once per file.
+- [x] Unsupported extensions cannot be parsed as Rust accidentally.
+- [x] Stored metadata reports the actual language/dialect.
 
 ### Task 2: Implement TypeScript symbol extraction
 
