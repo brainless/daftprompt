@@ -363,14 +363,16 @@ Do not assert exact result order or vector ranking.
 - [x] `cargo test --workspace` passes.
 - [x] Documentation no longer describes code indexing as Rust-only.
 
-**Validation:** `cargo test --workspace` passes 95 tests (84 indexer + 11 main;
+**Validation:** `cargo test --workspace` passes 97 tests (86 indexer + 11 main;
 0 doc tests). Production indexing/search in `src/main.rs` and state plumbing in
 `src/state.rs` call language-neutral indexer APIs; language dispatch remains in
 `crates/daftprompt-indexer/src/code.rs`. The only production-side language-aware
 logic found is `SymbolKind` label formatting for shared TypeScript/TSX kinds,
-not indexing or search routing. Follow-up: update the stale Rust-only
-`--index-code` help text in `src/main.rs` when production-code edits are in
-scope.
+not indexing or search routing. Review follow-ups fixed after completion:
+method evidence uses method-local nodes and ranges, nested executable
+declarations are excluded, callable bindings retain bounded bodies, import
+evidence retains multiline declarations and static dynamic imports, and the
+`--index-code` help text names all supported languages.
 
 ## Test Matrix
 
@@ -410,4 +412,3 @@ scope.
   deliberate noise and generated-file policy.
 - Decorators, ambient declarations, declaration merging, and cross-file
   re-exports may need later focused epics.
-

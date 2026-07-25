@@ -306,7 +306,7 @@ const TS_QUERY: &str = r#"
   name: (type_identifier) @class_name
   body: (class_body
     (method_definition
-      name: (property_identifier) @name))) @definition.method
+      name: (property_identifier) @name) @definition.method))
 
 (interface_declaration
   name: (type_identifier) @name) @definition.interface
@@ -345,6 +345,11 @@ const TS_QUERY: &str = r#"
 
 (export_statement
   source: (string)) @reexport
+
+(call_expression
+  function: (import)
+  arguments: (arguments
+    (string))) @dynamic_import
 "#;
 
 pub fn extract_symbols(file_path: &Path, source: &str) -> anyhow::Result<Vec<CodeSymbol>> {
@@ -414,7 +419,7 @@ fn extract_rust_symbols(
     let mut symbols: Vec<CodeSymbol> = Vec::new();
     let mut doc_comment_nodes: Vec<usize> = Vec::new();
     let mut standalone_comment_ranges: Vec<(usize, usize)> = Vec::new();
-    let mut import_nodes: Vec<usize> = Vec::new();
+    let mut import_nodes: Vec<(usize, usize)> = Vec::new();
 
     let file_path_str = canonicalize_file_path(repo_path, file_path);
 
@@ -460,7 +465,7 @@ fn extract_rust_symbols(
                     standalone_comment_ranges.push((start, end));
                 }
                 "import" => {
-                    import_nodes.push(cap.node.start_position().row);
+                    import_nodes.push((cap.node.start_byte(), cap.node.end_byte()));
                 }
                 _ => {
                     if name.starts_with("definition.") {
@@ -571,7 +576,7 @@ fn extract_typescript_symbols(
     let capture_names = query.capture_names();
     let mut symbols: Vec<CodeSymbol> = Vec::new();
     let mut standalone_comment_ranges: Vec<(usize, usize)> = Vec::new();
-    let mut import_nodes: Vec<usize> = Vec::new();
+    let mut import_ranges: Vec<(usize, usize)> = Vec::new();
 
     let file_path_str = canonicalize_file_path(repo_path, file_path);
 
@@ -610,8 +615,8 @@ fn extract_typescript_symbols(
                     let end = cap.node.end_position().row;
                     standalone_comment_ranges.push((start, end));
                 }
-                "import" | "reexport" => {
-                    import_nodes.push(cap.node.start_position().row);
+                "import" | "reexport" | "dynamic_import" => {
+                    import_ranges.push((cap.node.start_byte(), cap.node.end_byte()));
                 }
                 _ => {
                     if cname.starts_with("definition.") {
@@ -631,6 +636,13 @@ fn extract_typescript_symbols(
         let Some((kind, effective_node, effective_name)) = resolved else {
             continue;
         };
+
+        if is_nested_executable_declaration(effective_node)
+            && (matches!(kind, SymbolKind::Function)
+                || declaration_contains_callable(effective_node))
+        {
+            continue;
+        }
 
         if is_typescript_signature_only(effective_node) {
             function_signature_nodes.push(effective_node);
@@ -693,7 +705,7 @@ fn extract_typescript_symbols(
         });
     }
 
-    let import_text = collect_imports(source, &import_nodes);
+    let import_text = collect_imports(source, &import_ranges);
     if !import_text.is_empty() {
         symbols.push(CodeSymbol {
             identifier: format!("{}::__imports__", file_path_str),
@@ -757,6 +769,32 @@ fn is_typescript_signature_only(node: tree_sitter::Node) -> bool {
         }
     }
     false
+}
+
+fn is_nested_executable_declaration(node: tree_sitter::Node) -> bool {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if matches!(
+            parent.kind(),
+            "function_declaration"
+                | "function_expression"
+                | "arrow_function"
+                | "method_definition"
+        ) {
+            return true;
+        }
+        current = parent.parent();
+    }
+    false
+}
+
+fn declaration_contains_callable(node: tree_sitter::Node) -> bool {
+    let mut cursor = node.walk();
+    let found = node.children(&mut cursor).any(|child| {
+        matches!(child.kind(), "arrow_function" | "function_expression")
+            || declaration_contains_callable(child)
+    });
+    found
 }
 
 fn fold_overloads_into_implementations(
@@ -1067,6 +1105,19 @@ fn extract_ts_signature(node: tree_sitter::Node, source: &str) -> String {
                 text.lines().next().unwrap_or("").trim().to_string()
             }
         }
+        "variable_declarator" => {
+            let text = node.utf8_text(source.as_bytes()).unwrap_or("");
+            if let Some(value) = node.child_by_field_name("value") {
+                if matches!(value.kind(), "arrow_function" | "function_expression") {
+                    let relative_body_start = value
+                        .child_by_field_name("body")
+                        .map(|body| body.start_byte().saturating_sub(node.start_byte()))
+                        .unwrap_or(text.len());
+                    return text[..relative_body_start].trim().to_string();
+                }
+            }
+            text.lines().next().unwrap_or("").trim().to_string()
+        }
         "class_declaration" | "class_expression" | "abstract_class_declaration" => {
             let mut body_start = node.end_byte();
             let mut cursor = node.walk();
@@ -1107,22 +1158,27 @@ fn bound_declaration_text(text: &str, limit: usize) -> String {
 }
 
 fn extract_ts_body_excerpt(node: tree_sitter::Node, source: &str) -> String {
-    let body_node = match node.kind() {
+    let executable_node = if node.kind() == "variable_declarator" {
+        node.child_by_field_name("value").filter(|value| {
+            matches!(value.kind(), "arrow_function" | "function_expression")
+        })
+    } else {
+        Some(node)
+    };
+    let body_node = executable_node.and_then(|node| match node.kind() {
         "function_declaration" | "function_expression" | "method_definition"
         | "arrow_function" | "class_declaration" | "class_expression"
         | "abstract_class_declaration" => {
-            let mut cursor = node.walk();
-            let mut found = None;
-            for child in node.children(&mut cursor) {
-                if child.kind() == "statement_block" || child.kind() == "class_body" {
-                    found = Some(child);
-                    break;
-                }
-            }
-            found
+            node.child_by_field_name("body").or_else(|| {
+                let mut cursor = node.walk();
+                let found = node
+                    .children(&mut cursor)
+                    .find(|child| matches!(child.kind(), "statement_block" | "class_body"));
+                found
+            })
         }
         _ => None,
-    };
+    });
     match body_node {
         Some(body) => {
             let text = body.utf8_text(source.as_bytes()).unwrap_or("");
@@ -1356,15 +1412,15 @@ fn collect_standalone_comments(
     result.join("\n")
 }
 
-fn collect_imports(source: &str, import_rows: &[usize]) -> String {
-    let lines: Vec<&str> = source.lines().collect();
-    let mut result = Vec::new();
-    for &row in import_rows {
-        if let Some(line) = lines.get(row) {
-            result.push(line.to_string());
-        }
-    }
-    result.join("\n")
+fn collect_imports(source: &str, import_ranges: &[(usize, usize)]) -> String {
+    let mut ranges = import_ranges.to_vec();
+    ranges.sort_unstable();
+    ranges.dedup();
+    ranges
+        .into_iter()
+        .filter_map(|(start, end)| source.get(start..end))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn is_inside_impl_or_trait(node: tree_sitter::Node) -> bool {
@@ -2144,6 +2200,32 @@ export function helper() { return 1; }
         let m = symbols.iter().find(|s| kind_is(s, &super::SymbolKind::Method) && s.identifier.contains("charge")).unwrap();
         assert_eq!(m.identifier, "src/checkout/session.ts::PaymentGateway::charge");
         assert!(m.text.contains("provider.charge"));
+        assert!(!m.text.contains("get configured"), "method evidence leaked the rest of the class: {}", m.text);
+        assert_eq!(m.line_start, 54);
+        assert_eq!(m.line_end, 56);
+    }
+
+    #[test]
+    fn ts_excludes_nested_executable_declarations() {
+        let src = r#"
+export function checkout(): boolean {
+    function validateInternally(): boolean {
+        return true;
+    }
+    const calculateInternally = () => false;
+    return validateInternally() && calculateInternally();
+}
+"#;
+        let symbols = extract_ts("src/nested.ts", src);
+        assert!(symbols.iter().any(|s| s.identifier == "src/nested.ts::checkout"));
+        assert!(
+            !symbols.iter().any(|s| {
+                s.identifier.ends_with("::validateInternally")
+                    || s.identifier.ends_with("::calculateInternally")
+            }),
+            "nested functions leaked into evidence: {:?}",
+            symbols.iter().map(|s| &s.identifier).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -2164,6 +2246,34 @@ export function helper() { return 1; }
         assert_eq!(rec.identifier, "src/checkout/session.ts::__imports__");
         assert!(rec.text.contains("PaymentProvider"));
         assert!(rec.text.contains("./legacy"));
+    }
+
+    #[test]
+    fn ts_import_evidence_preserves_multiline_and_static_dynamic_imports() {
+        let src = r#"
+import {
+    PaymentProvider,
+    PaymentResult,
+} from "./payment";
+
+export {
+    legacyCheckout,
+} from "./legacy";
+
+export async function loadCheckout() {
+    return import("./checkout");
+}
+"#;
+        let symbols = extract_ts("src/imports.ts", src);
+        let imports = symbols
+            .iter()
+            .find(|s| s.symbol_kind == super::SymbolKind::Imports)
+            .expect("imports evidence");
+        assert!(imports.text.contains("PaymentResult"));
+        assert!(imports.text.contains("from \"./payment\""));
+        assert!(imports.text.contains("legacyCheckout"));
+        assert!(imports.text.contains("from \"./legacy\""));
+        assert!(imports.text.contains("import(\"./checkout\")"));
     }
 
     #[test]
@@ -2396,6 +2506,8 @@ function charge(amount: number, provider: PaymentProvider): boolean {
             comp.identifier,
             "src/components/CheckoutButton.tsx::CheckoutLabel"
         );
+        assert!(comp.text.contains("CheckoutLabelProps"), "typed signature: {}", comp.text);
+        assert!(comp.text.contains("<span>"), "JSX body excerpt: {}", comp.text);
     }
 
     #[test]

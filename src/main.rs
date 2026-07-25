@@ -49,7 +49,7 @@ struct Args {
     search_git_log: Option<String>,
 
     // --- Source-specific code commands ---
-    /// Incrementally index Rust source code only.
+    /// Incrementally index Rust, TypeScript, and TSX source code only.
     #[arg(long)]
     index_code: bool,
 
