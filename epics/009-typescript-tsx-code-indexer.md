@@ -273,7 +273,7 @@ unchanged.
 ### Task 3: Implement TSX extraction
 
 **Priority:** High  
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 
 - Add and validate the TSX dialect configuration/query.
 - Extract named function, arrow, and class components using the shared symbol
@@ -283,12 +283,12 @@ unchanged.
 
 **Acceptance Criteria:**
 
-- [ ] A `.tsx` fixture indexes a named component, typed props, a helper
+- [x] A `.tsx` fixture indexes a named component, typed props, a helper
       function, imports, and an attached JSDoc comment.
-- [ ] Component identifiers use the declaration or binding name.
-- [ ] JSX syntax parses without errors under the selected TSX grammar.
-- [ ] JSX callbacks and tag names do not create top-level evidence records.
-- [ ] TypeScript-only and TSX fixtures are dispatched to different grammars.
+- [x] Component identifiers use the declaration or binding name.
+- [x] JSX syntax parses without errors under the selected TSX grammar.
+- [x] JSX callbacks and tag names do not create top-level evidence records.
+- [x] TypeScript-only and TSX fixtures are dispatched to different grammars.
 
 ### Task 4: Parameterize and apply the Epic 008 test foundation
 

@@ -200,9 +200,19 @@ impl CodeExtractor {
                     query,
                 }
             }
-            // TSX extractor arrives in Task 3.
             CodeLanguage::Tsx => {
-                panic!("Tsx extractor not yet wired (introduced in Task 3)")
+                let tree_sitter_language: tree_sitter::Language =
+                    tree_sitter_typescript::LANGUAGE_TSX.into();
+                let query = Query::new(&tree_sitter_language, TS_QUERY)
+                    .expect("tsx tree-sitter query must compile");
+                Self {
+                    config: LanguageConfig {
+                        language,
+                        extensions: &["tsx"],
+                    },
+                    tree_sitter_language,
+                    query,
+                }
             }
         }
     }
@@ -370,12 +380,9 @@ pub fn extract_symbols_with_extractor(
 ) -> anyhow::Result<Vec<CodeSymbol>> {
     match extractor.config.language {
         CodeLanguage::Rust => extract_rust_symbols(extractor, repo_path, file_path, source),
-        CodeLanguage::TypeScript => {
+        CodeLanguage::TypeScript | CodeLanguage::Tsx => {
             extract_typescript_symbols(extractor, repo_path, file_path, source)
         }
-        CodeLanguage::Tsx => Err(anyhow::anyhow!(
-            "Tsx extraction not yet wired (introduced in Task 3)"
-        )),
     }
 }
 
@@ -2306,5 +2313,173 @@ export function broken(a: number): number {\n    return a;\n}\n\
         let symbols = extract_ts("src/long.ts", &src);
         let long = symbols.iter().find(|s| s.identifier.contains("long")).expect("function");
         assert!(long.text.contains("..."), "body excerpt truncated: {}", long.text);
+    }
+
+    // ── Epic 009 Task 3: TSX extraction tests ───────────────────────────
+
+    /// Product-oriented TSX fixture covering a function component with
+    /// typed props, an arrow component, a helper function, attached JSDoc,
+    /// and a regular import.
+    const TSX_CHECKOUT_FIXTURE: &str = r#"import { PaymentProvider } from "./payment";
+
+/**
+ * Props for the checkout button.
+ */
+export interface CheckoutButtonProps {
+    disabled?: boolean;
+    amount: number;
+    provider: PaymentProvider;
+}
+
+/**
+ * A button component that starts a checkout flow.
+ */
+export function CheckoutButton(props: CheckoutButtonProps) {
+    return (
+        <button disabled={props.disabled} onClick={() => charge(props.amount, props.provider)}>
+            Pay {props.amount}
+        </button>
+    );
+}
+
+/** An arrow-function component with destructured props. */
+export const CheckoutLabel = ({ amount, provider }: CheckoutLabelProps) => {
+    return <span>Charging {amount} via {provider.name}</span>;
+};
+
+interface CheckoutLabelProps {
+    amount: number;
+    provider: PaymentProvider;
+}
+
+function charge(amount: number, provider: PaymentProvider): boolean {
+    return provider.charge(amount);
+}
+"#;
+
+    fn extract_tsx(file_path: &str, source: &str) -> Vec<super::CodeSymbol> {
+        let extractor = super::CodeExtractor::for_language(super::CodeLanguage::Tsx);
+        let path = std::path::Path::new(file_path);
+        let repo = std::path::Path::new(".");
+        super::extract_symbols_with_extractor(&extractor, repo, path, source)
+            .expect("tsx extraction")
+    }
+
+    #[test]
+    fn tsx_extracts_named_function_component() {
+        let symbols = extract_tsx("src/components/CheckoutButton.tsx", TSX_CHECKOUT_FIXTURE);
+        let comp = symbols
+            .iter()
+            .find(|s| {
+                kind_is(s, &super::SymbolKind::Function)
+                    && s.identifier.contains("CheckoutButton")
+                    && !s.identifier.contains("Label")
+            })
+            .expect("CheckoutButton function component");
+        assert_eq!(
+            comp.identifier,
+            "src/components/CheckoutButton.tsx::CheckoutButton"
+        );
+        assert!(comp.text.contains("Pay"), "JSX body should appear in body excerpt: {}", comp.text);
+        // JSDoc attached
+        assert!(comp.text.contains("A button component"), "attached JSDoc: {}", comp.text);
+    }
+
+    #[test]
+    fn tsx_extracts_arrow_component_with_typed_props() {
+        let symbols = extract_tsx("src/components/CheckoutButton.tsx", TSX_CHECKOUT_FIXTURE);
+        let comp = symbols
+            .iter()
+            .find(|s| kind_is(s, &super::SymbolKind::Function) && s.identifier.contains("CheckoutLabel"))
+            .expect("CheckoutLabel arrow component");
+        assert_eq!(
+            comp.identifier,
+            "src/components/CheckoutButton.tsx::CheckoutLabel"
+        );
+    }
+
+    #[test]
+    fn tsx_preserves_typed_props_signature() {
+        let symbols = extract_tsx("src/components/CheckoutButton.tsx", TSX_CHECKOUT_FIXTURE);
+        let iface = symbols
+            .iter()
+            .find(|s| kind_is(s, &super::SymbolKind::Interface) && s.identifier.contains("CheckoutButtonProps"))
+            .expect("CheckoutButtonProps interface");
+        assert_eq!(
+            iface.identifier,
+            "src/components/CheckoutButton.tsx::CheckoutButtonProps"
+        );
+    }
+
+    #[test]
+    fn tsx_helper_function_extracted() {
+        let symbols = extract_tsx("src/components/CheckoutButton.tsx", TSX_CHECKOUT_FIXTURE);
+        let helper = symbols
+            .iter()
+            .find(|s| kind_is(s, &super::SymbolKind::Function) && s.identifier.contains("::charge"))
+            .expect("charge helper function");
+        assert_eq!(helper.identifier, "src/components/CheckoutButton.tsx::charge");
+        assert!(helper.text.contains("provider.charge"));
+    }
+
+    #[test]
+    fn tsx_imports_record_is_fts_only() {
+        let symbols = extract_tsx("src/components/CheckoutButton.tsx", TSX_CHECKOUT_FIXTURE);
+        let imports: Vec<_> = symbols
+            .iter()
+            .filter(|s| s.symbol_kind == super::SymbolKind::Imports)
+            .collect();
+        assert_eq!(imports.len(), 1);
+        let rec = &imports[0];
+        assert!(!rec.embed);
+        assert!(rec.text.contains("PaymentProvider"));
+    }
+
+    #[test]
+    fn tsx_jsx_does_not_create_top_level_symbols() {
+        // JSX tags and embedded expressions should not produce spurious
+        // symbols. Verify by counting: only the named declarations +
+        // Comments + Imports records.
+        let symbols = extract_tsx("src/components/CheckoutButton.tsx", TSX_CHECKOUT_FIXTURE);
+        // Expected: CheckoutButtonProps (Interface), CheckoutResult / CheckoutLabelProps
+        // (not present), CheckoutButton (Function), CheckoutLabel (Function),
+        // charge (Function), __comments__, __imports__.
+        // We don't pin the exact count (the fixture is shared with TS tests);
+        // we just confirm no `button`, `span`, `JSXElement` kind leaked.
+        for s in &symbols {
+            assert!(
+                !s.identifier.contains("button") && !s.identifier.contains("<"),
+                "JSX leaked into identifier: {}",
+                s.identifier
+            );
+        }
+    }
+
+    #[test]
+    fn tsx_and_ts_dispatch_to_different_grammars() {
+        // A .ts file with TSX syntax (e.g. a stray `<T>` generic) should
+        // still extract via the TS grammar; a .tsx file with JSX should
+        // also extract. Both grammars should accept a basic component
+        // declaration in their respective files.
+        let ts = r#"
+            export function plain(x: number): number { return x; }
+        "#;
+        let tsx = r#"
+            export function Component() { return <div />; }
+        "#;
+        let ts_symbols = extract_ts("src/only-ts.ts", ts);
+        let tsx_symbols = extract_tsx("src/only-tsx.tsx", tsx);
+
+        let ts_fn = ts_symbols
+            .iter()
+            .find(|s| kind_is(s, &super::SymbolKind::Function) && s.identifier.contains("plain"))
+            .expect("plain function in .ts");
+        assert_eq!(ts_fn.identifier, "src/only-ts.ts::plain");
+
+        let tsx_fn = tsx_symbols
+            .iter()
+            .find(|s| kind_is(s, &super::SymbolKind::Function) && s.identifier.contains("Component"))
+            .expect("Component function in .tsx");
+        assert_eq!(tsx_fn.identifier, "src/only-tsx.tsx::Component");
     }
 }

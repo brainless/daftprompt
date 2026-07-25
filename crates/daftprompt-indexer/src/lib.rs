@@ -104,11 +104,12 @@ pub struct Indexer {
     db: Connection,
     embedder: Option<Embedder>,
     repo_path: PathBuf,
-    /// Per-dialect extractors built once at construction. The Rust and
-    /// TypeScript extractors are always present (Epic 009 Task 2). The
-    /// TSX extractor lands in Task 3 alongside its grammar wiring.
+    /// Per-dialect extractors built once at construction (Epic 009 DD #1:
+    /// queries are compiled at construction, not per file). Rust, TS, and
+    /// TSX are all present.
     rust_extractor: code::CodeExtractor,
     typescript_extractor: code::CodeExtractor,
+    tsx_extractor: code::CodeExtractor,
 }
 
 struct ItemDetail {
@@ -292,12 +293,12 @@ impl Indexer {
             db,
             embedder,
             repo_path: std::fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.to_path_buf()),
-            // Build the Rust and TypeScript extractors once at indexer
-            // construction (Epic 009 Design Decision #1: queries are
-            // compiled at construction, not per file). The TSX extractor
-            // lands in Task 3 alongside its grammar wiring.
+            // Build per-dialect extractors once at indexer construction
+            // (Epic 009 Design Decision #1: queries are compiled at
+            // construction, not per file).
             rust_extractor: code::CodeExtractor::rust(),
             typescript_extractor: code::CodeExtractor::for_language(code::CodeLanguage::TypeScript),
+            tsx_extractor: code::CodeExtractor::for_language(code::CodeLanguage::Tsx),
         })
     }
 
@@ -420,16 +421,6 @@ impl Indexer {
                 }
             };
 
-            // TSX arrives in Task 3. Until then, surface a clear warning
-            // so it is obvious why tracked `.tsx` files are skipped.
-            if let code::CodeLanguage::Tsx = language {
-                log::warn!(
-                    "{} extractor not yet wired (Task 3); skipping {}",
-                    language.as_str(),
-                    file_path.display()
-                );
-                continue;
-            }
 
             let metadata = match std::fs::metadata(file_path) {
                 Ok(m) => m,
@@ -474,13 +465,7 @@ impl Indexer {
             let extractor: &code::CodeExtractor = match language {
                 code::CodeLanguage::Rust => &self.rust_extractor,
                 code::CodeLanguage::TypeScript => &self.typescript_extractor,
-                code::CodeLanguage::Tsx => {
-                    // Defensive: list-level filter already skipped these,
-                    // but guard the transaction path in case the gate is
-                    // ever moved.
-                    tx.rollback()?;
-                    continue;
-                }
+                code::CodeLanguage::Tsx => &self.tsx_extractor,
             };
             let symbols = match code::extract_symbols_with_extractor(
                 extractor,
