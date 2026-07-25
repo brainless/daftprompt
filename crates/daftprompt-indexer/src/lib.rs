@@ -1806,4 +1806,454 @@ export function TypedCheckoutButton({ label }: CheckoutButtonProps) {
             "untracked file's symbols must not be indexed"
         );
     }
+
+    // ── Epic 009 Task 5: Deterministic TypeScript/TSX retrieval tests ─────
+
+    /// Checkout-shaped TypeScript fixture: covers a public function with a
+    /// JSDoc that mentions both "checkout" and "validation" tokens, a typed
+    /// configuration interface, a gateway class with `configured` / `payment`
+    /// JSDoc and methods, plus a standalone "temporary limitation" comment.
+    /// Mirrors the Epic 008 Rust `CHECKOUT_FIXTURE` shape so the four queries
+    /// map 1:1 onto the Epic's expected evidence table.
+    const TS_CHECKOUT_FIXTURE: &str = r#"import { PaymentProvider } from "./payment";
+
+/**
+ * Configuration for the checkout service.
+ */
+export interface CheckoutConfig {
+    timeoutMs: number;
+    provider: "stripe" | "manual";
+}
+
+/**
+ * Process a checkout session for the given cart.
+ *
+ * Performs checkout validation, applies any active discounts,
+ * and delegates to the configured payment provider for charging.
+ */
+export function createCheckoutSession(
+    cart: { sku: string; qty: number }[],
+    config: CheckoutConfig
+): Promise<string> {
+    if (cart.length === 0) {
+        throw new Error("cart is empty");
+    }
+    return Promise.resolve("session_" + cart.length);
+}
+
+/**
+ * The configured payment provider gateway.
+ */
+export class PaymentGateway {
+    constructor(private readonly provider: PaymentProvider) {}
+
+    /** Charge the configured amount and return true on success. */
+    charge(amount: number): boolean {
+        return this.provider.charge(amount);
+    }
+}
+
+// TODO: temporary limitation — only USD currency is supported right now
+export function unused() { return 1; }
+"#;
+
+    /// Checkout-shaped TSX fixture: covers a function component with typed
+    /// props (including a `disabled?: boolean` prop), JSX that uses the
+    /// disabled attribute, and an attached JSDoc mentioning both "checkout"
+    /// and "disabled" so an FTS5 OR query hits it deterministically.
+    const TSX_CHECKOUT_FIXTURE: &str = r#"import React from "react";
+
+interface CheckoutButtonProps {
+    disabled?: boolean;
+    label: string;
+}
+
+/**
+ * Renders the checkout button.
+ *
+ * The button is disabled while the checkout validation is in progress.
+ */
+export function CheckoutButton({ disabled, label }: CheckoutButtonProps) {
+    return (
+        <button disabled={disabled} onClick={() => alert(label)}>
+            {label}
+        </button>
+    );
+}
+
+/** Helper that ignores disabled state but is bound to a clear name. */
+export const CheckoutLabel = ({ label }: { label: string }) => <span>{label}</span>;
+"#;
+
+    /// Helper: build an indexer over a repo seeded with a checkout-shaped TS
+    /// fixture plus a checkout-shaped TSX fixture (and nothing else).
+    fn setup_ts_checkout_repo() -> (tempfile::TempDir, tempfile::TempDir) {
+        setup_repo_with_files(&[
+            ("src/checkout/session.ts", TS_CHECKOUT_FIXTURE),
+            ("src/components/CheckoutButton.tsx", TSX_CHECKOUT_FIXTURE),
+        ])
+    }
+
+    /// Pull the matching `CodeSearchResult` for a specific identifier from a
+    /// `search_code_text` result set. Panics with full context if missing so a
+    /// failure points at the query, identifier, and stored languages observed.
+    fn expect_code_hit<'a>(
+        results: &'a [CodeSearchResult],
+        query: &str,
+        identifier: &str,
+    ) -> &'a CodeSearchResult {
+        results
+            .iter()
+            .find(|r| r.identifier == identifier)
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected {identifier} for query {query:?}; got {:?}",
+                    results
+                        .iter()
+                        .map(|r| (&r.identifier, format!("{:?}", r.symbol_kind), &r.file_path))
+                        .collect::<Vec<_>>()
+                )
+            })
+    }
+
+    #[test]
+    fn search_checkout_validation_returns_ts_evidence() {
+        let (repo_dir, cache_dir) = setup_ts_checkout_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        indexer.index_code().expect("index_code");
+
+        // FTS5 unicode61 doesn't stem, so "validation" matches "validation"
+        // (exact token in JSDoc) and "checkout" matches the function name
+        // and signature. The Epic 008 Rust retrieval test uses the same OR
+        // shape, so this keeps the contract parallel across languages.
+        let results = indexer
+            .search_code_text("checkout OR validation", 20)
+            .expect("search_code_text");
+        assert!(
+            !results.is_empty(),
+            "'checkout OR validation' should return at least one result"
+        );
+
+        let hit = expect_code_hit(
+            &results,
+            "checkout OR validation",
+            "src/checkout/session.ts::createCheckoutSession",
+        );
+
+        assert_eq!(hit.file_path, "src/checkout/session.ts");
+        assert!(hit.line_start > 0, "line_start should be one-based");
+        assert!(hit.line_end >= hit.line_start);
+        assert!(
+            matches!(hit.symbol_kind, code::SymbolKind::Function),
+            "expected Function, got {:?}",
+            hit.symbol_kind
+        );
+        // JSDoc + signature should both be present in the composed text.
+        assert!(
+            hit.text.contains("checkout validation"),
+            "JSDoc validation excerpt should appear in composed text:\n{}",
+            hit.text
+        );
+        assert!(
+            hit.text.contains("createCheckoutSession"),
+            "signature should appear in composed text:\n{}",
+            hit.text
+        );
+    }
+
+    #[test]
+    fn search_payment_provider_configured_returns_ts_evidence() {
+        let (repo_dir, cache_dir) = setup_ts_checkout_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        indexer.index_code().expect("index_code");
+
+        // "PaymentGateway" is camelCase so FTS5 sees it as a single token.
+        // The fixture JSDoc phrases "The configured payment provider gateway."
+        // and the class body excerpt both contain "configured" and "payment"
+        // as separate tokens (the hyphenated form is tokenized by unicode61),
+        // so OR semantics reliably hit either the class or its `charge`
+        // method. The Epic accepts "Typed configuration constant/interface
+        // OR gateway method" — both the Class record and the Method record
+        // surface under this query.
+        let results = indexer
+            .search_code_text("payment OR configured", 20)
+            .expect("search_code_text");
+        assert!(
+            !results.is_empty(),
+            "'payment OR configured' should return at least one result"
+        );
+
+        // At least one identifier must reference the PaymentGateway class
+        // hierarchy: either the class record or the namespace-prefixed
+        // method record produced by tree-sitter extraction.
+        let class_hit = results
+            .iter()
+            .find(|r| r.identifier == "src/checkout/session.ts::PaymentGateway")
+            .expect("expected PaymentGateway class record in results");
+        let method_hit = results
+            .iter()
+            .find(|r| r.identifier == "src/checkout/session.ts::PaymentGateway::charge")
+            .expect("expected PaymentGateway::charge method record in results");
+
+        // The class record must surface Class kind with the JSDoc explaining
+        // what it owns.
+        assert_eq!(class_hit.file_path, "src/checkout/session.ts");
+        assert!(
+            matches!(class_hit.symbol_kind, code::SymbolKind::Class),
+            "expected Class, got {:?}",
+            class_hit.symbol_kind
+        );
+        assert!(
+            class_hit.text.contains("configured payment"),
+            "class JSDoc should mention configured payment:\n{}",
+            class_hit.text
+        );
+
+        // The method record must surface Method kind with the namespaced
+        // identifier, and its JSDoc must carry the "configured" token so the
+        // OR query can find it deterministically.
+        assert_eq!(method_hit.file_path, "src/checkout/session.ts");
+        assert!(
+            matches!(method_hit.symbol_kind, code::SymbolKind::Method),
+            "expected Method, got {:?}",
+            method_hit.symbol_kind
+        );
+        assert!(
+            method_hit.text.contains("configured"),
+            "method JSDoc should mention configured:\n{}",
+            method_hit.text
+        );
+    }
+
+    #[test]
+    fn search_temporary_limitation_returns_ts_comment_evidence() {
+        let (repo_dir, cache_dir) = setup_ts_checkout_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        indexer.index_code().expect("index_code");
+
+        // "temporary limitation" is a contiguous phrase in the standalone
+        // comment, so the phrase query works directly without OR — matching
+        // the Epic 008 Rust retrieval test's style for the same scenario.
+        let results = indexer
+            .search_code_text("temporary limitation", 20)
+            .expect("search_code_text");
+        assert!(
+            !results.is_empty(),
+            "'temporary limitation' should return at least one result"
+        );
+
+        let hit = expect_code_hit(
+            &results,
+            "temporary limitation",
+            "src/checkout/session.ts::__comments__",
+        );
+
+        assert_eq!(hit.file_path, "src/checkout/session.ts");
+        assert!(hit.line_start > 0);
+        assert!(hit.line_end >= hit.line_start);
+        assert!(
+            matches!(hit.symbol_kind, code::SymbolKind::Comments),
+            "expected Comments, got {:?}",
+            hit.symbol_kind
+        );
+        assert!(
+            hit.text.contains("USD currency"),
+            "comment text should mention USD currency:\n{}",
+            hit.text
+        );
+    }
+
+    #[test]
+    fn search_checkout_button_disabled_returns_tsx_evidence() {
+        let (repo_dir, cache_dir) = setup_ts_checkout_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        indexer.index_code().expect("index_code");
+
+        // The TSX JSDoc mentions "checkout" and "disabled", and the JSX body
+        // uses `disabled={disabled}` as an attribute. Both tokens appear in
+        // the composed text so the OR query deterministically surfaces the
+        // component record (and its props interface).
+        let results = indexer
+            .search_code_text("checkout OR disabled", 20)
+            .expect("search_code_text");
+        assert!(
+            !results.is_empty(),
+            "'checkout OR disabled' should return at least one result"
+        );
+
+        let hit = expect_code_hit(
+            &results,
+            "checkout OR disabled",
+            "src/components/CheckoutButton.tsx::CheckoutButton",
+        );
+
+        assert_eq!(hit.file_path, "src/components/CheckoutButton.tsx");
+        assert!(hit.line_start > 0, "line_start should be one-based");
+        assert!(hit.line_end >= hit.line_start);
+        assert!(
+            matches!(hit.symbol_kind, code::SymbolKind::Function),
+            "expected Function (component), got {:?}",
+            hit.symbol_kind
+        );
+        // JSDoc + JSX body should both appear in the composed text.
+        assert!(
+            hit.text.contains("disabled"),
+            "JSX `disabled` attribute or JSDoc must appear:\n{}",
+            hit.text
+        );
+        assert!(
+            hit.text.contains("checkout"),
+            "JSDoc or signature must mention checkout:\n{}",
+            hit.text
+        );
+    }
+
+    #[test]
+    fn search_returns_results_across_rust_typescript_and_tsx() {
+        // Mixed repo: one .rs file, one .ts file, one .tsx file. A single
+        // index_code() run should produce evidence for all three languages,
+        // and a single FTS5 query that names a shared token ("checkout" or
+        // "validate") must surface records from every language in one
+        // result set.
+        let files = [
+            ("src/checkout.rs", CHECKOUT_FIXTURE),
+            ("src/checkout/session.ts", TS_CHECKOUT_FIXTURE),
+            ("src/components/CheckoutButton.tsx", TSX_CHECKOUT_FIXTURE),
+        ];
+        let (repo_dir, cache_dir) = setup_repo_with_files(&files);
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+
+        let report = indexer.index_code().expect("index_code");
+        assert_eq!(report.files_scanned, 3, "should scan all three tracked files");
+        assert_eq!(report.files_changed, 3, "all three files are new on first run");
+        assert_eq!(report.files_deleted, 0);
+
+        // "checkout" appears as a token in the Rust create_checkout_session
+        // JSDoc, the TypeScript createCheckoutSession JSDoc/signature, and
+        // the TSX CheckoutButton JSDoc/signature.
+        let results = indexer
+            .search_code_text("checkout", 30)
+            .expect("search_code_text");
+
+        // No exact result order asserted — the Epic explicitly disallows
+        // it. We only assert each language shows up at least once.
+        let languages: std::collections::HashSet<&str> =
+            results.iter().map(|r| r.file_path.rsplit('.').next().unwrap_or("")).collect();
+        // file_path ends with .rs, .ts, or .tsx — derive language from suffix.
+        let has_rust = results.iter().any(|r| r.file_path.ends_with(".rs"));
+        let has_ts = results.iter().any(|r| {
+            r.file_path.ends_with(".ts") && !r.file_path.ends_with(".tsx")
+        });
+        let has_tsx = results.iter().any(|r| r.file_path.ends_with(".tsx"));
+
+        assert!(has_rust, "expected at least one Rust result for 'checkout'; got file_paths: {:?}", languages);
+        assert!(has_ts, "expected at least one TypeScript result for 'checkout'; got file_paths: {:?}", languages);
+        assert!(has_tsx, "expected at least one TSX result for 'checkout'; got file_paths: {:?}", languages);
+
+        // Spot-check that the expected identifiers across all three languages
+        // appear. We don't require them to be the only hits; the contract is
+        // a single search covers all three.
+        let identifiers: Vec<&str> = results.iter().map(|r| r.identifier.as_str()).collect();
+        assert!(
+            identifiers.iter().any(|id| id.contains("create_checkout_session")),
+            "expected create_checkout_session (Rust) in identifiers: {:?}",
+            identifiers
+        );
+        assert!(
+            identifiers.iter().any(|id| id.contains("createCheckoutSession")),
+            "expected createCheckoutSession (TS) in identifiers: {:?}",
+            identifiers
+        );
+        assert!(
+            identifiers.iter().any(|id| id.ends_with("::CheckoutButton")),
+            "expected CheckoutButton (TSX) in identifiers: {:?}",
+            identifiers
+        );
+
+        // The mixed-language result set must also preserve language metadata
+        // for each hit. Pull each expected language's record and verify the
+        // stored metadata language string matches.
+        let rust_hit = results
+            .iter()
+            .find(|r| r.identifier.contains("create_checkout_session"))
+            .expect("rust hit");
+        let ts_hit = results
+            .iter()
+            .find(|r| r.identifier.contains("createCheckoutSession"))
+            .expect("ts hit");
+        let tsx_hit = results
+            .iter()
+            .find(|r| r.identifier.ends_with("::CheckoutButton"))
+            .expect("tsx hit");
+
+        assert_eq!(rust_hit.file_path, "src/checkout.rs");
+        assert_eq!(ts_hit.file_path, "src/checkout/session.ts");
+        assert_eq!(tsx_hit.file_path, "src/components/CheckoutButton.tsx");
+
+        // Symbol kind + one-based line range + non-empty explanatory text
+        // must be preserved for each language. The Epic explicitly lists
+        // these four invariants under "Hits preserve language, path, line
+        // range, kind, and text."
+        for hit in &[rust_hit, ts_hit, tsx_hit] {
+            assert!(
+                hit.line_start > 0,
+                "line_start should be one-based for {}",
+                hit.identifier
+            );
+            assert!(
+                hit.line_end >= hit.line_start,
+                "line_end >= line_start for {} ({} >= {})",
+                hit.identifier,
+                hit.line_end,
+                hit.line_start
+            );
+            assert!(
+                !hit.text.is_empty(),
+                "hit text must not be empty for {}",
+                hit.identifier
+            );
+        }
+        assert!(
+            matches!(rust_hit.symbol_kind, code::SymbolKind::Function),
+            "rust hit should be Function, got {:?}",
+            rust_hit.symbol_kind
+        );
+        assert!(
+            matches!(ts_hit.symbol_kind, code::SymbolKind::Function),
+            "ts hit should be Function, got {:?}",
+            ts_hit.symbol_kind
+        );
+        assert!(
+            matches!(tsx_hit.symbol_kind, code::SymbolKind::Function),
+            "tsx hit should be Function (component), got {:?}",
+            tsx_hit.symbol_kind
+        );
+
+        // Confirm language metadata round-trips through the items table.
+        // This validates that the language string stored alongside each hit
+        // matches the actual file extension of that hit — a separate
+        // assertion from `file_path`, which guards against accidental
+        // metadata drift between dialects.
+        for (expected_language, hit) in [
+            ("rust", rust_hit),
+            ("typescript", ts_hit),
+            ("tsx", tsx_hit),
+        ] {
+            let metadata: String = indexer
+                .db
+                .query_row(
+                    "SELECT metadata FROM items WHERE source_type = 'code' AND identifier = ?1",
+                    [&hit.identifier],
+                    |row| row.get(0),
+                )
+                .expect("code item metadata");
+            let metadata: serde_json::Value =
+                serde_json::from_str(&metadata).expect("valid metadata");
+            assert_eq!(
+                metadata["language"], expected_language,
+                "language metadata mismatch for identifier {:?}",
+                hit.identifier
+            );
+        }
+    }
 }

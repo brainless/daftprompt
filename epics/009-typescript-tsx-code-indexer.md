@@ -317,7 +317,7 @@ unchanged.
 ### Task 5: Add deterministic TypeScript/TSX evidence retrieval tests
 
 **Priority:** High  
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 
 Use product-oriented fixtures and FTS5 queries such as:
 
@@ -332,11 +332,11 @@ Do not assert exact result order or vector ranking.
 
 **Acceptance Criteria:**
 
-- [ ] Every query returns the expected identifier through
+- [x] Every query returns the expected identifier through
       `search_code_text()` with no embedder.
-- [ ] Hits preserve language, path, one-based line range, symbol kind, and
+- [x] Hits preserve language, path, one-based line range, symbol kind, and
       explanatory text.
-- [ ] TS and TSX results coexist with Rust results in the same code search.
+- [x] TS and TSX results coexist with Rust results in the same code search.
 
 ### Task 6: Validate production integration and document the result
 
