@@ -293,7 +293,7 @@ unchanged.
 ### Task 4: Parameterize and apply the Epic 008 test foundation
 
 **Priority:** High  
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 
 - Generalize the temporary Git repository helper to accept fixture paths and
   contents rather than hardcoded `.rs` files.
@@ -306,13 +306,13 @@ unchanged.
 
 **Acceptance Criteria:**
 
-- [ ] Epic 008's six indexing lifecycle behaviors pass for TypeScript.
-- [ ] Discovery, first-index, unchanged-run, edit, deletion, and untracked-file
+- [x] Epic 008's six indexing lifecycle behaviors pass for TypeScript.
+- [x] Discovery, first-index, unchanged-run, edit, deletion, and untracked-file
       coverage includes TSX (parameterized cases are acceptable).
-- [ ] Tests verify language, path, lines, kind, text, and identifiers.
-- [ ] Helpers can accept `.js`/`.jsx` fixtures in Epic 010 without duplicating
+- [x] Tests verify language, path, lines, kind, text, and identifiers.
+- [x] Helpers can accept `.js`/`.jsx` fixtures in Epic 010 without duplicating
       Git/cache setup.
-- [ ] Tests are hermetic and FTS5-only.
+- [x] Tests are hermetic and FTS5-only.
 
 ### Task 5: Add deterministic TypeScript/TSX evidence retrieval tests
 

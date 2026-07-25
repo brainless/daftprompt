@@ -1228,27 +1228,33 @@ fn calculate_total(prices: &HashMap<String, f64>) -> f64 {
         assert!(status.success(), "git {:?} failed", args);
     }
 
-    /// Create a temp dir with a Git repo, write fixture files, commit them,
-    /// and return (repo_dir, cache_dir) — both TempDir so they clean up.
-    fn setup_repo() -> (tempfile::TempDir, tempfile::TempDir) {
+    /// Create a temp Git repo containing the supplied repo-relative fixtures.
+    /// Returns (repo_dir, cache_dir) — both TempDir so they clean up.
+    fn setup_repo_with_files(files: &[(&str, &str)]) -> (tempfile::TempDir, tempfile::TempDir) {
         let repo_dir = tempfile::tempdir().expect("repo tempdir");
         let cache_dir = tempfile::tempdir().expect("cache tempdir");
 
-        // init repo
         git(repo_dir.path(), &["init"]);
         git(repo_dir.path(), &["config", "user.email", "test@test.com"]);
         git(repo_dir.path(), &["config", "user.name", "Test"]);
 
-        // Write fixture files
-        fs::create_dir_all(repo_dir.path().join("src")).unwrap();
-        fs::write(repo_dir.path().join("src/cart.rs"), FIXTURE_A).unwrap();
-        fs::write(repo_dir.path().join("src/pricing.rs"), FIXTURE_B).unwrap();
+        for (relative_path, contents) in files {
+            let path = repo_dir.path().join(relative_path);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, contents).unwrap();
+        }
 
-        // commit
         git(repo_dir.path(), &["add", "."]);
         git(repo_dir.path(), &["commit", "-m", "initial"]);
 
         (repo_dir, cache_dir)
+    }
+
+    /// Rust-fixture compatibility wrapper used by the Epic 008 tests.
+    fn setup_repo() -> (tempfile::TempDir, tempfile::TempDir) {
+        setup_repo_with_files(&[("src/cart.rs", FIXTURE_A), ("src/pricing.rs", FIXTURE_B)])
     }
 
     /// Build an Indexer pointing at the repo with FTS5-only (empty model name).
@@ -1452,22 +1458,8 @@ use std::sync::Arc;
 "#;
 
     /// Create a temp Git repo with the checkout fixture committed as src/checkout.rs.
-    /// Returns (repo_dir, cache_dir) — both TempDir so they clean up.
     fn setup_checkout_repo() -> (tempfile::TempDir, tempfile::TempDir) {
-        let repo_dir = tempfile::tempdir().expect("repo tempdir");
-        let cache_dir = tempfile::tempdir().expect("cache tempdir");
-
-        git(repo_dir.path(), &["init"]);
-        git(repo_dir.path(), &["config", "user.email", "test@test.com"]);
-        git(repo_dir.path(), &["config", "user.name", "Test"]);
-
-        fs::create_dir_all(repo_dir.path().join("src")).unwrap();
-        fs::write(repo_dir.path().join("src/checkout.rs"), CHECKOUT_FIXTURE).unwrap();
-
-        git(repo_dir.path(), &["add", "."]);
-        git(repo_dir.path(), &["commit", "-m", "initial"]);
-
-        (repo_dir, cache_dir)
+        setup_repo_with_files(&[("src/checkout.rs", CHECKOUT_FIXTURE)])
     }
 
     // ── Epic 008 Task 3: Deterministic evidence-retrieval tests ───────────
@@ -1578,6 +1570,214 @@ use std::sync::Arc;
             "comment text should mention USD currency; got:\n{}",
             hit.text
         );
+    }
+
+    const TYPESCRIPT_FIXTURE: &str = r#"/** Validates a typed cart before checkout. */
+export function validateTypedCart(items: string[]): boolean {
+    return items.length > 0;
+}
+
+export interface TypedCart {
+    items: string[];
+}
+"#;
+
+    const TYPESCRIPT_SECOND_FIXTURE: &str = r#"export const calculateTypedTotal = (prices: number[]): number => {
+    return prices.reduce((sum, price) => sum + price, 0);
+};
+"#;
+
+    const TSX_FIXTURE: &str = r#"import React from "react";
+
+interface CheckoutButtonProps {
+    label: string;
+}
+
+/** Renders the typed checkout control. */
+export function TypedCheckoutButton({ label }: CheckoutButtonProps) {
+    return <button>{label}</button>;
+}
+"#;
+
+    struct LifecycleCase<'a> {
+        files: &'a [(&'a str, &'a str)],
+        primary_path: &'a str,
+        deleted_path: &'a str,
+        initial_query: &'a str,
+        initial_identifier: &'a str,
+        deleted_query: &'a str,
+        edited_contents: &'a str,
+        edited_query: &'a str,
+        edited_identifier: &'a str,
+        untracked_path: &'a str,
+        untracked_contents: &'a str,
+        untracked_query: &'a str,
+        language: &'a str,
+        kind: code::SymbolKind,
+    }
+
+    fn assert_code_hit(
+        indexer: &Indexer,
+        query: &str,
+        identifier: &str,
+        path: &str,
+        language: &str,
+        kind: &code::SymbolKind,
+    ) {
+        let results = indexer.search_code_text(query, 20).expect("search_code_text");
+        let hit = results
+            .iter()
+            .find(|result| result.identifier == identifier)
+            .unwrap_or_else(|| panic!("expected {identifier} for query {query:?}"));
+        assert_eq!(hit.file_path, path);
+        assert!(hit.line_start > 0, "line_start should be one-based");
+        assert!(hit.line_end >= hit.line_start);
+        assert_eq!(&hit.symbol_kind, kind);
+        assert!(hit.text.contains(query), "text should contain {query:?}:\n{}", hit.text);
+
+        let metadata: String = indexer
+            .db
+            .query_row(
+                "SELECT metadata FROM items WHERE source_type = 'code' AND identifier = ?1",
+                [identifier],
+                |row| row.get(0),
+            )
+            .expect("code item metadata");
+        let metadata: serde_json::Value = serde_json::from_str(&metadata).expect("valid metadata");
+        assert_eq!(metadata["language"], language);
+        assert_eq!(metadata["file_path"], path);
+        assert_eq!(metadata["line_start"], hit.line_start);
+        assert_eq!(metadata["line_end"], hit.line_end);
+        assert_eq!(metadata["symbol_kind"], kind.as_str());
+    }
+
+    fn run_language_lifecycle(case: &LifecycleCase<'_>) {
+        let (repo_dir, cache_dir) = setup_repo_with_files(case.files);
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+
+        let first = indexer.index_code().expect("first index");
+        assert_eq!(first.files_scanned, case.files.len());
+        assert_eq!(first.files_changed, case.files.len());
+        assert_eq!(first.files_deleted, 0);
+        assert!(first.symbols_indexed > 0);
+        assert_code_hit(
+            &indexer,
+            case.initial_query,
+            case.initial_identifier,
+            case.primary_path,
+            case.language,
+            &case.kind,
+        );
+
+        let unchanged = indexer.index_code().expect("unchanged index");
+        assert_eq!(unchanged.files_scanned, case.files.len());
+        assert_eq!(unchanged.files_changed, 0);
+        assert_eq!(unchanged.files_deleted, 0);
+        assert_eq!(unchanged.symbols_indexed, 0);
+
+        let primary = repo_dir.path().join(case.primary_path);
+        let canonical = code::canonicalize_file_path(repo_dir.path(), primary.as_path());
+        let (old_mtime, old_hash) = db::code_file_get(&indexer.db, &canonical)
+            .expect("tracking lookup")
+            .expect("tracked primary fixture");
+        set_file_mtime(&primary, FileTime::from_unix_time(old_mtime + 2, 0)).expect("touch fixture");
+        let touched = indexer.index_code().expect("touch index");
+        assert_eq!(touched.files_changed, 0);
+        assert_eq!(touched.symbols_indexed, 0);
+        let (new_mtime, new_hash) = db::code_file_get(&indexer.db, &canonical)
+            .expect("tracking lookup")
+            .expect("tracked primary fixture");
+        assert_eq!(new_mtime, old_mtime + 2);
+        assert_eq!(new_hash, old_hash);
+
+        fs::write(&primary, case.edited_contents).expect("edit fixture");
+        git(repo_dir.path(), &["add", case.primary_path]);
+        git(repo_dir.path(), &["commit", "-m", "edit fixture"]);
+        let edited = indexer.index_code().expect("edit index");
+        assert_eq!(edited.files_changed, 1);
+        assert!(edited.symbols_indexed > 0);
+        assert!(indexer
+            .search_code_text(case.initial_query, 20)
+            .expect("search old evidence")
+            .iter()
+            .all(|result| result.identifier != case.initial_identifier));
+        assert_code_hit(
+            &indexer,
+            case.edited_query,
+            case.edited_identifier,
+            case.primary_path,
+            case.language,
+            &case.kind,
+        );
+
+        fs::remove_file(repo_dir.path().join(case.deleted_path)).expect("delete fixture");
+        git(repo_dir.path(), &["add", "-A"]);
+        git(repo_dir.path(), &["commit", "-m", "delete fixture"]);
+        let deleted = indexer.index_code().expect("deletion index");
+        assert_eq!(deleted.files_deleted, 1);
+        assert!(indexer
+            .search_code_text(case.deleted_query, 20)
+            .expect("search deleted evidence")
+            .is_empty());
+
+        let untracked = repo_dir.path().join(case.untracked_path);
+        fs::create_dir_all(untracked.parent().expect("untracked parent")).unwrap();
+        fs::write(untracked, case.untracked_contents).expect("write untracked fixture");
+        let excluded = indexer.index_code().expect("untracked index");
+        assert_eq!(excluded.files_scanned, 1);
+        assert_eq!(excluded.files_changed, 0);
+        assert!(indexer
+            .search_code_text(case.untracked_query, 20)
+            .expect("search untracked evidence")
+            .is_empty());
+    }
+
+    #[test]
+    fn typescript_indexing_lifecycle_contract() {
+        let files = [
+            ("src/cart.ts", TYPESCRIPT_FIXTURE),
+            ("src/pricing.ts", TYPESCRIPT_SECOND_FIXTURE),
+        ];
+        run_language_lifecycle(&LifecycleCase {
+            files: &files,
+            primary_path: "src/cart.ts",
+            deleted_path: "src/pricing.ts",
+            initial_query: "validateTypedCart",
+            initial_identifier: "src/cart.ts::validateTypedCart",
+            deleted_query: "calculateTypedTotal",
+            edited_contents: "export function checkTypedInventory(sku: string): boolean {\n    return sku.startsWith(\"INV\");\n}\n",
+            edited_query: "checkTypedInventory",
+            edited_identifier: "src/cart.ts::checkTypedInventory",
+            untracked_path: "src/secret.ts",
+            untracked_contents: "export function leakedTypedSecret() { return 'password'; }\n",
+            untracked_query: "leakedTypedSecret",
+            language: "typescript",
+            kind: code::SymbolKind::Function,
+        });
+    }
+
+    #[test]
+    fn tsx_indexing_lifecycle_contract() {
+        let files = [
+            ("src/components/CheckoutButton.tsx", TSX_FIXTURE),
+            ("src/components/Secondary.tsx", "export function SecondaryControl() { return <span>secondary</span>; }\n"),
+        ];
+        run_language_lifecycle(&LifecycleCase {
+            files: &files,
+            primary_path: "src/components/CheckoutButton.tsx",
+            deleted_path: "src/components/Secondary.tsx",
+            initial_query: "TypedCheckoutButton",
+            initial_identifier: "src/components/CheckoutButton.tsx::TypedCheckoutButton",
+            deleted_query: "SecondaryControl",
+            edited_contents: "export function ConfirmCheckoutButton() {\n    return <button>confirm</button>;\n}\n",
+            edited_query: "ConfirmCheckoutButton",
+            edited_identifier: "src/components/CheckoutButton.tsx::ConfirmCheckoutButton",
+            untracked_path: "src/components/Secret.tsx",
+            untracked_contents: "export function LeakedTsxSecret() { return <div>password</div>; }\n",
+            untracked_query: "LeakedTsxSecret",
+            language: "tsx",
+            kind: code::SymbolKind::Function,
+        });
     }
 
     #[test]
