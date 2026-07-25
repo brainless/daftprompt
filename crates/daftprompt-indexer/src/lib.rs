@@ -104,12 +104,11 @@ pub struct Indexer {
     db: Connection,
     embedder: Option<Embedder>,
     repo_path: PathBuf,
-    /// Per-dialect extractors built once at construction. The Rust
-    /// extractor is always present; TypeScript/Tsx entries land in
-    /// Task 2/3 once their grammars are wired (Epic 009 Task 1 only
-    /// constructs the Rust one, so production indexing stays Rust-only
-    /// for now).
+    /// Per-dialect extractors built once at construction. The Rust and
+    /// TypeScript extractors are always present (Epic 009 Task 2). The
+    /// TSX extractor lands in Task 3 alongside its grammar wiring.
     rust_extractor: code::CodeExtractor,
+    typescript_extractor: code::CodeExtractor,
 }
 
 struct ItemDetail {
@@ -293,11 +292,12 @@ impl Indexer {
             db,
             embedder,
             repo_path: std::fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.to_path_buf()),
-            // Build the Rust extractor once at indexer construction
-            // (Epic 009 Design Decision #1: queries are compiled at
-            // construction, not per file). Task 2/3 will register the
-            // TypeScript and TSX extractors alongside this one.
+            // Build the Rust and TypeScript extractors once at indexer
+            // construction (Epic 009 Design Decision #1: queries are
+            // compiled at construction, not per file). The TSX extractor
+            // lands in Task 3 alongside its grammar wiring.
             rust_extractor: code::CodeExtractor::rust(),
+            typescript_extractor: code::CodeExtractor::for_language(code::CodeLanguage::TypeScript),
         })
     }
 
@@ -360,11 +360,11 @@ impl Indexer {
 
     pub fn index_code(&mut self) -> anyhow::Result<CodeIndexReport> {
         // Epic 009 Design Decision #2: one tracked-file traversal that
-        // accepts the supported extension set. Task 1 only configures
-        // `.rs` here; `.ts` / `.tsx` land in Task 2/3 alongside the
-        // matching extractors. Adding them to this list before those
-        // tasks would feed .ts files into the Rust extractor, so we keep
-        // the list narrow until each dialect can actually parse them.
+        // accepts the supported extension set. Task 1 added `.ts` and
+        // `.tsx` here so deletion reconciliation runs even before the
+        // matching extractors were wired. Task 2 routes `.ts` through
+        // the TypeScript extractor; `.tsx` still surfaces as "no
+        // extractor wired" until Task 3.
         //
         // Rejected alternative: keep `list_tracked_rust_files` and add a
         // separate `list_tracked_ts_files` later. That would double the
@@ -420,16 +420,11 @@ impl Indexer {
                 }
             };
 
-            // Languages whose extractor is not yet wired (Task 2/3) are
-            // skipped explicitly here. The `list_tracked_code_files`
-            // extension set above already includes `.ts`/`.tsx` so we
-            // discover them; until Task 2/3 we just refuse to parse.
-            // Rejected alternative: filter the extension set here to
-            // only `.rs`. That would delay deletion reconciliation for
-            // tracked TypeScript files until Task 2.
-            if !matches!(language, code::CodeLanguage::Rust) {
+            // TSX arrives in Task 3. Until then, surface a clear warning
+            // so it is obvious why tracked `.tsx` files are skipped.
+            if let code::CodeLanguage::Tsx = language {
                 log::warn!(
-                    "{} extractor not yet wired (Task 2/3); skipping {}",
+                    "{} extractor not yet wired (Task 3); skipping {}",
                     language.as_str(),
                     file_path.display()
                 );
@@ -473,24 +468,29 @@ impl Indexer {
 
             db::delete_code_file_items(&tx, &canonical)?;
 
-            let symbols = match language {
-                code::CodeLanguage::Rust => match code::extract_symbols_with_extractor(
-                    &self.rust_extractor,
-                    &self.repo_path,
-                    file_path,
-                    &source,
-                ) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        log::warn!("Failed to parse {}: {}", file_path.display(), e);
-                        tx.rollback()?;
-                        continue;
-                    }
-                },
-                code::CodeLanguage::TypeScript | code::CodeLanguage::Tsx => {
+            // Dispatch by language: each dialect has its own pre-built
+            // extractor so the compiled tree-sitter query is reused
+            // (Epic 009 Design Decision #1).
+            let extractor: &code::CodeExtractor = match language {
+                code::CodeLanguage::Rust => &self.rust_extractor,
+                code::CodeLanguage::TypeScript => &self.typescript_extractor,
+                code::CodeLanguage::Tsx => {
                     // Defensive: list-level filter already skipped these,
                     // but guard the transaction path in case the gate is
                     // ever moved.
+                    tx.rollback()?;
+                    continue;
+                }
+            };
+            let symbols = match code::extract_symbols_with_extractor(
+                extractor,
+                &self.repo_path,
+                file_path,
+                &source,
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::warn!("Failed to parse {}: {}", file_path.display(), e);
                     tx.rollback()?;
                     continue;
                 }

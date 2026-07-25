@@ -245,7 +245,7 @@ unchanged.
 ### Task 2: Implement TypeScript symbol extraction
 
 **Priority:** High  
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 
 - Add the compatible `tree-sitter-typescript` dependency.
 - Add and validate the TypeScript query.
@@ -258,16 +258,16 @@ unchanged.
 
 **Acceptance Criteria:**
 
-- [ ] A `.ts` product fixture produces inspectable evidence for a public
+- [x] A `.ts` product fixture produces inspectable evidence for a public
       function, supporting interface/type, configuration constant, class
       method, imports, and a standalone limitation comment.
-- [ ] Identifiers include file, namespace, and enclosing class where relevant.
-- [ ] JSDoc is attached to its declaration and not duplicated as standalone
+- [x] Identifiers include file, namespace, and enclosing class where relevant.
+- [x] JSDoc is attached to its declaration and not duplicated as standalone
       comment evidence.
-- [ ] Callable bindings and ordinary variables receive distinct appropriate
+- [x] Callable bindings and ordinary variables receive distinct appropriate
       kinds.
-- [ ] Imports/comments are FTS5-only.
-- [ ] Empty, comment-only, syntax-error, overload, anonymous-default-export,
+- [x] Imports/comments are FTS5-only.
+- [x] Empty, comment-only, syntax-error, overload, anonymous-default-export,
       and nested-namespace fixtures have explicit expectations.
 
 ### Task 3: Implement TSX extraction
