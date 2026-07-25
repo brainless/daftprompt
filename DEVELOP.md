@@ -32,6 +32,7 @@ These are not currently path dependencies but are available locally for referenc
 | **sqlite-vec** | `~/Projects/sqlite-vec` | Vector similarity search extension (v0.0.1-alpha.33, used in `daftprompt-indexer`) |
 | **model2vec-rs** | `~/Projects/model2vec-rs` | Static text embeddings (v0.2.1, used in `daftprompt-indexer`) |
 | **tree-sitter** | `~/Projects/tree-sitter` | Source code parsing with tree-sitter (Epic 004 — done) |
+| **tree-sitter-typescript** | `~/Projects/tree-sitter-typescript` | TypeScript/TSX grammars (v0.23 from crates.io in `daftprompt-indexer`; local clone available for reference) |
 | **xilem** | `~/Projects/xilem` | Rust-native UI framework (under evaluation) |
 | **sqlx** | `~/Projects/sqlx` | Async SQL toolkit (potential future use) |
 | **diesel** | `~/Projects/diesel` | ORM (potential future use) |
@@ -61,7 +62,7 @@ cargo run                      # launch the GUI
 cargo run -- --repo ~/some-repo  # open a specific git repo
 cargo run -- --repo . --index  # index all sources (git log, code, documents)
 cargo run -- --repo . --search "fix crash"  # CLI unified hybrid search (all sources)
-cargo run -- --repo . --index-code  # index Rust source code only
+cargo run -- --repo . --index-code  # index Rust, TypeScript, and TSX source code
 cargo run -- --repo . --search-code "render pipeline"  # CLI code search only
 cargo run -- --repo . --index-documents  # index documents (Markdown, plain text) only
 cargo run -- --repo . --search-documents "setup guide"  # CLI document search only
@@ -93,7 +94,7 @@ daftprompt/
 │           ├── lib.rs            # Indexer public API (commits, code, documents, unified search)
 │           ├── db.rs             # SQLite schema, FTS5, vec0, queries
 │           ├── embed.rs          # model2vec-rs wrapper
-│           ├── code.rs           # tree-sitter code parsing
+│           ├── code.rs           # language registry/router + shared Rust/TypeScript/TSX query constants
 │           ├── documents.rs      # document discovery, chunking, incremental indexing
 │           └── schema.sql        # SQL schema definition
 └── epics/                        # feature epic specifications
@@ -106,5 +107,6 @@ daftprompt/
 - **Hybrid search**: Combines FTS5 (keyword) and sqlite-vec (vector KNN) via Reciprocal Rank Fusion.
 - **Graceful degradation**: If the embedding model fails to load, search falls back to FTS5-only. In non-git folders, Cmd+K falls back to substring matching.
 - **Unified search**: Cmd+K searches all three sources (git log, code, documents) simultaneously and displays results in three separate containers. Source-specific CLI flags (`--search-code`, `--search-documents`, `--search-git-log`) are also available.
+- **Code language routing**: `crates/daftprompt-indexer/src/code.rs` owns extension-based dispatch for Git-tracked `.rs`, `.ts`, and `.tsx` files and the compiled tree-sitter query registry. CLI/UI indexing and search stay language-neutral and call the shared indexer APIs.
 - **UI is rendered by akar** (post-Epic 005): daftprompt owns application state + the winit window; akar owns the wgpu pipeline, draw list, input state, layout, and components. `src/ui/render.rs` is the immediate-mode render layer; the per-frame `Layout::new()` rebuilds the taffy tree every frame.
 - **Screenshot mode** (post-Task 8): `cargo run --release -- --screenshot <path> --exit` waits 5 s for the UI to settle, captures one frame via akar's `core.take_screenshot`, PNG-encodes the result, and exits. Useful for visual regression testing.

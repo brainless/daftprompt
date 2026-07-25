@@ -25,7 +25,7 @@ RUST_LOG=debug cargo run       # debug logging
 cargo run -- --repo . --index                       # index all sources (git log, code, documents)
 cargo run -- --repo . --reindex                     # drop + rebuild all indexes
 cargo run -- --repo . --search "fix crash"          # CLI unified hybrid search (all sources)
-cargo run -- --repo . --index-code                  # index Rust source (tree-sitter)
+cargo run -- --repo . --index-code                  # index Rust, TypeScript, and TSX source (tree-sitter)
 cargo run -- --repo . --reindex-code
 cargo run -- --repo . --search-code "render pipeline"
 cargo run -- --repo . --index-documents             # index documents (Markdown, plain text)
@@ -71,7 +71,7 @@ crates/daftprompt-indexer/  standalone indexing + search crate
                         search_hybrid, search_code_hybrid, search_document_hybrid, search_all_hybrid)
     db.rs               SQLite schema, FTS5, vec0/vec_code/vec_documents, queries
     embed.rs            model2vec-rs wrapper
-    code.rs             tree-sitter symbol extraction (Rust)
+    code.rs             language registry/router, shared Rust/TypeScript/TSX query constants
     documents.rs        document discovery, chunking, incremental indexing
     schema.sql          items, items_fts (external-content), vec_items, vec_code, vec_documents,
                         code_files, document_files, triggers
@@ -82,7 +82,8 @@ crates/daftprompt-indexer/  standalone indexing + search crate
 - `items` is the single source of truth for text; `items_fts` is an external-content FTS5 index kept in sync by AFTER INSERT/UPDATE/DELETE triggers — never write to `items_fts` directly.
 - `vec_items` holds commit vectors; `vec_code` holds code vectors; `vec_documents` holds document vectors. Partitioned per `source_type` for exact KNN isolation (no over-fetch-and-filter). See Epic 004 "Search Isolation" and Epic 007.
 - Per-repo DB files: one repo = one `.db` file, filename = slug of repo path. KNN is naturally scoped, no `repo_id` column.
-- Increparency: `code_files` and `document_files` track `mtime` + `content_hash` (xxh3, **not** `DefaultHasher` — no stability guarantee across Rust versions). `touch` without content change must not re-index.
+- Incremental indexing: `code_files` and `document_files` track `mtime` + `content_hash` (xxh3, **not** `DefaultHasher` — no stability guarantee across Rust versions). `touch` without content change must not re-index.
+- Code indexer invariants: one shared `code_files`/`vec_code` pipeline indexes Git-tracked `.rs`, `.ts`, and `.tsx` files; `crates/daftprompt-indexer/src/code.rs` owns extension-based language dispatch, and production CLI/UI paths must remain language-neutral.
 
 When implementing, keep **rejected alternatives as comments in code** (Epic 004 Design Decisions #1–8) — they are deliberate tuning knobs, not dead code.
 
@@ -90,10 +91,10 @@ When implementing, keep **rejected alternatives as comments in code** (Epic 004 
 
 - **Comments:** the codebase deliberately retains commented-out rejected-alternatives and notes about future tuning. When adding to modules that have these (e.g. `db.rs`, `code.rs`), follow the pattern. Do not strip them. Otherwise follow the standard "no unnecessary comments" rule.
 - **Epic specs are the source of truth** for feature shape. If a task's acceptance criteria are not met, the task is not done. Mark task status in the epic file when completing a task.
-- **Failures degrade, never panic:** model download failure → FTS5-only search; non-git folder → substring search; parse error in a `.rs` file → index what parseable, log, continue (one transaction per file so a bad file doesn't roll back the batch).
+- **Failures degrade, never panic:** model download failure → FTS5-only search; non-git folder → substring search; parse error in a supported `.rs`, `.ts`, or `.tsx` file → index what is parseable, log, continue (one transaction per file so a bad file doesn't roll back the batch).
 - **Per-file transactions** for `index_code()`: a single bad file must not roll back the whole run.
 - **Stable hashing:** use `xxhash-rust` xxh3 for `content_hash`, never `std::collections::hash_map::DefaultHasher`.
-- **Tree-sitter queries** are compiled once at construction and reused for every file (per-file compilation is a startup-error bug).
+- **Tree-sitter registry/router:** `code.rs` compiles each configured Rust, TypeScript, and TSX query once at construction, selects the language by canonical extension, and reuses the compiled query for every file; never add language branching to production CLI/UI paths.
 - **Trait default methods** (with bodies) are indexed individually as `TraitMethod`; signature-only methods are folded into the parent `Trait` item. Identifiers carry the full canonical namespace (`file_path::module_path::TypeName::method`).
 
 - **UI is rendered by akar** (post-Epic 005): daftprompt owns application state + the winit window; akar owns the wgpu pipeline, draw list, input state, layout, and components. `src/ui/render.rs` is the immediate-mode render layer; the per-frame `Layout::new()` rebuilds the taffy tree every frame.

@@ -341,7 +341,7 @@ Do not assert exact result order or vector ranking.
 ### Task 6: Validate production integration and document the result
 
 **Priority:** Medium  
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 
 - Verify `--index-code`, `--reindex-code`, `--search-code`, unified `--index`,
   unified `--search`, GUI startup indexing, and Cmd/Ctrl+K unified search need
@@ -355,13 +355,22 @@ Do not assert exact result order or vector ranking.
 
 **Acceptance Criteria:**
 
-- [ ] Existing CLI/UI code search shows TypeScript and TSX cards without a new
+- [x] Existing CLI/UI code search shows TypeScript and TSX cards without a new
       mode.
-- [ ] Reindex removes and rebuilds Rust, TypeScript, and TSX code records
+- [x] Reindex removes and rebuilds Rust, TypeScript, and TSX code records
       without affecting commits/documents.
-- [ ] `cargo check --workspace` passes.
-- [ ] `cargo test --workspace` passes.
-- [ ] Documentation no longer describes code indexing as Rust-only.
+- [x] `cargo check --workspace` passes.
+- [x] `cargo test --workspace` passes.
+- [x] Documentation no longer describes code indexing as Rust-only.
+
+**Validation:** `cargo test --workspace` passes 95 tests (84 indexer + 11 main;
+0 doc tests). Production indexing/search in `src/main.rs` and state plumbing in
+`src/state.rs` call language-neutral indexer APIs; language dispatch remains in
+`crates/daftprompt-indexer/src/code.rs`. The only production-side language-aware
+logic found is `SymbolKind` label formatting for shared TypeScript/TSX kinds,
+not indexing or search routing. Follow-up: update the stale Rust-only
+`--index-code` help text in `src/main.rs` when production-code edits are in
+scope.
 
 ## Test Matrix
 

@@ -33,6 +33,10 @@ This is a text repository explorer built with Rust and akar (a GPU UI component 
 - Three result containers on canvas (git log, codebase, documents)
 - Clear button
 
+✅ **TypeScript and TSX Code Search**
+- Git-tracked Rust (`.rs`), TypeScript (`.ts`), and TSX (`.tsx`) files share one code index
+- The existing global search box searches all three languages; no separate language mode is required
+
 ✅ **System Theme Support**
 - Dark theme (default, via `AKAR_THEME_DARK`)
 - Theme-aware colors for all components
