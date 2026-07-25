@@ -720,7 +720,7 @@ impl Application {
             state.search_active = !state.search_active;
             state.search_just_opened = state.search_active;
             state.search_query.clear();
-            state.cursor_pos = 0;
+            state.search_edit_state = Default::default();
             state.cursor_timer = 0.0;
             state.cursor_visible = true;
             state.search_results.clear();
@@ -741,7 +741,7 @@ impl Application {
                 state.search_active = false;
                 state.search_just_opened = false;
                 state.search_query.clear();
-                state.cursor_pos = 0;
+                state.search_edit_state = Default::default();
                 state.search_results.clear();
                 state.code_search_results.clear();
                 state.document_search_results.clear();

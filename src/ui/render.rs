@@ -1029,7 +1029,8 @@ fn icon_emoji(icon: IconType) -> &'static str {
 /// Input
 /// -----
 /// `text_input` mutates `value` (typed/deleted characters) and
-/// `cursor_pos` (arrow/Home/End), and reports `changed` / `submitted`
+/// `search_edit_state` (selection and cursor), and reports `changed` /
+/// `submitted`
 /// via its response.
 ///
 /// Focus
@@ -1139,7 +1140,7 @@ pub fn render_search(core: &mut AkarCore, layout: &mut Layout, state: &mut AppSt
         &*layout,
         search_node,
         &mut state.search_query,
-        &mut state.cursor_pos,
+        &mut state.search_edit_state,
         "Search everything... (Cmd+K)",
         state.cursor_visible,
         &theme,

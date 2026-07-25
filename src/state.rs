@@ -1,5 +1,5 @@
 use crate::ui::container::Container;
-use akar_components::CanvasState;
+use akar_components::{CanvasState, TextEditState};
 use glam::Vec2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -43,8 +43,8 @@ pub struct AppState {
     pub search_active: bool,
     pub search_just_opened: bool,
 
-    // Text-input cursor (Task 6: read/written by search box)
-    pub cursor_pos: usize,
+    // Text selection/cursor state (read/written by the search box).
+    pub search_edit_state: TextEditState,
     pub cursor_visible: bool,
     pub cursor_timer: f32,
 
@@ -125,7 +125,7 @@ impl AppState {
             search_active: false,
             search_just_opened: false,
 
-            cursor_pos: 0,
+            search_edit_state: TextEditState::default(),
             cursor_visible: true,
             cursor_timer: 0.0,
 
