@@ -2427,7 +2427,9 @@ pub fn list_tracked_code_files(
     repo_path: &Path,
     extensions: &[&str],
 ) -> anyhow::Result<Vec<PathBuf>> {
-    let entries = list_tracked_code_file_entries(repo_path, extensions)?;
+    let repo = gix::discover(repo_path)?;
+    let tree_id = repo.head_tree_id_or_empty()?.detach();
+    let entries = list_tracked_code_file_entries(&repo, tree_id, extensions)?;
     Ok(entries.into_iter().map(|e| e.absolute_path).collect())
 }
 
@@ -2458,17 +2460,15 @@ struct TrackedCodeFileEntry {
 /// reading blob content yet. Returns entries with their OIDs so the caller
 /// can batch-read blobs in a single repo session.
 fn list_tracked_code_file_entries(
-    repo_path: &Path,
+    repo: &gix::Repository,
+    tree_id: gix::hash::ObjectId,
     extensions: &[&str],
 ) -> anyhow::Result<Vec<TrackedCodeFileEntry>> {
-    let repo = gix::discover(repo_path)?;
-
     let work_dir = match repo.workdir() {
         Some(dir) => dir.to_path_buf(),
         None => return Ok(vec![]),
     };
 
-    let tree_id = repo.head_tree_id_or_empty()?;
     let tree = repo.find_tree(tree_id)?;
 
     let entries = tree.traverse().breadthfirst.files()?;
@@ -2524,46 +2524,45 @@ pub fn list_tracked_code_files_with_content(
     repo_path: &Path,
     extensions: &[&str],
 ) -> anyhow::Result<(Vec<TrackedCodeFile>, i64)> {
-    let entries = list_tracked_code_file_entries(repo_path, extensions)?;
-
-    // Open the repo once to read all blobs and the HEAD commit time.
+    // One repository handle and one resolved HEAD tree supply discovery,
+    // blob contents, and the proxy timestamp. This avoids mixing snapshots
+    // if HEAD changes concurrently.
     let repo = gix::discover(repo_path)?;
-
-    // HEAD commit author timestamp — used as a proxy mtime for all files
-    // because the Git tree does not store per-file modification times.
-    // Extract the timestamp while repo is alive so we don't need to open it
-    // again; the decode chain borrows from the commit object which borrows
-    // from repo, so we must complete the chain before moving on.
-    let head_mtime = repo
-        .head_id()
-        .ok()
-        .and_then(|id| id.object().ok())
-        .and_then(|obj| obj.try_into_commit().ok())
-        .and_then(|commit| {
-            let decoded = commit.decode().ok()?;
-            let author = decoded.author().ok()?;
-            let time = author.time().ok()?;
-            Some(time.seconds)
-        })
-        .unwrap_or(0);
+    let head_commit = repo.head_commit().ok();
+    let (tree_id, head_mtime) = match head_commit {
+        Some(commit) => {
+            let tree_id = commit.tree_id()?.detach();
+            let decoded = commit.decode()?;
+            let head_mtime = decoded
+                .author()
+                .ok()
+                .and_then(|author| author.time().ok())
+                .map(|time| time.seconds)
+                .unwrap_or(0);
+            (tree_id, head_mtime)
+        }
+        None => (repo.head_tree_id_or_empty()?.detach(), 0),
+    };
+    let entries = list_tracked_code_file_entries(&repo, tree_id, extensions)?;
 
     let mut files = Vec::with_capacity(entries.len());
     for entry in entries {
-        match repo.find_blob(entry.oid) {
-            Ok(blob) => {
-                files.push(TrackedCodeFile {
-                    absolute_path: entry.absolute_path,
-                    relative_path: entry.relative_path,
-                    content: blob.data.to_vec(),
-                });
-            }
-            Err(e) => {
-                log::warn!(
-                    "Failed to read blob for {}: {}",
-                    entry.relative_path, e
-                );
-            }
-        }
+        // Abort before deletion reconciliation if any discovered blob cannot
+        // be read. Silently omitting it would make index_code() mistake a
+        // transient object-store failure for a committed file deletion and
+        // remove valid existing evidence.
+        let blob = repo.find_blob(entry.oid).map_err(|error| {
+            anyhow::anyhow!(
+                "failed to read HEAD blob for {}: {}",
+                entry.relative_path,
+                error
+            )
+        })?;
+        files.push(TrackedCodeFile {
+            absolute_path: entry.absolute_path,
+            relative_path: entry.relative_path,
+            content: blob.data.to_vec(),
+        });
     }
 
     Ok((files, head_mtime))
@@ -4335,6 +4334,37 @@ module.exports = function () {
             );
         }
         assert!(imports.text.contains("import(\"./payment-client\")"));
+    }
+
+    #[test]
+    fn javascript_destructured_require_is_extracted_as_import_evidence() {
+        let source = r#"const { charge, refund: issueRefund } = require("./payments");
+const [primaryGateway] = require("./gateways");
+"#;
+        let symbols = extract_js("src/requires.js", source);
+        let imports = js_symbol(
+            &symbols,
+            &super::SymbolKind::Imports,
+            "src/requires.js::__imports__",
+        );
+
+        assert!(!imports.embed);
+        assert_eq!(imports.line_start, 1);
+        assert_eq!(imports.line_end, 2);
+        assert!(imports
+            .text
+            .contains(r#"const { charge, refund: issueRefund } = require("./payments");"#));
+        assert!(imports
+            .text
+            .contains(r#"const [primaryGateway] = require("./gateways");"#));
+        assert!(
+            !symbols.iter().any(|symbol| {
+                symbol.identifier.ends_with("::charge")
+                    || symbol.identifier.ends_with("::issueRefund")
+                    || symbol.identifier.ends_with("::primaryGateway")
+            }),
+            "destructured require bindings must remain import evidence, not top-level symbols"
+        );
     }
 
     #[test]

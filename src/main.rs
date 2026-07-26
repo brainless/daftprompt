@@ -666,12 +666,12 @@ impl Application {
             inset: akar_layout::Rect {
                 left: akar_layout::auto(),
                 top: akar_layout::auto(),
-                right: akar_layout::length(10.0),
-                bottom: akar_layout::length(10.0),
+                right: akar_layout::length(10.0_f32),
+                bottom: akar_layout::length(10.0_f32),
             },
             size: akar_layout::Size {
-                width: akar_layout::length(80.0),
-                height: akar_layout::length(20.0),
+                width: akar_layout::length(80.0_f32),
+                height: akar_layout::length(20.0_f32),
             },
             ..Default::default()
         });

@@ -386,7 +386,7 @@ fn render_containers(
             let item_node = layout.new_leaf(Style {
                 position: Position::Absolute,
                 inset: Rect {
-                    left: length(0.0),
+                    left: length(0.0_f32),
                     top: length(item_rel_y),
                     right: auto(),
                     bottom: auto(),
@@ -865,7 +865,7 @@ pub fn render_drawer(core: &mut AkarCore, layout: &mut Layout, state: &mut AppSt
         let row = layout.new_leaf(Style {
             position: Position::Absolute,
             inset: Rect {
-                left: length(0.0),
+                left: length(0.0_f32),
                 top: length(row_top),
                 right: auto(),
                 bottom: auto(),
@@ -882,13 +882,13 @@ pub fn render_drawer(core: &mut AkarCore, layout: &mut Layout, state: &mut AppSt
         let icon = layout.new_leaf(Style {
             position: Position::Absolute,
             inset: Rect {
-                left: length(10.0),
-                top: length(0.0),
+                left: length(10.0_f32),
+                top: length(0.0_f32),
                 right: auto(),
                 bottom: auto(),
             },
             size: Size {
-                width: length(40.0),
+                width: length(40.0_f32),
                 height: length(ROW_HEIGHT),
             },
             ..Default::default()
@@ -904,7 +904,7 @@ pub fn render_drawer(core: &mut AkarCore, layout: &mut Layout, state: &mut AppSt
                 position: Position::Absolute,
                 inset: Rect {
                     left: length(text_left),
-                    top: length(0.0),
+                    top: length(0.0_f32),
                     right: auto(),
                     bottom: auto(),
                 },

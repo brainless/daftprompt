@@ -764,11 +764,24 @@ All three items above have been resolved:
 2. **Destructured require.** The import-range collection in
    `process_javascript_variable_declaration()` now runs before the
    identifier-only binding filter. `destructured_require_appears_in_imports_record`
-   verifies the fix.
+   verifies FTS5 retrieval, while
+   `javascript_destructured_require_is_extracted_as_import_evidence` verifies
+   exact extractor evidence, ranges, FTS-only behavior, and symbol exclusion.
 3. **CommonJS-exported class methods.** `process_javascript_assignment()` now
    calls `process_javascript_class_methods()` when the right-hand side is a
    class. `commonjs_exported_class_methods_are_indexed` verifies stable
-   `__module_export::method` and `exports.Name::method` identifiers.
+   `__module_export::method` and `exports.Name::method` identifiers, exact
+   one-based ranges, method-local body evidence, and sibling exclusion.
 
-`cargo check --workspace` passes. `cargo test --workspace` passes 142 tests
-(131 indexer + 11 main), up from 138 before the fixes (4 new regression tests).
+`cargo check --workspace` passes. After the coverage follow-up,
+`cargo test --workspace` passes 143 tests (132 indexer + 11 main), up from 138
+before the review fixes (5 new regression tests).
+
+### Post-review robustness follow-up
+
+The HEAD-tree reader now uses one `gix::Repository` handle and one resolved
+tree for discovery, blob reads, and the proxy commit timestamp. Blob-read
+failure aborts before deletion reconciliation instead of omitting the path and
+risking deletion of valid indexed evidence. Local `f32` fallback warnings
+surfaced during verification were also resolved; warnings in path dependencies
+remain owned by those dependencies.

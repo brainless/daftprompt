@@ -3425,6 +3425,11 @@ exports.Helper = class HelperUtil {
             "charge should be a Method, got {:?}",
             charge_hit.symbol_kind
         );
+        assert_eq!(charge_hit.line_start, 2);
+        assert_eq!(charge_hit.line_end, 4);
+        assert!(charge_hit.text.contains("return amount"));
+        assert!(!charge_hit.text.contains("refund"));
+        assert!(!charge_hit.text.contains("format"));
 
         let refund_hit = results
             .iter()
@@ -3435,6 +3440,11 @@ exports.Helper = class HelperUtil {
             "refund should be namespaced as __module_export::refund, got: {}",
             refund_hit.identifier
         );
+        assert_eq!(refund_hit.line_start, 6);
+        assert_eq!(refund_hit.line_end, 8);
+        assert!(refund_hit.text.contains("return transactionId"));
+        assert!(!refund_hit.text.contains("charge"));
+        assert!(!refund_hit.text.contains("format"));
 
         // exports.Helper class methods should be namespaced under Helper
         let format_hit = results
@@ -3451,5 +3461,10 @@ exports.Helper = class HelperUtil {
             "format should be a Method, got {:?}",
             format_hit.symbol_kind
         );
+        assert_eq!(format_hit.line_start, 12);
+        assert_eq!(format_hit.line_end, 14);
+        assert!(format_hit.text.contains("return String(value)"));
+        assert!(!format_hit.text.contains("charge"));
+        assert!(!format_hit.text.contains("refund"));
     }
 }
