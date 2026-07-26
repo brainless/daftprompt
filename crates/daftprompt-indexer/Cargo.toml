@@ -21,6 +21,17 @@ tree-sitter-rust = "0.24"
 # checkout at `~/Projects/tree-sitter-typescript` is also v0.23.2 but we
 # use the published crate here, not a path dependency.
 tree-sitter-typescript = "0.23"
+# Epic 010 Task 1: JavaScript grammar for `.js` and `.jsx` files. Pinned
+# to 0.25.x to match the workspace's `tree-sitter = 0.25` runtime — the
+# 0.25 grammar uses the same `tree-sitter-language = 0.1` `LanguageFn`
+# shim as the TypeScript crate above, so the grammar can be coerced via
+# `.into()` exactly like TypeScript. The JavaScript grammar also accepts
+# JSX syntax natively (the scanner handles `JSX_TEXT` via valid_symbols),
+# so `.js` and `.jsx` share one `LANGUAGE` constant but keep two
+# dispatch variants in the [`CodeLanguage`] enum so metadata distinguishes
+# them. Local checkout at `~/Projects/tree-sitter-javascript` matches
+# this version.
+tree-sitter-javascript = "0.25"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 chrono = "0.4"
 gix = { path = "../../../gitoxide/gix", default-features = false, features = ["basic", "sha1"] }

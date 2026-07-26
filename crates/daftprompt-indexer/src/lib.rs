@@ -105,11 +105,14 @@ pub struct Indexer {
     embedder: Option<Embedder>,
     repo_path: PathBuf,
     /// Per-dialect extractors built once at construction (Epic 009 DD #1:
-    /// queries are compiled at construction, not per file). Rust, TS, and
-    /// TSX are all present.
+    /// queries are compiled at construction, not per file). Rust, TS, TSX,
+    /// JavaScript, and JSX are all present so the dispatch arm in
+    /// [`Indexer::index_code`] cannot fall through to a previous dialect.
     rust_extractor: code::CodeExtractor,
     typescript_extractor: code::CodeExtractor,
     tsx_extractor: code::CodeExtractor,
+    javascript_extractor: code::CodeExtractor,
+    jsx_extractor: code::CodeExtractor,
 }
 
 struct ItemDetail {
@@ -299,6 +302,13 @@ impl Indexer {
             rust_extractor: code::CodeExtractor::rust(),
             typescript_extractor: code::CodeExtractor::for_language(code::CodeLanguage::TypeScript),
             tsx_extractor: code::CodeExtractor::for_language(code::CodeLanguage::Tsx),
+            // Epic 010 Task 1: build JavaScript and JSX extractors here so
+            // `index_code` cannot fall through to Rust / TypeScript for
+            // `.js` or `.jsx` files. Both share the same grammar (the JS
+            // scanner accepts JSX text natively) but keep distinct
+            // metadata via the enum variant.
+            javascript_extractor: code::CodeExtractor::for_language(code::CodeLanguage::JavaScript),
+            jsx_extractor: code::CodeExtractor::for_language(code::CodeLanguage::Jsx),
         })
     }
 
@@ -361,18 +371,17 @@ impl Indexer {
 
     pub fn index_code(&mut self) -> anyhow::Result<CodeIndexReport> {
         // Epic 009 Design Decision #2: one tracked-file traversal that
-        // accepts the supported extension set. Task 1 added `.ts` and
-        // `.tsx` here so deletion reconciliation runs even before the
-        // matching extractors were wired. Task 2 routes `.ts` through
-        // the TypeScript extractor; `.tsx` still surfaces as "no
-        // extractor wired" until Task 3.
+        // accepts the supported extension set. Epic 010 Task 1 adds
+        // `.js` and `.jsx` here so deletion reconciliation and the
+        // generated/vendor filter run across all five supported dialects
+        // in a single pass.
         //
         // Rejected alternative: keep `list_tracked_rust_files` and add a
         // separate `list_tracked_ts_files` later. That would double the
         // HEAD-tree walk and complicate deletion-set reconciliation.
         let current_files = code::list_tracked_code_files(
             &self.repo_path,
-            &[".rs", ".ts", ".tsx"],
+            &[".rs", ".ts", ".tsx", ".js", ".jsx"],
         )?;
         let indexed_files = db::code_files_all(&self.db)?;
 
@@ -461,11 +470,15 @@ impl Indexer {
 
             // Dispatch by language: each dialect has its own pre-built
             // extractor so the compiled tree-sitter query is reused
-            // (Epic 009 Design Decision #1).
+            // (Epic 009 Design Decision #1). Five arms, all five
+            // supported languages wired — `.js` cannot fall through to
+            // Rust and `.jsx` cannot fall through to TypeScript.
             let extractor: &code::CodeExtractor = match language {
                 code::CodeLanguage::Rust => &self.rust_extractor,
                 code::CodeLanguage::TypeScript => &self.typescript_extractor,
                 code::CodeLanguage::Tsx => &self.tsx_extractor,
+                code::CodeLanguage::JavaScript => &self.javascript_extractor,
+                code::CodeLanguage::Jsx => &self.jsx_extractor,
             };
             let symbols = match code::extract_symbols_with_extractor(
                 extractor,
@@ -1804,6 +1817,196 @@ export function TypedCheckoutButton({ label }: CheckoutButtonProps) {
         assert!(
             results.is_empty(),
             "untracked file's symbols must not be indexed"
+        );
+    }
+
+    // ── Epic 010 Task 1: JavaScript/JSX indexer wiring ───────────────────────
+
+    const JS_FIXTURE: &str = r#"/**
+ * Validate the cart contents for checkout.
+ */
+function validateCart(items) {
+    if (!items || items.length === 0) {
+        return false;
+    }
+    return true;
+}
+
+class PaymentGateway {
+    configure(provider) {
+        this.provider = provider;
+    }
+}
+
+const DEFAULT_TIMEOUT = 3000;
+"#;
+
+    const JSX_FIXTURE: &str = r#"import React from "react";
+
+/**
+ * Renders the checkout button.
+ */
+export function CheckoutButton({ disabled, label }) {
+    return (
+        <button disabled={disabled} onClick={() => alert(label)}>
+            {label}
+        </button>
+    );
+}
+"#;
+
+    #[test]
+    fn javascript_indexer_wires_metadata_language_javascript() {
+        // Epic 010 Task 1 acceptance #6: `CodeLanguage::as_str()` and
+        // indexed metadata report exactly `javascript` for `.js` and
+        // `jsx` for `.jsx`. This test runs the full discovery + dispatch
+        // path (`list_tracked_code_files` -> `language_for_extension`
+        // -> JavaScript extractor -> metadata write).
+        let (repo_dir, cache_dir) = setup_repo_with_files(&[("src/cart.js", JS_FIXTURE)]);
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+
+        let report = indexer.index_code().expect("index_code");
+        assert_eq!(report.files_scanned, 1, ".js file must be discovered");
+        assert_eq!(report.files_changed, 1);
+        assert!(
+            report.symbols_indexed > 0,
+            "must produce at least one symbol from the JS fixture"
+        );
+
+        // The JSDoc named `validateCart` is the canonical evidence; assert
+        // the metadata language string for the produced code item.
+        let metadata: String = indexer
+            .db
+            .query_row(
+                "SELECT metadata FROM items WHERE source_type = 'code' AND identifier = ?1",
+                ["src/cart.js::validateCart"],
+                |row| row.get(0),
+            )
+            .expect("code item metadata for validateCart");
+        let metadata: serde_json::Value =
+            serde_json::from_str(&metadata).expect("valid metadata");
+        assert_eq!(
+            metadata["language"], "javascript",
+            "indexed metadata language must be exactly 'javascript'; got {metadata}"
+        );
+        assert_eq!(metadata["file_path"], "src/cart.js");
+    }
+
+    #[test]
+    fn jsx_indexer_wires_metadata_language_jsx() {
+        let (repo_dir, cache_dir) =
+            setup_repo_with_files(&[("src/components/CheckoutButton.jsx", JSX_FIXTURE)]);
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+
+        let report = indexer.index_code().expect("index_code");
+        assert_eq!(report.files_scanned, 1, ".jsx file must be discovered");
+        assert!(
+            report.symbols_indexed > 0,
+            "must produce at least one symbol from the JSX fixture"
+        );
+
+        let metadata: String = indexer
+            .db
+            .query_row(
+                "SELECT metadata FROM items WHERE source_type = 'code' AND identifier = ?1",
+                ["src/components/CheckoutButton.jsx::CheckoutButton"],
+                |row| row.get(0),
+            )
+            .expect("code item metadata for CheckoutButton");
+        let metadata: serde_json::Value =
+            serde_json::from_str(&metadata).expect("valid metadata");
+        assert_eq!(
+            metadata["language"], "jsx",
+            "indexed metadata language must be exactly 'jsx'; got {metadata}"
+        );
+        assert_eq!(
+            metadata["file_path"],
+            "src/components/CheckoutButton.jsx"
+        );
+    }
+
+    #[test]
+    fn indexer_dispatches_js_and_jsx_to_their_respective_extractors() {
+        // Acceptance #3: ".js and .jsx dispatch cannot fall through to
+        // Rust or TypeScript". This test mixes a JS file and a JSX file
+        // in one repo and verifies the metadata language column matches
+        // the file extension on each produced code row.
+        let files = [
+            ("src/cart.js", JS_FIXTURE),
+            ("src/components/CheckoutButton.jsx", JSX_FIXTURE),
+        ];
+        let (repo_dir, cache_dir) = setup_repo_with_files(&files);
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+
+        let report = indexer.index_code().expect("index_code");
+        assert_eq!(report.files_scanned, 2);
+
+        // Pull every code row and verify language matches the file
+        // extension. This catches any dispatcher regression where a JS
+        // file is incorrectly routed to the Rust or TypeScript path.
+        let mut stmt = indexer
+            .db
+            .prepare("SELECT metadata FROM items WHERE source_type = 'code'")
+            .expect("prepare code rows");
+        let metadatas: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .expect("iterate code rows")
+            .map(|r| r.unwrap_or_default())
+            .collect();
+        assert!(
+            !metadatas.is_empty(),
+            "should produce at least one code row per file"
+        );
+        for raw in &metadatas {
+            let v: serde_json::Value = serde_json::from_str(raw).expect("valid metadata");
+            let lang = v["language"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let path = v["file_path"].as_str().unwrap_or_default();
+            if path.ends_with(".js") {
+                assert_eq!(lang, "javascript", "language mismatch for {path}: {v}");
+            } else if path.ends_with(".jsx") {
+                assert_eq!(lang, "jsx", "language mismatch for {path}: {v}");
+            } else {
+                panic!("unexpected code file extension: {path}");
+            }
+        }
+    }
+
+    #[test]
+    fn indexer_excludes_tracked_generated_vendor_js() {
+        // Acceptance #2: committed fixtures for every configured
+        // generated/vendor directory and `*.min.js` are excluded by the
+        // shared discovery filter. End-to-end check via `index_code`:
+        // only the real `.js` file should produce any code rows.
+        let real_js = "function real() { return 1; }\n";
+        let files = [
+            ("src/real.js", real_js),
+            ("node_modules/vendor/leaked.js", "function leakedNode() { return 1; }\n"),
+            ("vendor/leaked2.js", "function leakedVendor() { return 1; }\n"),
+            ("dist/bundle.min.js", "!function(){return 1}();\n"),
+        ];
+        let (repo_dir, cache_dir) = setup_repo_with_files(&files);
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+
+        let report = indexer.index_code().expect("index_code");
+        assert_eq!(
+            report.files_scanned, 1,
+            "shared discovery filter must drop tracked generated/vendor paths"
+        );
+        assert_eq!(report.files_changed, 1);
+
+        let results = indexer
+            .search_code_text("leaked", 10)
+            .expect("search");
+        assert!(
+            results.is_empty(),
+            "no `leaked*` symbol should be indexed from vendor / node_modules paths; got {:?}",
+            results
+                .iter()
+                .map(|r| (&r.identifier, &r.file_path))
+                .collect::<Vec<_>>()
         );
     }
 

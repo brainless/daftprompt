@@ -25,7 +25,7 @@ RUST_LOG=debug cargo run       # debug logging
 cargo run -- --repo . --index                       # index all sources (git log, code, documents)
 cargo run -- --repo . --reindex                     # drop + rebuild all indexes
 cargo run -- --repo . --search "fix crash"          # CLI unified hybrid search (all sources)
-cargo run -- --repo . --index-code                  # index Rust, TypeScript, and TSX source (tree-sitter)
+cargo run -- --repo . --index-code                  # index Rust, TypeScript, TSX, JavaScript, and JSX source (tree-sitter)
 cargo run -- --repo . --reindex-code
 cargo run -- --repo . --search-code "render pipeline"
 cargo run -- --repo . --index-documents             # index documents (Markdown, plain text)
@@ -83,7 +83,7 @@ crates/daftprompt-indexer/  standalone indexing + search crate
 - `vec_items` holds commit vectors; `vec_code` holds code vectors; `vec_documents` holds document vectors. Partitioned per `source_type` for exact KNN isolation (no over-fetch-and-filter). See Epic 004 "Search Isolation" and Epic 007.
 - Per-repo DB files: one repo = one `.db` file, filename = slug of repo path. KNN is naturally scoped, no `repo_id` column.
 - Incremental indexing: `code_files` and `document_files` track `mtime` + `content_hash` (xxh3, **not** `DefaultHasher` — no stability guarantee across Rust versions). `touch` without content change must not re-index.
-- Code indexer invariants: one shared `code_files`/`vec_code` pipeline indexes Git-tracked `.rs`, `.ts`, and `.tsx` files; `crates/daftprompt-indexer/src/code.rs` owns extension-based language dispatch, and production CLI/UI paths must remain language-neutral.
+- Code indexer invariants: one shared `code_files`/`vec_code` pipeline indexes Git-tracked `.rs`, `.ts`, `.tsx`, `.js`, and `.jsx` files; `crates/daftprompt-indexer/src/code.rs` owns extension-based language dispatch, and production CLI/UI paths must remain language-neutral. The shared discovery path also enforces a centralized generated/vendor/minified exclusion (`is_excluded_generated_path`: `node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, `coverage/`, and `*.min.js`) so tracked-but-generated files cannot leak into the index.
 
 When implementing, keep **rejected alternatives as comments in code** (Epic 004 Design Decisions #1–8) — they are deliberate tuning knobs, not dead code.
 
@@ -94,7 +94,7 @@ When implementing, keep **rejected alternatives as comments in code** (Epic 004 
 - **Failures degrade, never panic:** model download failure → FTS5-only search; non-git folder → substring search; parse error in a supported `.rs`, `.ts`, or `.tsx` file → index what is parseable, log, continue (one transaction per file so a bad file doesn't roll back the batch).
 - **Per-file transactions** for `index_code()`: a single bad file must not roll back the whole run.
 - **Stable hashing:** use `xxhash-rust` xxh3 for `content_hash`, never `std::collections::hash_map::DefaultHasher`.
-- **Tree-sitter registry/router:** `code.rs` compiles each configured Rust, TypeScript, and TSX query once at construction, selects the language by canonical extension, and reuses the compiled query for every file; never add language branching to production CLI/UI paths.
+- **Tree-sitter registry/router:** `code.rs` compiles each configured Rust, TypeScript, TSX, JavaScript, and JSX query once at construction, selects the language by canonical extension, and reuses the compiled query for every file; never add language branching to production CLI/UI paths.
 - **Trait default methods** (with bodies) are indexed individually as `TraitMethod`; signature-only methods are folded into the parent `Trait` item. Identifiers carry the full canonical namespace (`file_path::module_path::TypeName::method`).
 
 - **UI is rendered by akar** (post-Epic 005): daftprompt owns application state + the winit window; akar owns the wgpu pipeline, draw list, input state, layout, and components. `src/ui/render.rs` is the immediate-mode render layer; the per-frame `Layout::new()` rebuilds the taffy tree every frame.

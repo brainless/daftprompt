@@ -62,7 +62,7 @@ cargo run                      # launch the GUI
 cargo run -- --repo ~/some-repo  # open a specific git repo
 cargo run -- --repo . --index  # index all sources (git log, code, documents)
 cargo run -- --repo . --search "fix crash"  # CLI unified hybrid search (all sources)
-cargo run -- --repo . --index-code  # index Rust, TypeScript, and TSX source code
+cargo run -- --repo . --index-code  # index Rust, TypeScript, TSX, JavaScript, and JSX source code
 cargo run -- --repo . --search-code "render pipeline"  # CLI code search only
 cargo run -- --repo . --index-documents  # index documents (Markdown, plain text) only
 cargo run -- --repo . --search-documents "setup guide"  # CLI document search only
@@ -107,6 +107,6 @@ daftprompt/
 - **Hybrid search**: Combines FTS5 (keyword) and sqlite-vec (vector KNN) via Reciprocal Rank Fusion.
 - **Graceful degradation**: If the embedding model fails to load, search falls back to FTS5-only. In non-git folders, Cmd+K falls back to substring matching.
 - **Unified search**: Cmd+K searches all three sources (git log, code, documents) simultaneously and displays results in three separate containers. Source-specific CLI flags (`--search-code`, `--search-documents`, `--search-git-log`) are also available.
-- **Code language routing**: `crates/daftprompt-indexer/src/code.rs` owns extension-based dispatch for Git-tracked `.rs`, `.ts`, and `.tsx` files and the compiled tree-sitter query registry. CLI/UI indexing and search stay language-neutral and call the shared indexer APIs.
+- **Code language routing**: `crates/daftprompt-indexer/src/code.rs` owns extension-based dispatch for Git-tracked `.rs`, `.ts`, `.tsx`, `.js`, and `.jsx` files and the compiled tree-sitter query registry. CLI/UI indexing and search stay language-neutral and call the shared indexer APIs. The shared code-file discovery path also enforces a centralized generated/vendor/minified exclusion (`is_excluded_generated_path`: `node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, `coverage/`, and `*.min.js`).
 - **UI is rendered by akar** (post-Epic 005): daftprompt owns application state + the winit window; akar owns the wgpu pipeline, draw list, input state, layout, and components. `src/ui/render.rs` is the immediate-mode render layer; the per-frame `Layout::new()` rebuilds the taffy tree every frame.
 - **Screenshot mode** (post-Task 8): `cargo run --release -- --screenshot <path> --exit` waits 5 s for the UI to settle, captures one frame via akar's `core.take_screenshot`, PNG-encodes the result, and exits. Useful for visual regression testing.

@@ -14,6 +14,14 @@ pub enum CodeLanguage {
     Rust,
     TypeScript,
     Tsx,
+    // ── Epic 010 Task 1 ────────────────────────────────────────────────────
+    // JavaScript and JSX. The grammar (`tree-sitter-javascript = 0.25`) covers
+    // both `.js` and `.jsx` natively — the scanner accepts JSX text when the
+    // grammar requests `JSX_TEXT` — so they share one tree-sitter Language.
+    // Two distinct enum variants keep language metadata, source-of-truth
+    // identifiers, and tests distinct across the two extensions.
+    JavaScript,
+    Jsx,
 }
 
 impl CodeLanguage {
@@ -23,6 +31,8 @@ impl CodeLanguage {
             CodeLanguage::Rust => "rust",
             CodeLanguage::TypeScript => "typescript",
             CodeLanguage::Tsx => "tsx",
+            CodeLanguage::JavaScript => "javascript",
+            CodeLanguage::Jsx => "jsx",
         }
     }
 }
@@ -166,10 +176,10 @@ impl CodeExtractor {
 
     /// Construct an extractor for any registered dialect.
     ///
-    /// Task 2/3 register the TypeScript and TSX dialects here. For now only
-    /// Rust is wired (the grammar dependencies for the others land in
-    /// Task 2 per the Epic plan). Unsupported languages return an error so
-    /// callers cannot accidentally fall back to Rust parsing.
+    /// The query is compiled once at construction (Epic 009 Design Decision
+    /// #1: queries are compiled at construction, not per file). If the
+    /// grammar accepts the query, this function panics: a query that fails
+    /// to compile is a deployment-time error, never a per-file error.
     pub fn for_language(language: CodeLanguage) -> Self {
         match language {
             CodeLanguage::Rust => {
@@ -214,6 +224,39 @@ impl CodeExtractor {
                     query,
                 }
             }
+            // Epic 010 Task 1: JavaScript and JSX share the same grammar
+            // (the JS scanner parses JSX text via `valid_symbols[JSX_TEXT]`).
+            // Both share [`JS_QUERY`] because it is grammar-compatible with
+            // both `.js` and `.jsx` source — see the epic's "smoke test"
+            // requirement above.
+            CodeLanguage::JavaScript => {
+                let tree_sitter_language: tree_sitter::Language =
+                    tree_sitter_javascript::LANGUAGE.into();
+                let query = Query::new(&tree_sitter_language, JS_QUERY)
+                    .expect("javascript tree-sitter query must compile");
+                Self {
+                    config: LanguageConfig {
+                        language,
+                        extensions: &["js"],
+                    },
+                    tree_sitter_language,
+                    query,
+                }
+            }
+            CodeLanguage::Jsx => {
+                let tree_sitter_language: tree_sitter::Language =
+                    tree_sitter_javascript::LANGUAGE.into();
+                let query = Query::new(&tree_sitter_language, JS_QUERY)
+                    .expect("jsx tree-sitter query must compile");
+                Self {
+                    config: LanguageConfig {
+                        language,
+                        extensions: &["jsx"],
+                    },
+                    tree_sitter_language,
+                    query,
+                }
+            }
         }
     }
 
@@ -233,6 +276,8 @@ impl CodeExtractor {
 /// Returns `None` for unsupported extensions so the caller can refuse to
 /// dispatch rather than silently fall back to Rust (Epic 009 Design
 /// Decision #1: "report unsupported extensions without falling back to Rust").
+/// Comparison is case-insensitive so callers can pass raw
+/// `Path::extension()` output directly.
 ///
 /// `.d.ts` is intentionally not recognized as a code source in this epic
 /// (Epic 009 Design Decision #2: ".d.ts declaration files are skipped
@@ -244,6 +289,8 @@ pub fn language_for_extension(extension: &str) -> Option<CodeLanguage> {
         "rs" => Some(CodeLanguage::Rust),
         "ts" => Some(CodeLanguage::TypeScript),
         "tsx" => Some(CodeLanguage::Tsx),
+        "js" => Some(CodeLanguage::JavaScript),
+        "jsx" => Some(CodeLanguage::Jsx),
         _ => None,
     }
 }
@@ -352,6 +399,79 @@ const TS_QUERY: &str = r#"
     (string))) @dynamic_import
 "#;
 
+/// JavaScript query — Epic 010 Task 1.
+///
+/// Compiles against the [`tree_sitter_javascript`] grammar; the same query
+/// is reused for both `.js` and `.jsx` since the grammar accepts JSX
+/// natively. It intentionally omits the TypeScript-only captures
+/// (`interface_declaration`, `type_alias_declaration`, `enum_declaration`,
+/// `internal_module`, `function_signature`) that appear in [`TS_QUERY`] —
+/// the JS grammar does not expose those node kinds.
+///
+/// Rejected alternative: reuse [`TS_QUERY`] as-is and rely on tree-sitter
+/// error recovery for JS-only files. Rejected because the JS query must
+/// compile cleanly when the JS grammar is loaded (Epic 010 acceptance
+/// criterion: "no TypeScript-only captures"), and error recovery in a TS
+/// query against the JS grammar produces silently empty captures for
+/// `lexical_declaration` on `let` / `const`.
+const JS_QUERY: &str = r#"
+(function_declaration
+  name: (identifier) @name) @definition.function
+
+(generator_function_declaration
+  name: (identifier) @name) @definition.function
+
+(class_declaration
+  name: (identifier) @name) @definition.class
+
+(class_declaration
+  name: (identifier) @class_name
+  body: (class_body
+    (method_definition
+      name: (property_identifier) @name) @definition.method))
+
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @name
+    value: [(arrow_function) (function_expression)]) @definition.callable_binding)
+
+(variable_declaration
+  (variable_declarator
+    name: (identifier) @name)) @definition.var_decl
+
+(variable_declarator
+  name: (identifier) @name
+  value: [(arrow_function) (function_expression)]) @definition.callable_binding
+
+(pair
+  key: (property_identifier) @name
+  value: [(arrow_function) (function_expression)]) @definition.object_method
+
+(assignment_expression
+  left: [
+    (identifier) @name
+    (member_expression
+      property: (property_identifier) @name)
+  ]
+  right: [(arrow_function) (function_expression)]) @definition.assignment_binding
+
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @name)) @definition.lexical_decl
+
+(comment) @comment
+
+(import_statement) @import
+
+(export_statement
+  source: (string)) @reexport
+
+(call_expression
+  function: (import)
+  arguments: (arguments
+    (string))) @dynamic_import
+"#;
+
 pub fn extract_symbols(file_path: &Path, source: &str) -> anyhow::Result<Vec<CodeSymbol>> {
     let repo_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     extract_symbols_in_repo(&repo_path, file_path, source)
@@ -387,6 +507,9 @@ pub fn extract_symbols_with_extractor(
         CodeLanguage::Rust => extract_rust_symbols(extractor, repo_path, file_path, source),
         CodeLanguage::TypeScript | CodeLanguage::Tsx => {
             extract_typescript_symbols(extractor, repo_path, file_path, source)
+        }
+        CodeLanguage::JavaScript | CodeLanguage::Jsx => {
+            extract_javascript_symbols(extractor, repo_path, file_path, source)
         }
     }
 }
@@ -719,6 +842,176 @@ fn extract_typescript_symbols(
     }
 
     Ok(symbols)
+}
+
+/// JavaScript extraction — Epic 010 Task 1 skeleton.
+///
+/// This is the language-neutral extraction entry point shared by `.js` and
+/// `.jsx` files. Task 1 establishes the wiring: the JS query compiles once
+/// (see [`CodeExtractor::for_language`]), the production extractor fields
+/// exist on [`Indexer`], and indexed metadata carries the canonical
+/// `javascript` / `jsx` language string.
+///
+/// The richer JSDoc attachment, import-source ranges, object-literal
+/// method identifiers, prototype assignment handling, JSX-aware body
+/// excerpts, and the nested-symbol exclusion contract land in Tasks 2
+/// and 3. The skeleton intentionally keeps the symbol set minimal so
+/// Task 2 can replace the body without callers noticing a change in
+/// insertion shape (each symbol is one row of `items`).
+fn extract_javascript_symbols(
+    extractor: &CodeExtractor,
+    repo_path: &Path,
+    file_path: &Path,
+    source: &str,
+) -> anyhow::Result<Vec<CodeSymbol>> {
+    let tree = parse_with_extractor(extractor, file_path, source)?;
+
+    let query = extractor.query();
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(query, tree.root_node(), source.as_bytes());
+
+    let capture_names = query.capture_names();
+    let mut symbols: Vec<CodeSymbol> = Vec::new();
+    let mut standalone_comment_ranges: Vec<(usize, usize)> = Vec::new();
+    let mut import_ranges: Vec<(usize, usize)> = Vec::new();
+
+    let file_path_str = canonicalize_file_path(repo_path, file_path);
+
+    while let Some(m) = matches.next() {
+        let captures = m.captures;
+
+        let mut symbol_name: Option<String> = None;
+        let mut definition_node: Option<tree_sitter::Node> = None;
+        let mut definition_kind: Option<&str> = None;
+        let mut class_name: Option<String> = None;
+
+        for cap in captures {
+            let cname = capture_names[cap.index as usize];
+            match cname {
+                "name" => {
+                    symbol_name = Some(
+                        cap.node
+                            .utf8_text(source.as_bytes())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                }
+                "class_name" => {
+                    class_name = Some(
+                        cap.node
+                            .utf8_text(source.as_bytes())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                }
+                "comment" => {
+                    let start = cap.node.start_position().row;
+                    let end = cap.node.end_position().row;
+                    standalone_comment_ranges.push((start, end));
+                }
+                "import" | "reexport" | "dynamic_import" => {
+                    import_ranges.push((cap.node.start_byte(), cap.node.end_byte()));
+                }
+                _ => {
+                    if cname.starts_with("definition.") {
+                        definition_node = Some(cap.node);
+                        definition_kind = Some(cname);
+                    }
+                }
+            }
+        }
+
+        let Some((kind, effective_name)) =
+            resolve_javascript_match(definition_kind, symbol_name.as_deref(), class_name.as_deref())
+        else {
+            continue;
+        };
+        let Some(node) = definition_node else { continue };
+
+        let identifier = match (class_name.as_deref(), &effective_name) {
+            (Some(cn), name) if matches!(kind, SymbolKind::Method) => {
+                format!("{file_path_str}::{cn}::{name}")
+            }
+            _ => format!("{file_path_str}::{effective_name}"),
+        };
+
+        let line_start = node.start_position().row + 1;
+        let line_end = node.end_position().row + 1;
+
+        symbols.push(CodeSymbol {
+            identifier,
+            text: String::new(),
+            symbol_kind: kind,
+            file_path: file_path_str.clone(),
+            line_start,
+            line_end,
+            embed: true,
+        });
+    }
+
+    let total_lines = source.lines().count();
+
+    let comment_text = collect_standalone_comments(source, &standalone_comment_ranges, &[]);
+    if !comment_text.is_empty() {
+        symbols.push(CodeSymbol {
+            identifier: format!("{}::__comments__", file_path_str),
+            text: comment_text,
+            symbol_kind: SymbolKind::Comments,
+            file_path: file_path_str.clone(),
+            line_start: 1,
+            line_end: total_lines,
+            embed: false,
+        });
+    }
+
+    let import_text = collect_imports(source, &import_ranges);
+    if !import_text.is_empty() {
+        symbols.push(CodeSymbol {
+            identifier: format!("{}::__imports__", file_path_str),
+            text: import_text,
+            symbol_kind: SymbolKind::Imports,
+            file_path: file_path_str.clone(),
+            line_start: 1,
+            line_end: total_lines,
+            embed: false,
+        });
+    }
+
+    Ok(symbols)
+}
+
+/// Map a JS query match to a stable [`SymbolKind`] and effective name.
+///
+/// Resolves the definition capture name (e.g. `definition.function`) plus
+/// the captured identifier and (for class members) class_name. Returns
+/// `None` for unknown definition kinds so the caller skips them.
+///
+/// This is the Epic 010 Task 1 helper. Tasks 2 and 3 extend it with
+/// nested-symbol exclusion, JSDoc attachment, and prototype/JSX handling.
+fn resolve_javascript_match(
+    definition_kind: Option<&str>,
+    symbol_name: Option<&str>,
+    class_name: Option<&str>,
+) -> Option<(SymbolKind, String)> {
+    let kind_str = definition_kind?;
+    let name = symbol_name?.to_string();
+    match kind_str {
+        "definition.function" => Some((SymbolKind::Function, name)),
+        "definition.class" => Some((SymbolKind::Class, name)),
+        "definition.method" => {
+            let effective = match class_name {
+                Some(cn) => format!("{cn}::{name}"),
+                None => name.clone(),
+            };
+            Some((SymbolKind::Method, effective))
+        }
+        "definition.callable_binding" => Some((SymbolKind::Function, name)),
+        "definition.object_method" => Some((SymbolKind::Method, name)),
+        "definition.assignment_binding" => Some((SymbolKind::Function, name)),
+        "definition.lexical_decl" => Some((SymbolKind::Const, name)),
+        "definition.var_decl" => Some((SymbolKind::Variable, name)),
+        _ => None,
+    }
 }
 
 fn resolve_typescript_match<'a>(
@@ -1467,6 +1760,11 @@ pub fn list_tracked_rust_files(repo_path: &Path) -> anyhow::Result<Vec<PathBuf>>
 ///   (Epic 009 Design Decision #2: "skip .d.ts declaration files initially").
 /// - `extensions` are compared against the full path suffix, so callers
 ///   should pass canonical forms including the leading dot (e.g. `.rs`).
+/// - Tracked generated/vendor/minified files are filtered centrally via
+///   [`is_excluded_generated_path`] (Epic 010 Task 1: "centralized
+///   generated/vendor/minified filtering in the shared code-file
+///   discovery path"). The exclusion set applies to every language so
+///   `.gitignore`-d and tracked-but-generated paths behave consistently.
 pub fn list_tracked_code_files(
     repo_path: &Path,
     extensions: &[&str],
@@ -1500,6 +1798,14 @@ pub fn list_tracked_code_files(
             if p.ends_with(".d.ts") {
                 return false;
             }
+            // Centralized generated/vendor/minified exclusion (Epic 010
+            // Task 1): tracked bundles that ship inside the repo despite
+            // being build artifacts must never reach indexing. The check
+            // accepts the repo-relative forward-slash path because
+            // `gix::Tree::traverse` returns paths in that form.
+            if is_excluded_generated_path(p) {
+                return false;
+            }
             extensions.iter().any(|ext| p.ends_with(ext))
         })
         .map(|(_, abs)| abs)
@@ -1507,6 +1813,47 @@ pub fn list_tracked_code_files(
 
     files.sort();
     Ok(files)
+}
+
+/// Repo-relative paths that should never be indexed, regardless of
+/// extension. Centralized here (Epic 010 Task 1: "Centralize these policy
+/// filters so TypeScript and future languages can share or override
+/// them") so `.gitignore`-d, tracked-but-vendored, and minified files
+/// behave identically across all five supported languages.
+///
+/// `path` must be the repo-relative forward-slash path returned by
+/// `gix::Tree::traverse`. Comparison is anchored on path segments so a
+/// directory named `dist` inside `src/distributor/x.ts` is **not**
+/// excluded.
+pub fn is_excluded_generated_path(path: &str) -> bool {
+    let segments: Vec<&str> = path.split('/').collect();
+
+    // `.min.js` is the canonical minified bundle suffix. Filename match
+    // rather than segment match so it works on both flat and nested
+    // layouts; case-insensitive because some build pipelines emit
+    // `.MIN.JS` on Windows.
+    if let Some(filename) = segments.last() {
+        let lower = filename.to_ascii_lowercase();
+        if lower.ends_with(".min.js") {
+            return true;
+        }
+    }
+
+    // Generated/vendor directory prefixes. Match against full path
+    // segments (not substrings) so e.g. `src/distributor` survives.
+    const EXCLUDED_DIRS: &[&str] = &[
+        "node_modules",
+        "vendor",
+        "dist",
+        "build",
+        ".next",
+        "coverage",
+    ];
+    if segments.iter().any(|seg| EXCLUDED_DIRS.contains(seg)) {
+        return true;
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -1559,6 +1906,10 @@ mod tests {
         assert_eq!(super::CodeLanguage::Rust.as_str(), "rust");
         assert_eq!(super::CodeLanguage::TypeScript.as_str(), "typescript");
         assert_eq!(super::CodeLanguage::Tsx.as_str(), "tsx");
+        // Epic 010 Task 1: JavaScript / JSX metadata strings must be
+        // exactly `javascript` and `jsx` so stored evidence round-trips.
+        assert_eq!(super::CodeLanguage::JavaScript.as_str(), "javascript");
+        assert_eq!(super::CodeLanguage::Jsx.as_str(), "jsx");
     }
 
     #[test]
@@ -1575,13 +1926,40 @@ mod tests {
             super::language_for_extension("tsx"),
             Some(super::CodeLanguage::Tsx)
         );
+        // Epic 010 Task 1: `.js` → JavaScript, `.jsx` → Jsx.
+        assert_eq!(
+            super::language_for_extension("js"),
+            Some(super::CodeLanguage::JavaScript)
+        );
+        assert_eq!(
+            super::language_for_extension("jsx"),
+            Some(super::CodeLanguage::Jsx)
+        );
         // case-insensitive
         assert_eq!(
             super::language_for_extension("RS"),
             Some(super::CodeLanguage::Rust)
         );
-        // unsupported — must NOT silently fall back to Rust
-        assert_eq!(super::language_for_extension("js"), None);
+        assert_eq!(
+            super::language_for_extension("JS"),
+            Some(super::CodeLanguage::JavaScript)
+        );
+        assert_eq!(
+            super::language_for_extension("JSX"),
+            Some(super::CodeLanguage::Jsx)
+        );
+        // mixed-case extensions still route to the correct dialect
+        assert_eq!(
+            super::language_for_extension("Js"),
+            Some(super::CodeLanguage::JavaScript)
+        );
+        assert_eq!(
+            super::language_for_extension("JsX"),
+            Some(super::CodeLanguage::Jsx)
+        );
+        // unsupported — must NOT silently fall back to Rust or TS
+        assert_eq!(super::language_for_extension("mjs"), None);
+        assert_eq!(super::language_for_extension("cjs"), None);
         assert_eq!(super::language_for_extension("d.ts"), None);
         assert_eq!(super::language_for_extension(""), None);
     }
@@ -1597,6 +1975,103 @@ mod tests {
         assert!(names.contains(&"definition.function"));
         assert!(names.contains(&"definition.struct"));
         assert!(names.contains(&"definition.trait"));
+    }
+
+    // ── Epic 010 Task 1: JavaScript / JSX dispatcher + query validation ───
+
+    #[test]
+    fn code_extractor_javascript_compiles_query_once() {
+        // Epic 010 DD #1: queries are compiled at construction. A
+        // compilation failure is a deployment-time error, never a
+        // per-file error.
+        let extractor = super::CodeExtractor::for_language(super::CodeLanguage::JavaScript);
+        assert_eq!(extractor.config.language, super::CodeLanguage::JavaScript);
+        assert!(extractor.config.supports("js"));
+        assert!(!extractor.config.supports("ts"));
+        assert!(!extractor.config.supports("rs"));
+
+        let names: Vec<&str> = extractor.query().capture_names().to_vec();
+        // JS-specific captures must be present.
+        assert!(names.contains(&"definition.function"));
+        assert!(names.contains(&"definition.class"));
+        assert!(names.contains(&"definition.method"));
+        assert!(names.contains(&"definition.callable_binding"));
+        assert!(names.contains(&"definition.object_method"));
+        assert!(names.contains(&"definition.assignment_binding"));
+        // TS-only captures must NOT appear in the JS query (Epic 010
+        // acceptance criterion #4: "JavaScript query contains no
+        // TypeScript-only captures").
+        for ts_only in [
+            "definition.interface",
+            "definition.type_alias",
+            "definition.enum",
+            "definition.module",
+            "definition.function_signature",
+        ] {
+            assert!(
+                !names.contains(&ts_only),
+                "JS query must not include TypeScript-only capture {ts_only}"
+            );
+        }
+    }
+
+    #[test]
+    fn code_extractor_jsx_compiles_query_once() {
+        let extractor = super::CodeExtractor::for_language(super::CodeLanguage::Jsx);
+        assert_eq!(extractor.config.language, super::CodeLanguage::Jsx);
+        assert!(extractor.config.supports("jsx"));
+        assert!(!extractor.config.supports("js"));
+        // JSX uses the JS grammar — captured query capture names are
+        // the JS set; the variant only differs by `extensions` /
+        // `language` metadata.
+        let names: Vec<&str> = extractor.query().capture_names().to_vec();
+        assert!(names.contains(&"definition.function"));
+        assert!(names.contains(&"definition.class"));
+        assert!(!names.contains(&"definition.interface"));
+    }
+
+    #[test]
+    fn javascript_jsx_grammars_share_language_object() {
+        // The JavaScript grammar natively accepts JSX (its scanner
+        // dispatches on `valid_symbols[JSX_TEXT]`), so both `.js` and
+        // `.jsx` build `CodeExtractor` instances from the same
+        // `tree-sitter` `Language`. That is what lets the epic keep
+        // two distinct enum variants while sharing one grammar.
+        let js = super::CodeExtractor::for_language(super::CodeLanguage::JavaScript);
+        let jsx = super::CodeExtractor::for_language(super::CodeLanguage::Jsx);
+        assert_eq!(
+            js.tree_sitter_language().abi_version(),
+            jsx.tree_sitter_language().abi_version(),
+            "js and jsx must share the JavaScript grammar"
+        );
+    }
+
+    #[test]
+    fn javascript_grammar_smoke_test_for_jsx_source() {
+        // The JS query must parse a JSX-bearing `.js` fixture without
+        // raising a syntax error (Epic 010 DD: "smoke tests prove it
+        // compiles and behaves correctly for both").
+        let mut parser = tree_sitter::Parser::new();
+        let lang: tree_sitter::Language =
+            super::CodeExtractor::for_language(super::CodeLanguage::JavaScript)
+                .tree_sitter_language()
+                .clone();
+        parser.set_language(&lang).expect("set JS grammar");
+
+        // Plain JS first: must be error-free so we know the grammar
+        // is loaded correctly before adding JSX semantics.
+        let plain = "function hello() { return 1; }\n";
+        let tree = parser.parse(plain, None).expect("parse plain JS");
+        assert!(!tree.root_node().has_error(), "plain JS must parse cleanly");
+
+        // Same parser, JSX inside a `.js` file. The JS grammar
+        // accepts JSX natively so this must NOT error.
+        let jsx = "const Box = () => <div className=\"x\">hi</div>;\n";
+        let tree = parser.parse(jsx, None).expect("parse JSX inside .js");
+        assert!(
+            !tree.root_node().has_error(),
+            "JSX inside a .js file must parse cleanly (got ERROR)"
+        );
     }
 
     #[test]
@@ -1660,8 +2135,11 @@ mod tests {
 
         let rust_only = super::list_tracked_code_files(repo_path, &[".rs"])
             .expect("list .rs files");
-        let multi = super::list_tracked_code_files(repo_path, &[".rs", ".ts", ".tsx"])
-            .expect("list multi-ext files");
+        let multi = super::list_tracked_code_files(
+            repo_path,
+            &[".rs", ".ts", ".tsx", ".js", ".jsx"],
+        )
+        .expect("list multi-ext files");
 
         // Multi must contain every Rust-only file (the repo has no .ts/.tsx).
         for path in &rust_only {
@@ -1678,6 +2156,111 @@ mod tests {
                 "multi-ext result must not include .d.ts; got {path:?}"
             );
         }
+    }
+
+    #[test]
+    fn is_excluded_generated_path_filters_documented_directories() {
+        // Epic 010 Task 1 acceptance #2: a committed fixture for every
+        // configured generated/vendor directory and `*.min.js` is
+        // excluded by the shared discovery filter.
+        for (path, expected) in [
+            ("node_modules/foo/lib.js", true),
+            ("packages/app/node_modules/x.ts", true),
+            ("vendor/jquery.js", true),
+            ("dist/bundle.js", true),
+            ("build/output.jsx", true),
+            ("packages/app/.next/static/foo.js", true),
+            ("coverage/lcov.info", true),
+            ("lib.min.js", true),
+            ("packages/app/lib.MIN.JS", true),
+            ("src/main.rs", false),
+            ("src/checkout/session.ts", false),
+            ("scripts/build.js", false), // `build.js` itself, not the dir
+            ("src/distributor/x.ts", false), // segment-match, not substring
+            ("docs/min.js.md", false), // `.min.js.md`, not `.min.js`
+            ("", false),
+        ] {
+            assert_eq!(
+                super::is_excluded_generated_path(path),
+                expected,
+                "is_excluded_generated_path({path:?}) expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn list_tracked_code_files_excludes_tracked_generated_paths() {
+        // Build a minimal git repo with one normal .js file and one
+        // tracked vendor `.js` file. The vendor one must be filtered
+        // out by the shared discovery path even though it is tracked.
+        let repo_dir = tempfile::tempdir().expect("repo tempdir");
+
+        let status = std::process::Command::new("git")
+            .current_dir(repo_dir.path())
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@test.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@test.com")
+            .args(["init"])
+            .status()
+            .expect("git init");
+        assert!(status.success(), "git init failed");
+
+        std::fs::create_dir_all(repo_dir.path().join("src")).unwrap();
+        std::fs::write(
+            repo_dir.path().join("src/main.js"),
+            "function real() { return 1; }\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(repo_dir.path().join("node_modules/vendor")).unwrap();
+        std::fs::write(
+            repo_dir.path().join("node_modules/vendor/lib.js"),
+            "function leaked() { return 1; }\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(repo_dir.path().join("dist")).unwrap();
+        std::fs::write(
+            repo_dir.path().join("dist/bundle.min.js"),
+            "!function(){return 1}();\n",
+        )
+        .unwrap();
+
+        std::process::Command::new("git")
+            .current_dir(repo_dir.path())
+            .args(["add", "."])
+            .status()
+            .expect("git add");
+        std::process::Command::new("git")
+            .current_dir(repo_dir.path())
+            .args(["config", "user.email", "test@test.com"])
+            .status()
+            .expect("git config email");
+        std::process::Command::new("git")
+            .current_dir(repo_dir.path())
+            .args(["config", "user.name", "Test"])
+            .status()
+            .expect("git config name");
+        std::process::Command::new("git")
+            .current_dir(repo_dir.path())
+            .args(["commit", "-m", "initial"])
+            .status()
+            .expect("git commit");
+
+        let files = super::list_tracked_code_files(repo_dir.path(), &[".js"])
+            .expect("list tracked code files");
+        let rels: Vec<String> = files
+            .iter()
+            .map(|p| {
+                p.strip_prefix(repo_dir.path())
+                    .map(|r| r.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            })
+            .collect();
+        assert_eq!(
+            rels,
+            vec!["src/main.js".to_string()],
+            "tracked generated files must be excluded, got {rels:?}"
+        );
     }
 
     #[test]

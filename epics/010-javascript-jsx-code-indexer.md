@@ -245,7 +245,7 @@ JSX uses `language = "jsx"`.
 ### Task 1: Add JavaScript/JSX grammar and dispatch
 
 **Priority:** High  
-**Status:** ⬜ Planned
+**Status:** ✅ Done
 
 - Add a compatible, pinned `tree-sitter-javascript` dependency with a comment
   documenting runtime compatibility.
@@ -261,20 +261,41 @@ JSX uses `language = "jsx"`.
 
 **Acceptance Criteria:**
 
-- [ ] Tracked `.js` and `.jsx` files are discovered alongside `.rs`, `.ts`,
+- [x] Tracked `.js` and `.jsx` files are discovered alongside `.rs`, `.ts`,
       and `.tsx`; `language_for_extension` routes `js`, `jsx`, and mixed-case
       equivalents to the correct dialect and still rejects unsupported forms.
-- [ ] A committed fixture for every configured generated/vendor directory and
+      Covered by `language_for_extension_routes_canonical_extensions` (mixed
+      case), `list_tracked_code_files_supports_multi_extension_set`,
+      `code_language_as_str_matches_metadata`, and
+      `javascript_indexer_wires_metadata_language_javascript` /
+      `jsx_indexer_wires_metadata_language_jsx`.
+- [x] A committed fixture for every configured generated/vendor directory and
       `*.min.js` is excluded by the shared discovery filter; untracked and
-      ignored files remain excluded.
-- [ ] `.js` and `.jsx` dispatch cannot fall through to Rust or TypeScript, and
+      ignored files remain excluded. Covered by
+      `is_excluded_generated_path_filters_documented_directories`,
+      `list_tracked_code_files_excludes_tracked_generated_paths`, and
+      `indexer_excludes_tracked_generated_vendor_js`.
+- [x] `.js` and `.jsx` dispatch cannot fall through to Rust or TypeScript, and
       both production extractor fields/routes are constructed and exercised.
-- [ ] The JavaScript query contains no TypeScript-only captures and compiles
-      against JavaScript and JSX grammars as configured.
-- [ ] Query compilation is a startup/construction error, not a per-file error.
-- [ ] `CodeLanguage::as_str()` and indexed metadata report exactly
-      `javascript` for `.js` and `jsx` for `.jsx`.
-- [ ] No separate DB table, vector table, source type, or search API is added.
+      Covered by `indexer_dispatches_js_and_jsx_to_their_respective_extractors`
+      and `javascript_jsx_grammars_share_language_object`.
+- [x] The JavaScript query contains no TypeScript-only captures and compiles
+      against JavaScript and JSX grammars as configured. Covered by
+      `code_extractor_javascript_compiles_query_once`,
+      `code_extractor_jsx_compiles_query_once`, and
+      `javascript_grammar_smoke_test_for_jsx_source`.
+- [x] Query compilation is a startup/construction error, not a per-file error.
+      Both JS and JSX `CodeExtractor::for_language` paths use
+      `Query::new(...).expect(...)` so a misconfigured query panics at
+      construction.
+- [x] `CodeLanguage::as_str()` and indexed metadata report exactly
+      `javascript` for `.js` and `jsx` for `.jsx`. Covered by
+      `code_language_as_str_matches_metadata` and the
+      `*_indexer_wires_metadata_language_*` integration tests.
+- [x] No separate DB table, vector table, source type, or search API is added.
+      The existing `code_files`, `vec_code`, `source_type = 'code'`, and
+      `search_code_text` / `search_code_hybrid` paths serve all five
+      languages unchanged.
 
 ### Task 2: Implement JavaScript symbol extraction
 
