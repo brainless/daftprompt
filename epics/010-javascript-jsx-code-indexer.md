@@ -344,7 +344,7 @@ JSX uses `language = "jsx"`.
 ### Task 3: Implement JSX component extraction
 
 **Priority:** High  
-**Status:** ⬜ Planned
+**Status:** ✅ Done
 
 - Add JSX fixtures for function, arrow, and class components.
 - Preserve JSDoc, parameter/default-prop declaration context, and bounded JSX
@@ -355,19 +355,37 @@ JSX uses `language = "jsx"`.
 
 **Acceptance Criteria:**
 
-- [ ] A `.jsx` checkout component is indexed under its stable component name.
-- [ ] Function and arrow components retain both their declaration/parameter
+- [x] A `.jsx` checkout component is indexed under its stable component name.
+      Covered by `jsx_task3_function_component_indexed_under_stable_name`,
+      `jsx_task3_class_component_indexed_with_class_kind`, and
+      `jsx_task3_module_level_arrow_const_component_indexed`.
+- [x] Function and arrow components retain both their declaration/parameter
       context and a bounded JSX body expression containing a product-visible
-      condition or action.
-- [ ] Helper functions remain independently searchable.
-- [ ] JSX-only syntax parses without error under the selected grammar.
-- [ ] Fixtures containing nested component tags, fragments, attributes,
+      condition or action. Covered by
+      `jsx_task3_function_component_retains_default_props_in_signature`,
+      `jsx_task3_function_component_body_excerpt_contains_disabled_condition`,
+      and `jsx_task3_arrow_component_retains_destructured_props_and_click_handler`.
+- [x] Helper functions remain independently searchable. Covered by
+      `jsx_task3_helper_function_remains_independently_searchable`.
+- [x] JSX-only syntax parses without error under the selected grammar.
+      Covered by `jsx_task3_jsx_only_syntax_parses_without_error` and the
+      existing `javascript_grammar_smoke_test_for_jsx_source`.
+- [x] Fixtures containing nested component tags, fragments, attributes,
       expression-container callbacks, and `items.map(item => ...)` assert that
-      none become separate top-level symbols.
-- [ ] Adjacent class-component methods use method-local text/ranges without
-      sibling leakage.
-- [ ] Named and anonymous default exports are covered explicitly.
-- [ ] Metadata language is `jsx`, not `javascript`.
+      none become separate top-level symbols. Covered by
+      `jsx_task3_jsx_fragments_nested_tags_and_expression_containers_do_not_become_symbols`
+      and `jsx_task3_items_map_callback_does_not_become_symbol`.
+- [x] Adjacent class-component methods use method-local text/ranges without
+      sibling leakage. Covered by
+      `jsx_task3_class_component_adjacent_methods_have_method_local_evidence`
+      and `jsx_task3_anonymous_default_class_export_methods_are_namespaced`.
+- [x] Named and anonymous default exports are covered explicitly. Covered by
+      `jsx_task3_named_default_function_export_uses_name_not_default_export`,
+      `jsx_task3_anonymous_default_arrow_export_uses_default_export_identifier`,
+      and `jsx_task3_anonymous_default_class_export_methods_are_namespaced`.
+- [x] Metadata language is `jsx`, not `javascript`. Covered by the end-to-end
+      `jsx_task3_metadata_language_is_jsx_not_javascript` test plus the
+      existing `jsx_indexer_wires_metadata_language_jsx` integration test.
 
 ### Task 4: Apply Epic 008's indexing lifecycle contracts
 

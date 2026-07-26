@@ -4291,4 +4291,475 @@ module.exports = function () {
             .iter()
             .any(|symbol| symbol.identifier.ends_with("::helper")));
     }
+
+    // ── Epic 010 Task 3: JSX component extraction tests ─────────────────
+
+    /// Product-shaped JSX fixture for Task 3. Exercises every component
+    /// shape (function, arrow, class), default props, destructured props,
+    /// fragments, expression-container callbacks, nested tags, and the
+    /// `items.map(item => ...)` callback pattern. Helper function kept
+    /// module-scope so its independent searchability is asserted in one of
+    /// the focused tests below.
+    const JSX_TASK3_FIXTURE: &str = r#"import React from "react";
+
+/**
+ * Function component with default props and a product-visible disabled
+ * condition. The button stays disabled while checkout validation runs.
+ */
+export function CheckoutButton({ disabled = false, label = "Pay" }) {
+    return (
+        <button
+            disabled={disabled}
+            onClick={() => submitCheckout(label)}
+        >
+            {disabled ? "Loading..." : label}
+        </button>
+    );
+}
+
+/** Arrow component with destructured props and a click handler call. */
+export const CheckoutLabel = ({ amount, provider }) => (
+    <span onClick={() => recordClick(amount)}>
+        Charging {amount} via {provider.name}
+    </span>
+);
+
+/** Class component with adjacent render + handler methods. */
+export class CheckoutForm extends React.Component {
+    render() {
+        return (
+            <ul>
+                {this.props.items.map((item) => (
+                    <ItemRow key={item.id} item={item} />
+                ))}
+            </ul>
+        );
+    }
+
+    handleClick() {
+        return "clicked";
+    }
+
+    anotherMethod() {
+        return "another only";
+    }
+}
+
+/** Helper function — must remain independently searchable. */
+function helper() { return true; }
+
+const ItemRow = ({ item }) => <li>{item.name}</li>;
+"#;
+
+    /// JSX-only fragment fixture for parse-correctness assertions.
+    const JSX_TASK3_FRAGMENT_FIXTURE: &str = r#"import React from "react";
+
+/**
+ * A component that uses a fragment and an items.map callback.
+ */
+export function ItemList({ items }) {
+    return (
+        <>
+            <header>
+                <h2>only header body</h2>
+            </header>
+            <ul>
+                {items.map((item) => (
+                    <ItemRow key={item.id} item={item} />
+                ))}
+            </ul>
+        </>
+    );
+}
+"#;
+
+    /// Default-export fixture: named default function export. Kept in its
+    /// own file because valid JS modules allow exactly one `export
+    /// default`; combining named and anonymous defaults would be invalid
+    /// syntax and trigger dedup ambiguity.
+    const JSX_TASK3_NAMED_DEFAULT_FIXTURE: &str = r#"import React from "react";
+
+/** Named default function export. */
+export default function NamedDefault(props) {
+    return <form>{props.children}</form>;
+}
+"#;
+
+    /// Default-export fixture: anonymous default class export with
+    /// adjacent methods.
+    const JSX_TASK3_ANONYMOUS_DEFAULT_FIXTURE: &str = r#"import React from "react";
+
+/** Anonymous default class export with adjacent methods. */
+export default class {
+    render() {
+        return <div>only render body</div>;
+    }
+
+    handleClick() {
+        return "clicked";
+    }
+}
+"#;
+
+    /// Default-export fixture: anonymous default arrow export.
+    const JSX_TASK3_ANONYMOUS_ARROW_DEFAULT_FIXTURE: &str = r#"import React from "react";
+
+/** Anonymous default arrow export. */
+export default (props) => <button>{props.label}</button>;
+"#;
+
+    #[test]
+    fn jsx_task3_function_component_indexed_under_stable_name() {
+        let symbols = extract_js(
+            "src/components/CheckoutButton.jsx",
+            JSX_TASK3_FIXTURE,
+        );
+        let component = js_symbol(
+            &symbols,
+            &super::SymbolKind::Function,
+            "src/components/CheckoutButton.jsx::CheckoutButton",
+        );
+        assert_eq!(component.file_path, "src/components/CheckoutButton.jsx");
+        assert!(component.embed);
+    }
+
+    #[test]
+    fn jsx_task3_function_component_retains_default_props_in_signature() {
+        let symbols = extract_js(
+            "src/components/CheckoutButton.jsx",
+            JSX_TASK3_FIXTURE,
+        );
+        let component = js_symbol(
+            &symbols,
+            &super::SymbolKind::Function,
+            "src/components/CheckoutButton.jsx::CheckoutButton",
+        );
+        assert!(
+            component.text.contains("disabled = false"),
+            "default-prop context must appear in signature/text: {}",
+            component.text
+        );
+        assert!(
+            component.text.contains("label = \"Pay\""),
+            "default-prop context for label must appear: {}",
+            component.text
+        );
+    }
+
+    #[test]
+    fn jsx_task3_function_component_body_excerpt_contains_disabled_condition() {
+        let symbols = extract_js(
+            "src/components/CheckoutButton.jsx",
+            JSX_TASK3_FIXTURE,
+        );
+        let component = js_symbol(
+            &symbols,
+            &super::SymbolKind::Function,
+            "src/components/CheckoutButton.jsx::CheckoutButton",
+        );
+        assert!(
+            component.text.contains("disabled"),
+            "body excerpt must contain the `disabled` JSX attribute: {}",
+            component.text
+        );
+        assert!(
+            component.text.contains("Loading"),
+            "body excerpt must contain the disabled-state copy: {}",
+            component.text
+        );
+        assert!(
+            component.text.contains("<button"),
+            "body excerpt must include the JSX opening tag: {}",
+            component.text
+        );
+    }
+
+    #[test]
+    fn jsx_task3_arrow_component_retains_destructured_props_and_click_handler() {
+        let symbols = extract_js(
+            "src/components/CheckoutButton.jsx",
+            JSX_TASK3_FIXTURE,
+        );
+        let component = js_symbol(
+            &symbols,
+            &super::SymbolKind::Function,
+            "src/components/CheckoutButton.jsx::CheckoutLabel",
+        );
+        assert!(
+            component.text.contains("amount")
+                && component.text.contains("provider"),
+            "destructured prop names must appear in the signature/text: {}",
+            component.text
+        );
+        assert!(
+            component.text.contains("recordClick"),
+            "body excerpt must contain the click handler call: {}",
+            component.text
+        );
+        assert!(
+            component.text.contains("<span"),
+            "body excerpt must include the JSX opening tag: {}",
+            component.text
+        );
+    }
+
+    #[test]
+    fn jsx_task3_class_component_indexed_with_class_kind() {
+        let symbols = extract_js(
+            "src/components/CheckoutButton.jsx",
+            JSX_TASK3_FIXTURE,
+        );
+        let class_symbol = js_symbol(
+            &symbols,
+            &super::SymbolKind::Class,
+            "src/components/CheckoutButton.jsx::CheckoutForm",
+        );
+        assert_eq!(class_symbol.file_path, "src/components/CheckoutButton.jsx");
+        assert!(class_symbol.embed);
+        assert!(
+            class_symbol.text.contains("CheckoutForm"),
+            "class record must mention the class name: {}",
+            class_symbol.text
+        );
+    }
+
+    #[test]
+    fn jsx_task3_class_component_adjacent_methods_have_method_local_evidence() {
+        let symbols = extract_js(
+            "src/components/CheckoutButton.jsx",
+            JSX_TASK3_FIXTURE,
+        );
+
+        let render = js_symbol(
+            &symbols,
+            &super::SymbolKind::Method,
+            "src/components/CheckoutButton.jsx::CheckoutForm::render",
+        );
+        assert!(render.text.contains("render"));
+        assert!(
+            render.text.contains("<ul"),
+            "render body excerpt must contain the JSX ul tag: {}",
+            render.text
+        );
+        assert!(
+            render.text.contains("items.map"),
+            "render body excerpt must contain the items.map call: {}",
+            render.text
+        );
+        assert!(
+            !render.text.contains("clicked"),
+            "render text leaked `handleClick` sibling: {}",
+            render.text
+        );
+        assert!(
+            !render.text.contains("another only"),
+            "render text leaked `anotherMethod` sibling: {}",
+            render.text
+        );
+
+        let handle = js_symbol(
+            &symbols,
+            &super::SymbolKind::Method,
+            "src/components/CheckoutButton.jsx::CheckoutForm::handleClick",
+        );
+        assert!(handle.text.contains("handleClick"));
+        assert!(handle.text.contains("clicked"));
+        assert!(
+            !handle.text.contains("<ul"),
+            "handleClick text leaked `render` sibling: {}",
+            handle.text
+        );
+        assert!(
+            !handle.text.contains("another only"),
+            "handleClick text leaked `anotherMethod` sibling: {}",
+            handle.text
+        );
+
+        let another = js_symbol(
+            &symbols,
+            &super::SymbolKind::Method,
+            "src/components/CheckoutButton.jsx::CheckoutForm::anotherMethod",
+        );
+        assert!(another.text.contains("anotherMethod"));
+        assert!(another.text.contains("another only"));
+        assert!(
+            !another.text.contains("clicked"),
+            "anotherMethod text leaked `handleClick` sibling: {}",
+            another.text
+        );
+        assert!(
+            !another.text.contains("<ul"),
+            "anotherMethod text leaked `render` sibling: {}",
+            another.text
+        );
+
+        assert!(render.line_end < handle.line_start);
+        assert!(handle.line_end < another.line_start);
+    }
+
+    #[test]
+    fn jsx_task3_helper_function_remains_independently_searchable() {
+        let symbols = extract_js(
+            "src/components/CheckoutButton.jsx",
+            JSX_TASK3_FIXTURE,
+        );
+        let helper = js_symbol(
+            &symbols,
+            &super::SymbolKind::Function,
+            "src/components/CheckoutButton.jsx::helper",
+        );
+        assert!(helper.text.contains("function helper"));
+        assert!(helper.embed);
+    }
+
+    #[test]
+    fn jsx_task3_module_level_arrow_const_component_indexed() {
+        let symbols = extract_js(
+            "src/components/CheckoutButton.jsx",
+            JSX_TASK3_FIXTURE,
+        );
+        let item_row = js_symbol(
+            &symbols,
+            &super::SymbolKind::Function,
+            "src/components/CheckoutButton.jsx::ItemRow",
+        );
+        assert!(item_row.text.contains("ItemRow"));
+        assert!(item_row.text.contains("<li"));
+    }
+
+    #[test]
+    fn jsx_task3_jsx_only_syntax_parses_without_error() {
+        let mut parser = tree_sitter::Parser::new();
+        let lang: tree_sitter::Language =
+            super::CodeExtractor::for_language(super::CodeLanguage::Jsx)
+                .tree_sitter_language()
+                .clone();
+        parser.set_language(&lang).expect("set JSX grammar");
+
+        let tree = parser
+            .parse(JSX_TASK3_FRAGMENT_FIXTURE, None)
+            .expect("parse JSX fragment fixture");
+        assert!(
+            !tree.root_node().has_error(),
+            "JSX fragment + nested tags + items.map must parse cleanly"
+        );
+    }
+
+    #[test]
+    fn jsx_task3_jsx_fragments_nested_tags_and_expression_containers_do_not_become_symbols() {
+        let symbols = extract_js(
+            "src/components/ItemList.jsx",
+            JSX_TASK3_FRAGMENT_FIXTURE,
+        );
+        for forbidden in ["header", "h2", "ul", "li", "Fragment"] {
+            assert!(
+                !symbols
+                    .iter()
+                    .any(|symbol| symbol.identifier
+                        .ends_with(&format!("::{forbidden}"))),
+                "{forbidden} leaked as a top-level symbol"
+            );
+        }
+        assert!(
+            symbols.iter().any(|symbol| symbol.identifier
+                == "src/components/ItemList.jsx::ItemList"),
+            "ItemList function component must still be indexed"
+        );
+    }
+
+    #[test]
+    fn jsx_task3_items_map_callback_does_not_become_symbol() {
+        let symbols = extract_js(
+            "src/components/ItemList.jsx",
+            JSX_TASK3_FRAGMENT_FIXTURE,
+        );
+        for forbidden in ["items", "item"] {
+            assert!(
+                !symbols
+                    .iter()
+                    .any(|symbol| symbol.identifier
+                        .ends_with(&format!("::{forbidden}"))),
+                "{forbidden} leaked as a top-level symbol"
+            );
+        }
+        assert!(
+            symbols.iter().any(|symbol| symbol.identifier
+                == "src/components/ItemList.jsx::ItemList"),
+            "ItemList function component must still be indexed"
+        );
+    }
+
+    #[test]
+    fn jsx_task3_named_default_function_export_uses_name_not_default_export() {
+        let symbols = extract_js(
+            "src/components/Default.jsx",
+            JSX_TASK3_NAMED_DEFAULT_FIXTURE,
+        );
+        let named = js_symbol(
+            &symbols,
+            &super::SymbolKind::Function,
+            "src/components/Default.jsx::NamedDefault",
+        );
+        assert!(named.text.contains("NamedDefault"));
+        assert!(
+            !symbols.iter().any(|symbol| {
+                symbol.identifier == "src/components/Default.jsx::__default_export"
+                    && symbol.symbol_kind == super::SymbolKind::Function
+            }),
+            "named default export must not collapse to the __default_export identifier"
+        );
+    }
+
+    #[test]
+    fn jsx_task3_anonymous_default_arrow_export_uses_default_export_identifier() {
+        let symbols = extract_js(
+            "src/components/Default.jsx",
+            JSX_TASK3_ANONYMOUS_ARROW_DEFAULT_FIXTURE,
+        );
+        let default_arrow = js_symbol(
+            &symbols,
+            &super::SymbolKind::Function,
+            "src/components/Default.jsx::__default_export",
+        );
+        assert!(default_arrow.text.contains("<button"));
+        assert!(default_arrow.text.contains("props.label"));
+    }
+
+    #[test]
+    fn jsx_task3_anonymous_default_class_export_methods_are_namespaced() {
+        let symbols = extract_js(
+            "src/components/Default.jsx",
+            JSX_TASK3_ANONYMOUS_DEFAULT_FIXTURE,
+        );
+        let class_symbol = js_symbol(
+            &symbols,
+            &super::SymbolKind::Class,
+            "src/components/Default.jsx::__default_export",
+        );
+        assert!(class_symbol.embed);
+
+        let render = js_symbol(
+            &symbols,
+            &super::SymbolKind::Method,
+            "src/components/Default.jsx::__default_export::render",
+        );
+        assert!(render.text.contains("only render body"));
+        assert!(
+            !render.text.contains("clicked"),
+            "render leaked handleClick sibling: {}",
+            render.text
+        );
+
+        let handle = js_symbol(
+            &symbols,
+            &super::SymbolKind::Method,
+            "src/components/Default.jsx::__default_export::handleClick",
+        );
+        assert!(handle.text.contains("clicked"));
+        assert!(
+            !handle.text.contains("only render body"),
+            "handleClick leaked render sibling: {}",
+            handle.text
+        );
+    }
 }

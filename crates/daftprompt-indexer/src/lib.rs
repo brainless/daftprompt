@@ -2459,4 +2459,207 @@ export const CheckoutLabel = ({ label }: { label: string }) => <span>{label}</sp
             );
         }
     }
+
+    // ── Epic 010 Task 3: JSX metadata language contract ──────────────────
+
+    /// Comprehensive JSX fixture for Task 3. Mirrors the code.rs fixture
+    /// shape (function, arrow, class components, default props,
+    /// destructured props, fragments, expression-container callbacks,
+    /// `items.map(item => ...)`) so the indexed metadata language string
+    /// can be asserted against the canonical `jsx` value rather than
+    /// `javascript`.
+    const JSX_TASK3_FIXTURE: &str = r#"import React from "react";
+
+/**
+ * Function component with default props and a product-visible disabled
+ * condition. The button stays disabled while checkout validation runs.
+ */
+export function CheckoutButton({ disabled = false, label = "Pay" }) {
+    return (
+        <button
+            disabled={disabled}
+            onClick={() => submitCheckout(label)}
+        >
+            {disabled ? "Loading..." : label}
+        </button>
+    );
+}
+
+/** Arrow component with destructured props and a click handler call. */
+export const CheckoutLabel = ({ amount, provider }) => (
+    <span onClick={() => recordClick(amount)}>
+        Charging {amount} via {provider.name}
+    </span>
+);
+
+/** Class component with adjacent render + handler methods. */
+export class CheckoutForm extends React.Component {
+    render() {
+        return (
+            <ul>
+                {this.props.items.map((item) => (
+                    <ItemRow key={item.id} item={item} />
+                ))}
+            </ul>
+        );
+    }
+
+    handleClick() {
+        return "clicked";
+    }
+
+    anotherMethod() {
+        return "another only";
+    }
+}
+
+/** Helper function — must remain independently searchable. */
+function helper() { return true; }
+
+const ItemRow = ({ item }) => <li>{item.name}</li>;
+"#;
+
+    /// Default-export fixtures for Task 3 metadata assertions. Split
+    /// into named and anonymous fixtures because valid JS modules allow
+    /// exactly one `export default`.
+    const JSX_TASK3_NAMED_DEFAULT_FIXTURE: &str = r#"import React from "react";
+
+/** Named default function export. */
+export default function NamedDefault(props) {
+    return <form>{props.children}</form>;
+}
+"#;
+
+    const JSX_TASK3_ANONYMOUS_DEFAULT_FIXTURE: &str = r#"import React from "react";
+
+/** Anonymous default class export with adjacent methods. */
+export default class {
+    render() {
+        return <div>only render body</div>;
+    }
+
+    handleClick() {
+        return "clicked";
+    }
+}
+"#;
+
+    const JSX_TASK3_ANONYMOUS_ARROW_DEFAULT_FIXTURE: &str = r#"import React from "react";
+
+/** Anonymous default arrow export. */
+export default (props) => <button>{props.label}</button>;
+"#;
+
+    #[test]
+    fn jsx_task3_metadata_language_is_jsx_not_javascript() {
+        let files = [
+            ("src/components/CheckoutButton.jsx", JSX_TASK3_FIXTURE),
+            (
+                "src/components/NamedDefault.jsx",
+                JSX_TASK3_NAMED_DEFAULT_FIXTURE,
+            ),
+            (
+                "src/components/AnonymousDefault.jsx",
+                JSX_TASK3_ANONYMOUS_DEFAULT_FIXTURE,
+            ),
+            (
+                "src/components/AnonymousArrowDefault.jsx",
+                JSX_TASK3_ANONYMOUS_ARROW_DEFAULT_FIXTURE,
+            ),
+        ];
+        let (repo_dir, cache_dir) = setup_repo_with_files(&files);
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        let report = indexer.index_code().expect("index_code");
+        assert_eq!(report.files_scanned, 4);
+        assert_eq!(report.files_changed, 4);
+
+        for (path, expected_identifier) in [
+            (
+                "src/components/CheckoutButton.jsx",
+                "src/components/CheckoutButton.jsx::CheckoutButton",
+            ),
+            (
+                "src/components/CheckoutButton.jsx",
+                "src/components/CheckoutButton.jsx::CheckoutLabel",
+            ),
+            (
+                "src/components/CheckoutButton.jsx",
+                "src/components/CheckoutButton.jsx::CheckoutForm",
+            ),
+            (
+                "src/components/CheckoutButton.jsx",
+                "src/components/CheckoutButton.jsx::CheckoutForm::render",
+            ),
+            (
+                "src/components/CheckoutButton.jsx",
+                "src/components/CheckoutButton.jsx::CheckoutForm::handleClick",
+            ),
+            (
+                "src/components/CheckoutButton.jsx",
+                "src/components/CheckoutButton.jsx::CheckoutForm::anotherMethod",
+            ),
+            (
+                "src/components/CheckoutButton.jsx",
+                "src/components/CheckoutButton.jsx::helper",
+            ),
+            (
+                "src/components/CheckoutButton.jsx",
+                "src/components/CheckoutButton.jsx::ItemRow",
+            ),
+            (
+                "src/components/NamedDefault.jsx",
+                "src/components/NamedDefault.jsx::NamedDefault",
+            ),
+            (
+                "src/components/AnonymousDefault.jsx",
+                "src/components/AnonymousDefault.jsx::__default_export",
+            ),
+            (
+                "src/components/AnonymousDefault.jsx",
+                "src/components/AnonymousDefault.jsx::__default_export::render",
+            ),
+            (
+                "src/components/AnonymousDefault.jsx",
+                "src/components/AnonymousDefault.jsx::__default_export::handleClick",
+            ),
+            (
+                "src/components/AnonymousArrowDefault.jsx",
+                "src/components/AnonymousArrowDefault.jsx::__default_export",
+            ),
+        ] {
+            let metadata: String = indexer
+                .db
+                .query_row(
+                    "SELECT metadata FROM items WHERE source_type = 'code' AND identifier = ?1",
+                    [expected_identifier],
+                    |row| row.get(0),
+                )
+                .unwrap_or_else(|_| {
+                    panic!("code item metadata for {expected_identifier}")
+                });
+            let metadata: serde_json::Value =
+                serde_json::from_str(&metadata).expect("valid metadata");
+            assert_eq!(
+                metadata["language"], "jsx",
+                "language metadata mismatch for {expected_identifier}: {metadata}"
+            );
+            assert_eq!(
+                metadata["file_path"], path,
+                "file_path mismatch for {expected_identifier}"
+            );
+        }
+
+        let js_hits: i64 = indexer
+            .db
+            .query_row(
+                "SELECT COUNT(*) FROM items WHERE source_type = 'code' AND json_extract(metadata, '$.language') = 'javascript'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("javascript count");
+        assert_eq!(
+            js_hits, 0,
+            "no code row in a .jsx file should carry language=javascript"
+        );
+    }
 }
