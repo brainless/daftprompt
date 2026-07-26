@@ -183,8 +183,7 @@ impl CodeExtractor {
     pub fn for_language(language: CodeLanguage) -> Self {
         match language {
             CodeLanguage::Rust => {
-                let tree_sitter_language: tree_sitter::Language =
-                    tree_sitter_rust::LANGUAGE.into();
+                let tree_sitter_language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
                 let query = Query::new(&tree_sitter_language, RUST_QUERY)
                     .expect("rust tree-sitter query must compile");
                 Self {
@@ -865,93 +864,36 @@ fn extract_javascript_symbols(
     source: &str,
 ) -> anyhow::Result<Vec<CodeSymbol>> {
     let tree = parse_with_extractor(extractor, file_path, source)?;
-
-    let query = extractor.query();
-    let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(query, tree.root_node(), source.as_bytes());
-
-    let capture_names = query.capture_names();
-    let mut symbols: Vec<CodeSymbol> = Vec::new();
-    let mut standalone_comment_ranges: Vec<(usize, usize)> = Vec::new();
-    let mut import_ranges: Vec<(usize, usize)> = Vec::new();
-
     let file_path_str = canonicalize_file_path(repo_path, file_path);
+    let mut symbols = Vec::new();
+    let mut comment_ranges = Vec::new();
+    let mut attached_doc_ranges = Vec::new();
+    let mut import_ranges = Vec::new();
 
-    while let Some(m) = matches.next() {
-        let captures = m.captures;
+    collect_javascript_comments(tree.root_node(), &mut comment_ranges);
+    collect_javascript_imports(tree.root_node(), &mut import_ranges);
 
-        let mut symbol_name: Option<String> = None;
-        let mut definition_node: Option<tree_sitter::Node> = None;
-        let mut definition_kind: Option<&str> = None;
-        let mut class_name: Option<String> = None;
-
-        for cap in captures {
-            let cname = capture_names[cap.index as usize];
-            match cname {
-                "name" => {
-                    symbol_name = Some(
-                        cap.node
-                            .utf8_text(source.as_bytes())
-                            .unwrap_or("")
-                            .to_string(),
-                    );
-                }
-                "class_name" => {
-                    class_name = Some(
-                        cap.node
-                            .utf8_text(source.as_bytes())
-                            .unwrap_or("")
-                            .to_string(),
-                    );
-                }
-                "comment" => {
-                    let start = cap.node.start_position().row;
-                    let end = cap.node.end_position().row;
-                    standalone_comment_ranges.push((start, end));
-                }
-                "import" | "reexport" | "dynamic_import" => {
-                    import_ranges.push((cap.node.start_byte(), cap.node.end_byte()));
-                }
-                _ => {
-                    if cname.starts_with("definition.") {
-                        definition_node = Some(cap.node);
-                        definition_kind = Some(cname);
-                    }
-                }
-            }
-        }
-
-        let Some((kind, effective_name)) =
-            resolve_javascript_match(definition_kind, symbol_name.as_deref(), class_name.as_deref())
-        else {
-            continue;
-        };
-        let Some(node) = definition_node else { continue };
-
-        let identifier = match (class_name.as_deref(), &effective_name) {
-            (Some(cn), name) if matches!(kind, SymbolKind::Method) => {
-                format!("{file_path_str}::{cn}::{name}")
-            }
-            _ => format!("{file_path_str}::{effective_name}"),
-        };
-
-        let line_start = node.start_position().row + 1;
-        let line_end = node.end_position().row + 1;
-
-        symbols.push(CodeSymbol {
-            identifier,
-            text: String::new(),
-            symbol_kind: kind,
-            file_path: file_path_str.clone(),
-            line_start,
-            line_end,
-            embed: true,
-        });
+    let mut cursor = tree.root_node().walk();
+    let top_level: Vec<tree_sitter::Node> = tree.root_node().children(&mut cursor).collect();
+    for node in top_level {
+        process_javascript_module_node(
+            node,
+            source,
+            &file_path_str,
+            &mut symbols,
+            &mut attached_doc_ranges,
+            &mut import_ranges,
+        );
     }
 
-    let total_lines = source.lines().count();
+    dedup_callable_bindings(&mut symbols);
 
-    let comment_text = collect_standalone_comments(source, &standalone_comment_ranges, &[]);
+    let total_lines = source.lines().count();
+    let comment_text = collect_standalone_comments(
+        source,
+        &filter_out_attached_ranges(&comment_ranges, &attached_doc_ranges),
+        &[],
+    );
     if !comment_text.is_empty() {
         symbols.push(CodeSymbol {
             identifier: format!("{}::__comments__", file_path_str),
@@ -970,7 +912,7 @@ fn extract_javascript_symbols(
             identifier: format!("{}::__imports__", file_path_str),
             text: import_text,
             symbol_kind: SymbolKind::Imports,
-            file_path: file_path_str.clone(),
+            file_path: file_path_str,
             line_start: 1,
             line_end: total_lines,
             embed: false,
@@ -980,37 +922,742 @@ fn extract_javascript_symbols(
     Ok(symbols)
 }
 
-/// Map a JS query match to a stable [`SymbolKind`] and effective name.
-///
-/// Resolves the definition capture name (e.g. `definition.function`) plus
-/// the captured identifier and (for class members) class_name. Returns
-/// `None` for unknown definition kinds so the caller skips them.
-///
-/// This is the Epic 010 Task 1 helper. Tasks 2 and 3 extend it with
-/// nested-symbol exclusion, JSDoc attachment, and prototype/JSX handling.
-fn resolve_javascript_match(
-    definition_kind: Option<&str>,
-    symbol_name: Option<&str>,
-    class_name: Option<&str>,
-) -> Option<(SymbolKind, String)> {
-    let kind_str = definition_kind?;
-    let name = symbol_name?.to_string();
-    match kind_str {
-        "definition.function" => Some((SymbolKind::Function, name)),
-        "definition.class" => Some((SymbolKind::Class, name)),
-        "definition.method" => {
-            let effective = match class_name {
-                Some(cn) => format!("{cn}::{name}"),
-                None => name.clone(),
-            };
-            Some((SymbolKind::Method, effective))
+fn process_javascript_module_node(
+    node: tree_sitter::Node,
+    source: &str,
+    file_path: &str,
+    symbols: &mut Vec<CodeSymbol>,
+    attached_doc_ranges: &mut Vec<(usize, usize)>,
+    import_ranges: &mut Vec<(usize, usize)>,
+) {
+    match node.kind() {
+        "import_statement" => {}
+        "export_statement" => {
+            if let Some(declaration) = node.child_by_field_name("declaration") {
+                process_javascript_declaration(
+                    declaration,
+                    node,
+                    source,
+                    file_path,
+                    symbols,
+                    attached_doc_ranges,
+                    import_ranges,
+                );
+                if javascript_is_default_export(node, source)
+                    && declaration.child_by_field_name("name").is_none()
+                    && matches!(
+                        declaration.kind(),
+                        "function_declaration"
+                            | "generator_function_declaration"
+                            | "class_declaration"
+                    )
+                {
+                    let kind = if declaration.kind() == "class_declaration" {
+                        SymbolKind::Class
+                    } else {
+                        SymbolKind::Function
+                    };
+                    push_javascript_symbol(
+                        symbols,
+                        attached_doc_ranges,
+                        &declaration,
+                        node,
+                        "__default_export",
+                        kind,
+                        None,
+                        source,
+                        file_path,
+                    );
+                    if declaration.kind() == "class_declaration" {
+                        process_javascript_class_methods(
+                            declaration,
+                            "__default_export",
+                            source,
+                            file_path,
+                            symbols,
+                            attached_doc_ranges,
+                        );
+                    }
+                }
+            } else if let Some(value) = node.child_by_field_name("value") {
+                if javascript_is_default_export(node, source)
+                    && javascript_is_callable_or_class(value)
+                {
+                    let kind = if value.kind() == "class" {
+                        SymbolKind::Class
+                    } else {
+                        SymbolKind::Function
+                    };
+                    push_javascript_symbol(
+                        symbols,
+                        attached_doc_ranges,
+                        &node,
+                        node,
+                        "__default_export",
+                        kind,
+                        None,
+                        source,
+                        file_path,
+                    );
+                    if value.kind() == "class" {
+                        process_javascript_class_methods(
+                            value,
+                            "__default_export",
+                            source,
+                            file_path,
+                            symbols,
+                            attached_doc_ranges,
+                        );
+                    }
+                }
+            }
         }
-        "definition.callable_binding" => Some((SymbolKind::Function, name)),
-        "definition.object_method" => Some((SymbolKind::Method, name)),
-        "definition.assignment_binding" => Some((SymbolKind::Function, name)),
-        "definition.lexical_decl" => Some((SymbolKind::Const, name)),
-        "definition.var_decl" => Some((SymbolKind::Variable, name)),
+        "function_declaration" | "generator_function_declaration" => {
+            process_javascript_function_declaration(
+                node,
+                node,
+                source,
+                file_path,
+                symbols,
+                attached_doc_ranges,
+            );
+        }
+        "class_declaration" => {
+            let Some(name) = node
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+            else {
+                return;
+            };
+            push_javascript_symbol(
+                symbols,
+                attached_doc_ranges,
+                &node,
+                node,
+                name,
+                SymbolKind::Class,
+                None,
+                source,
+                file_path,
+            );
+            process_javascript_class_methods(
+                node,
+                name,
+                source,
+                file_path,
+                symbols,
+                attached_doc_ranges,
+            );
+        }
+        "lexical_declaration" | "variable_declaration" => {
+            process_javascript_variable_declaration(
+                node,
+                node,
+                source,
+                file_path,
+                symbols,
+                attached_doc_ranges,
+                import_ranges,
+            );
+        }
+        "expression_statement" => {
+            let mut cursor = node.walk();
+            let Some(expression) = node.named_children(&mut cursor).next() else {
+                return;
+            };
+            if expression.kind() == "assignment_expression" {
+                process_javascript_assignment(
+                    expression,
+                    source,
+                    file_path,
+                    symbols,
+                    attached_doc_ranges,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn process_javascript_declaration(
+    node: tree_sitter::Node,
+    anchor: tree_sitter::Node,
+    source: &str,
+    file_path: &str,
+    symbols: &mut Vec<CodeSymbol>,
+    attached_doc_ranges: &mut Vec<(usize, usize)>,
+    import_ranges: &mut Vec<(usize, usize)>,
+) {
+    match node.kind() {
+        "function_declaration" | "generator_function_declaration" => {
+            process_javascript_function_declaration(
+                node,
+                anchor,
+                source,
+                file_path,
+                symbols,
+                attached_doc_ranges,
+            );
+        }
+        "class_declaration" => {
+            let Some(name) = node
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+            else {
+                return;
+            };
+            push_javascript_symbol(
+                symbols,
+                attached_doc_ranges,
+                &node,
+                anchor,
+                name,
+                SymbolKind::Class,
+                None,
+                source,
+                file_path,
+            );
+            process_javascript_class_methods(
+                node,
+                name,
+                source,
+                file_path,
+                symbols,
+                attached_doc_ranges,
+            );
+        }
+        "lexical_declaration" | "variable_declaration" => {
+            process_javascript_variable_declaration(
+                node,
+                anchor,
+                source,
+                file_path,
+                symbols,
+                attached_doc_ranges,
+                import_ranges,
+            );
+        }
+        _ => {}
+    }
+}
+
+fn process_javascript_function_declaration(
+    node: tree_sitter::Node,
+    anchor: tree_sitter::Node,
+    source: &str,
+    file_path: &str,
+    symbols: &mut Vec<CodeSymbol>,
+    attached_doc_ranges: &mut Vec<(usize, usize)>,
+) {
+    let Some(name) = node
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+    else {
+        return;
+    };
+    push_javascript_symbol(
+        symbols,
+        attached_doc_ranges,
+        &node,
+        anchor,
+        name,
+        SymbolKind::Function,
+        None,
+        source,
+        file_path,
+    );
+}
+
+fn process_javascript_variable_declaration(
+    declaration: tree_sitter::Node,
+    anchor: tree_sitter::Node,
+    source: &str,
+    file_path: &str,
+    symbols: &mut Vec<CodeSymbol>,
+    attached_doc_ranges: &mut Vec<(usize, usize)>,
+    import_ranges: &mut Vec<(usize, usize)>,
+) {
+    let binding_kind = if declaration.kind() == "lexical_declaration"
+        && declaration
+            .child_by_field_name("kind")
+            .map(|node| node.kind() == "const")
+            .unwrap_or(false)
+    {
+        SymbolKind::Const
+    } else {
+        SymbolKind::Variable
+    };
+
+    let mut cursor = declaration.walk();
+    for declarator in declaration
+        .named_children(&mut cursor)
+        .filter(|node| node.kind() == "variable_declarator")
+    {
+        let Some(name_node) = declarator.child_by_field_name("name") else {
+            continue;
+        };
+        let Some(name) = name_node.utf8_text(source.as_bytes()).ok() else {
+            continue;
+        };
+        if name_node.kind() != "identifier" {
+            continue;
+        }
+
+        if let Some(value) = declarator.child_by_field_name("value") {
+            if javascript_is_literal_require(value, source) {
+                import_ranges.push((declaration.start_byte(), declaration.end_byte()));
+            }
+            if javascript_is_callable_or_class(value) {
+                let kind = if value.kind() == "class" {
+                    SymbolKind::Class
+                } else {
+                    SymbolKind::Function
+                };
+                push_javascript_symbol(
+                    symbols,
+                    attached_doc_ranges,
+                    &declarator,
+                    anchor,
+                    name,
+                    kind,
+                    Some(value),
+                    source,
+                    file_path,
+                );
+                if value.kind() == "class" {
+                    process_javascript_class_methods(
+                        value,
+                        name,
+                        source,
+                        file_path,
+                        symbols,
+                        attached_doc_ranges,
+                    );
+                }
+                continue;
+            }
+            if value.kind() == "object" {
+                push_javascript_symbol(
+                    symbols,
+                    attached_doc_ranges,
+                    &declarator,
+                    anchor,
+                    name,
+                    binding_kind.clone(),
+                    None,
+                    source,
+                    file_path,
+                );
+                process_javascript_object_methods(
+                    value,
+                    name,
+                    source,
+                    file_path,
+                    symbols,
+                    attached_doc_ranges,
+                );
+                continue;
+            }
+        }
+
+        push_javascript_symbol(
+            symbols,
+            attached_doc_ranges,
+            &declarator,
+            declaration,
+            name,
+            binding_kind.clone(),
+            None,
+            source,
+            file_path,
+        );
+    }
+}
+
+fn process_javascript_class_methods(
+    class_node: tree_sitter::Node,
+    class_name: &str,
+    source: &str,
+    file_path: &str,
+    symbols: &mut Vec<CodeSymbol>,
+    attached_doc_ranges: &mut Vec<(usize, usize)>,
+) {
+    let Some(body) = class_node.child_by_field_name("body") else {
+        return;
+    };
+    let mut cursor = body.walk();
+    for method in body
+        .named_children(&mut cursor)
+        .filter(|node| node.kind() == "method_definition")
+    {
+        let Some(name) = method
+            .child_by_field_name("name")
+            .filter(|node| node.kind() == "property_identifier")
+            .and_then(|node| node.utf8_text(source.as_bytes()).ok())
+        else {
+            continue;
+        };
+        let identifier = format!("{class_name}::{name}");
+        push_javascript_symbol(
+            symbols,
+            attached_doc_ranges,
+            &method,
+            method,
+            &identifier,
+            SymbolKind::Method,
+            None,
+            source,
+            file_path,
+        );
+    }
+}
+
+fn process_javascript_object_methods(
+    object: tree_sitter::Node,
+    object_name: &str,
+    source: &str,
+    file_path: &str,
+    symbols: &mut Vec<CodeSymbol>,
+    attached_doc_ranges: &mut Vec<(usize, usize)>,
+) {
+    let mut cursor = object.walk();
+    for member in object.named_children(&mut cursor) {
+        match member.kind() {
+            "method_definition" => {
+                let Some(name) = member
+                    .child_by_field_name("name")
+                    .filter(|node| node.kind() == "property_identifier")
+                    .and_then(|node| node.utf8_text(source.as_bytes()).ok())
+                else {
+                    continue;
+                };
+                let identifier = format!("{object_name}::{name}");
+                push_javascript_symbol(
+                    symbols,
+                    attached_doc_ranges,
+                    &member,
+                    member,
+                    &identifier,
+                    SymbolKind::Method,
+                    None,
+                    source,
+                    file_path,
+                );
+            }
+            "pair" => {
+                let Some(name) = member
+                    .child_by_field_name("key")
+                    .filter(|node| node.kind() == "property_identifier")
+                    .and_then(|node| node.utf8_text(source.as_bytes()).ok())
+                else {
+                    continue;
+                };
+                let Some(value) = member.child_by_field_name("value") else {
+                    continue;
+                };
+                if !javascript_is_callable(value) {
+                    continue;
+                }
+                let identifier = format!("{object_name}::{name}");
+                push_javascript_symbol(
+                    symbols,
+                    attached_doc_ranges,
+                    &member,
+                    member,
+                    &identifier,
+                    SymbolKind::Method,
+                    Some(value),
+                    source,
+                    file_path,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+fn process_javascript_assignment(
+    assignment: tree_sitter::Node,
+    source: &str,
+    file_path: &str,
+    symbols: &mut Vec<CodeSymbol>,
+    attached_doc_ranges: &mut Vec<(usize, usize)>,
+) {
+    let Some(left) = assignment.child_by_field_name("left") else {
+        return;
+    };
+    let Some(right) = assignment.child_by_field_name("right") else {
+        return;
+    };
+    if !javascript_is_callable_or_class(right) {
+        return;
+    }
+    let parts = javascript_member_parts(left, source);
+    let Some((name, kind)) = javascript_assignment_symbol(&parts, right.kind()) else {
+        return;
+    };
+    push_javascript_symbol(
+        symbols,
+        attached_doc_ranges,
+        &assignment,
+        assignment,
+        &name,
+        kind,
+        Some(right),
+        source,
+        file_path,
+    );
+}
+
+fn javascript_assignment_symbol(
+    parts: &[String],
+    right_kind: &str,
+) -> Option<(String, SymbolKind)> {
+    let callable_kind = if right_kind == "class" {
+        SymbolKind::Class
+    } else {
+        SymbolKind::Function
+    };
+    match parts {
+        [name] => Some((name.clone(), callable_kind)),
+        [receiver, prototype, method] if prototype == "prototype" => {
+            Some((format!("{receiver}::{method}"), SymbolKind::Method))
+        }
+        [exports, name] if exports == "exports" => Some((name.clone(), callable_kind)),
+        [module, exports] if module == "module" && exports == "exports" => {
+            Some(("__module_export".to_string(), callable_kind))
+        }
+        [module, exports, name] if module == "module" && exports == "exports" => {
+            Some((name.clone(), callable_kind))
+        }
         _ => None,
+    }
+}
+
+fn javascript_member_parts(node: tree_sitter::Node, source: &str) -> Vec<String> {
+    if node.kind() == "identifier" {
+        return node
+            .utf8_text(source.as_bytes())
+            .ok()
+            .map(|text| vec![text.to_string()])
+            .unwrap_or_default();
+    }
+    if node.kind() != "member_expression" {
+        return Vec::new();
+    }
+    let Some(object) = node.child_by_field_name("object") else {
+        return Vec::new();
+    };
+    let Some(property) = node
+        .child_by_field_name("property")
+        .filter(|node| node.kind() == "property_identifier")
+    else {
+        return Vec::new();
+    };
+    let mut parts = javascript_member_parts(object, source);
+    if let Ok(text) = property.utf8_text(source.as_bytes()) {
+        parts.push(text.to_string());
+    }
+    parts
+}
+
+fn push_javascript_symbol(
+    symbols: &mut Vec<CodeSymbol>,
+    attached_doc_ranges: &mut Vec<(usize, usize)>,
+    node: &tree_sitter::Node,
+    anchor: tree_sitter::Node,
+    name: &str,
+    kind: SymbolKind,
+    callable: Option<tree_sitter::Node>,
+    source: &str,
+    file_path: &str,
+) {
+    let (doc_comment, doc_ranges) = extract_javascript_doc_comment(anchor, source);
+    attached_doc_ranges.extend(doc_ranges);
+    let signature = extract_javascript_signature(*node, callable, source);
+    let body_excerpt = callable
+        .map(|value| extract_javascript_body_excerpt(value, source))
+        .unwrap_or_else(|| extract_javascript_body_excerpt(*node, source));
+    let text = compose_symbol_text(&doc_comment, &signature, &body_excerpt);
+    symbols.push(CodeSymbol {
+        identifier: format!("{file_path}::{name}"),
+        text,
+        symbol_kind: kind,
+        file_path: file_path.to_string(),
+        line_start: node.start_position().row + 1,
+        line_end: node.end_position().row + 1,
+        embed: true,
+    });
+}
+
+fn extract_javascript_doc_comment(
+    anchor: tree_sitter::Node,
+    source: &str,
+) -> (String, Vec<(usize, usize)>) {
+    let mut comments = Vec::new();
+    let mut ranges = Vec::new();
+    let mut current = anchor.prev_sibling();
+    while let Some(sibling) = current {
+        if sibling.kind() != "comment" {
+            break;
+        }
+        let text = sibling.utf8_text(source.as_bytes()).unwrap_or("");
+        if !text.starts_with("/**") {
+            break;
+        }
+        comments.push(text.to_string());
+        ranges.push((sibling.start_position().row, sibling.end_position().row));
+        current = sibling.prev_sibling();
+    }
+    comments.reverse();
+    ranges.reverse();
+    (comments.join("\n"), ranges)
+}
+
+fn extract_javascript_signature(
+    node: tree_sitter::Node,
+    callable: Option<tree_sitter::Node>,
+    source: &str,
+) -> String {
+    let signature_node = callable.unwrap_or(node);
+    let body_start = javascript_body_node(signature_node)
+        .map(|body| body.start_byte())
+        .unwrap_or(signature_node.end_byte());
+    let end = body_start.max(signature_node.start_byte());
+    let signature_start = if matches!(node.kind(), "variable_declarator" | "assignment_expression")
+        && callable.is_some()
+    {
+        node.start_byte()
+    } else {
+        signature_node.start_byte()
+    };
+    let text = source.get(signature_start..end).unwrap_or("").trim();
+    if node.kind() == "variable_declarator" && callable.is_some() {
+        let declaration_kind = node
+            .parent()
+            .and_then(|parent| parent.child_by_field_name("kind"))
+            .map(|kind| kind.kind())
+            .unwrap_or("var");
+        return format!("{declaration_kind} {text}");
+    }
+    if node.kind() == "assignment_expression" && callable.is_some() {
+        return text.trim_end_matches(';').trim().to_string();
+    }
+    if text.is_empty() {
+        bound_declaration_text(node.utf8_text(source.as_bytes()).unwrap_or(""), 2000)
+    } else {
+        text.to_string()
+    }
+}
+
+fn extract_javascript_body_excerpt(node: tree_sitter::Node, source: &str) -> String {
+    let Some(body) = javascript_body_node(node) else {
+        return String::new();
+    };
+    let text = body.utf8_text(source.as_bytes()).unwrap_or("");
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() <= 10 {
+        text.to_string()
+    } else {
+        format!("{}\n...", lines[..10].join("\n"))
+    }
+}
+
+fn javascript_body_node(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    match node.kind() {
+        "function_declaration"
+        | "generator_function_declaration"
+        | "function_expression"
+        | "generator_function"
+        | "arrow_function"
+        | "method_definition"
+        | "class"
+        | "class_declaration" => node.child_by_field_name("body"),
+        "assignment_expression" | "export_statement" => node
+            .child_by_field_name("right")
+            .or_else(|| node.child_by_field_name("value"))
+            .and_then(javascript_body_node),
+        "variable_declarator" => node
+            .child_by_field_name("value")
+            .and_then(javascript_body_node),
+        _ => None,
+    }
+}
+
+fn javascript_is_callable(node: tree_sitter::Node) -> bool {
+    matches!(
+        node.kind(),
+        "arrow_function" | "function_expression" | "generator_function"
+    )
+}
+
+fn javascript_is_callable_or_class(node: tree_sitter::Node) -> bool {
+    javascript_is_callable(node) || node.kind() == "class"
+}
+
+fn javascript_is_literal_require(node: tree_sitter::Node, source: &str) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let Some(function) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "identifier"
+        || function.utf8_text(source.as_bytes()).ok() != Some("require")
+    {
+        return false;
+    }
+    let Some(arguments) = node.child_by_field_name("arguments") else {
+        return false;
+    };
+    arguments
+        .named_child(0)
+        .map(|argument| argument.kind() == "string")
+        .unwrap_or(false)
+}
+
+fn javascript_is_default_export(node: tree_sitter::Node, source: &str) -> bool {
+    node.utf8_text(source.as_bytes())
+        .unwrap_or("")
+        .trim_start()
+        .starts_with("export default")
+}
+
+fn collect_javascript_comments(node: tree_sitter::Node, ranges: &mut Vec<(usize, usize)>) {
+    if node.kind() == "comment" {
+        ranges.push((node.start_position().row, node.end_position().row));
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_javascript_comments(child, ranges);
+    }
+}
+
+fn collect_javascript_imports(node: tree_sitter::Node, ranges: &mut Vec<(usize, usize)>) {
+    match node.kind() {
+        "import_statement" => ranges.push((node.start_byte(), node.end_byte())),
+        "export_statement" if node.child_by_field_name("source").is_some() => {
+            ranges.push((node.start_byte(), node.end_byte()))
+        }
+        "call_expression" => {
+            let is_import = node
+                .child_by_field_name("function")
+                .map(|function| function.kind() == "import")
+                .unwrap_or(false);
+            let is_static = node
+                .child_by_field_name("arguments")
+                .and_then(|arguments| arguments.named_child(0))
+                .map(|argument| argument.kind() == "string")
+                .unwrap_or(false);
+            if is_import && is_static {
+                ranges.push((node.start_byte(), node.end_byte()));
+            }
+        }
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_javascript_imports(child, ranges);
     }
 }
 
@@ -1069,10 +1716,7 @@ fn is_nested_executable_declaration(node: tree_sitter::Node) -> bool {
     while let Some(parent) = current {
         if matches!(
             parent.kind(),
-            "function_declaration"
-                | "function_expression"
-                | "arrow_function"
-                | "method_definition"
+            "function_declaration" | "function_expression" | "arrow_function" | "method_definition"
         ) {
             return true;
         }
@@ -1225,10 +1869,7 @@ fn extract_anonymous_default_export(
             if sibling.kind() == "comment" {
                 let text = sibling.utf8_text(source.as_bytes()).unwrap_or("");
                 if text.starts_with("/**") || text.starts_with("///") {
-                    attached.push((
-                        sibling.start_position().row,
-                        sibling.end_position().row,
-                    ));
+                    attached.push((sibling.start_position().row, sibling.end_position().row));
                     current = sibling.prev_sibling();
                     continue;
                 }
@@ -1272,11 +1913,7 @@ fn collect_attached_doc_ranges(
     }
 }
 
-fn collect_attached_doc_walk(
-    node: tree_sitter::Node,
-    source: &str,
-    out: &mut Vec<(usize, usize)>,
-) {
+fn collect_attached_doc_walk(node: tree_sitter::Node, source: &str, out: &mut Vec<(usize, usize)>) {
     let mut current = node.prev_sibling();
     while let Some(sibling) = current {
         if sibling.kind() == "comment" {
@@ -1357,11 +1994,7 @@ fn extract_ts_doc_comment(node: tree_sitter::Node, source: &str) -> String {
     comments.join("\n")
 }
 
-fn collect_ts_doc_comments_for(
-    node: tree_sitter::Node,
-    source: &str,
-    out: &mut Vec<String>,
-) {
+fn collect_ts_doc_comments_for(node: tree_sitter::Node, source: &str, out: &mut Vec<String>) {
     let mut current = node.prev_sibling();
     while let Some(sibling) = current {
         if sibling.kind() == "comment" {
@@ -1452,24 +2085,25 @@ fn bound_declaration_text(text: &str, limit: usize) -> String {
 
 fn extract_ts_body_excerpt(node: tree_sitter::Node, source: &str) -> String {
     let executable_node = if node.kind() == "variable_declarator" {
-        node.child_by_field_name("value").filter(|value| {
-            matches!(value.kind(), "arrow_function" | "function_expression")
-        })
+        node.child_by_field_name("value")
+            .filter(|value| matches!(value.kind(), "arrow_function" | "function_expression"))
     } else {
         Some(node)
     };
     let body_node = executable_node.and_then(|node| match node.kind() {
-        "function_declaration" | "function_expression" | "method_definition"
-        | "arrow_function" | "class_declaration" | "class_expression"
-        | "abstract_class_declaration" => {
-            node.child_by_field_name("body").or_else(|| {
-                let mut cursor = node.walk();
-                let found = node
-                    .children(&mut cursor)
-                    .find(|child| matches!(child.kind(), "statement_block" | "class_body"));
-                found
-            })
-        }
+        "function_declaration"
+        | "function_expression"
+        | "method_definition"
+        | "arrow_function"
+        | "class_declaration"
+        | "class_expression"
+        | "abstract_class_declaration" => node.child_by_field_name("body").or_else(|| {
+            let mut cursor = node.walk();
+            let found = node
+                .children(&mut cursor)
+                .find(|child| matches!(child.kind(), "statement_block" | "class_body"));
+            found
+        }),
         _ => None,
     });
     match body_node {
@@ -1503,8 +2137,7 @@ fn dedup_callable_bindings(symbols: &mut Vec<CodeSymbol>) {
             _ => 0,
         }
     };
-    let mut seen: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut to_remove: Vec<usize> = Vec::new();
     for (idx, sym) in symbols.iter().enumerate() {
         let key = sym.identifier.clone();
@@ -2133,13 +2766,11 @@ mod tests {
             .parent()
             .unwrap();
 
-        let rust_only = super::list_tracked_code_files(repo_path, &[".rs"])
-            .expect("list .rs files");
-        let multi = super::list_tracked_code_files(
-            repo_path,
-            &[".rs", ".ts", ".tsx", ".js", ".jsx"],
-        )
-        .expect("list multi-ext files");
+        let rust_only =
+            super::list_tracked_code_files(repo_path, &[".rs"]).expect("list .rs files");
+        let multi =
+            super::list_tracked_code_files(repo_path, &[".rs", ".ts", ".tsx", ".js", ".jsx"])
+                .expect("list multi-ext files");
 
         // Multi must contain every Rust-only file (the repo has no .ts/.tsx).
         for path in &rust_only {
@@ -2177,7 +2808,7 @@ mod tests {
             ("src/checkout/session.ts", false),
             ("scripts/build.js", false), // `build.js` itself, not the dir
             ("src/distributor/x.ts", false), // segment-match, not substring
-            ("docs/min.js.md", false), // `.min.js.md`, not `.min.js`
+            ("docs/min.js.md", false),   // `.min.js.md`, not `.min.js`
             ("", false),
         ] {
             assert_eq!(
@@ -2753,37 +3384,74 @@ export function helper() { return 1; }
         let symbols = extract_ts("src/checkout/session.ts", TS_CHECKOUT_FIXTURE);
         let sym = symbols
             .iter()
-            .find(|s| kind_is(s, &super::SymbolKind::Function) && s.identifier.contains("createCheckoutSession"))
+            .find(|s| {
+                kind_is(s, &super::SymbolKind::Function)
+                    && s.identifier.contains("createCheckoutSession")
+            })
             .expect("createCheckoutSession Function symbol");
-        assert_eq!(sym.identifier, "src/checkout/session.ts::createCheckoutSession");
+        assert_eq!(
+            sym.identifier,
+            "src/checkout/session.ts::createCheckoutSession"
+        );
         assert!(sym.embed);
-        assert!(sym.text.contains("Process a checkout session"), "JSDoc: {}", sym.text);
-        assert!(sym.text.contains("createCheckoutSession"), "signature: {}", sym.text);
+        assert!(
+            sym.text.contains("Process a checkout session"),
+            "JSDoc: {}",
+            sym.text
+        );
+        assert!(
+            sym.text.contains("createCheckoutSession"),
+            "signature: {}",
+            sym.text
+        );
     }
 
     #[test]
     fn ts_extract_supporting_interface_and_type_alias() {
         let symbols = extract_ts("src/checkout/session.ts", TS_CHECKOUT_FIXTURE);
-        let iface = symbols.iter().find(|s| kind_is(s, &super::SymbolKind::Interface) && s.identifier.contains("CheckoutConfig")).unwrap();
+        let iface = symbols
+            .iter()
+            .find(|s| {
+                kind_is(s, &super::SymbolKind::Interface) && s.identifier.contains("CheckoutConfig")
+            })
+            .unwrap();
         assert_eq!(iface.identifier, "src/checkout/session.ts::CheckoutConfig");
-        let alias = symbols.iter().find(|s| kind_is(s, &super::SymbolKind::TypeAlias) && s.identifier.contains("CheckoutResult")).unwrap();
+        let alias = symbols
+            .iter()
+            .find(|s| {
+                kind_is(s, &super::SymbolKind::TypeAlias) && s.identifier.contains("CheckoutResult")
+            })
+            .unwrap();
         assert_eq!(alias.identifier, "src/checkout/session.ts::CheckoutResult");
     }
 
     #[test]
     fn ts_extract_configuration_const() {
         let symbols = extract_ts("src/checkout/session.ts", TS_CHECKOUT_FIXTURE);
-        let c = symbols.iter().find(|s| kind_is(s, &super::SymbolKind::Const) && s.identifier.contains("MAX_RETRIES")).unwrap();
+        let c = symbols
+            .iter()
+            .find(|s| kind_is(s, &super::SymbolKind::Const) && s.identifier.contains("MAX_RETRIES"))
+            .unwrap();
         assert_eq!(c.identifier, "src/checkout/session.ts::MAX_RETRIES");
     }
 
     #[test]
     fn ts_extract_class_method_with_class_prefix() {
         let symbols = extract_ts("src/checkout/session.ts", TS_CHECKOUT_FIXTURE);
-        let m = symbols.iter().find(|s| kind_is(s, &super::SymbolKind::Method) && s.identifier.contains("charge")).unwrap();
-        assert_eq!(m.identifier, "src/checkout/session.ts::PaymentGateway::charge");
+        let m = symbols
+            .iter()
+            .find(|s| kind_is(s, &super::SymbolKind::Method) && s.identifier.contains("charge"))
+            .unwrap();
+        assert_eq!(
+            m.identifier,
+            "src/checkout/session.ts::PaymentGateway::charge"
+        );
         assert!(m.text.contains("provider.charge"));
-        assert!(!m.text.contains("get configured"), "method evidence leaked the rest of the class: {}", m.text);
+        assert!(
+            !m.text.contains("get configured"),
+            "method evidence leaked the rest of the class: {}",
+            m.text
+        );
         assert_eq!(m.line_start, 54);
         assert_eq!(m.line_end, 56);
     }
@@ -2800,7 +3468,9 @@ export function checkout(): boolean {
 }
 "#;
         let symbols = extract_ts("src/nested.ts", src);
-        assert!(symbols.iter().any(|s| s.identifier == "src/nested.ts::checkout"));
+        assert!(symbols
+            .iter()
+            .any(|s| s.identifier == "src/nested.ts::checkout"));
         assert!(
             !symbols.iter().any(|s| {
                 s.identifier.ends_with("::validateInternally")
@@ -2814,15 +3484,30 @@ export function checkout(): boolean {
     #[test]
     fn ts_extract_callable_binding_vs_variable_kind() {
         let symbols = extract_ts("src/checkout/session.ts", TS_CHECKOUT_FIXTURE);
-        let callable = symbols.iter().find(|s| kind_is(s, &super::SymbolKind::Function) && s.identifier.contains("chargeCustomer")).expect("callable binding");
-        assert_eq!(callable.identifier, "src/checkout/session.ts::chargeCustomer");
-        assert!(!symbols.iter().any(|s| kind_is(s, &super::SymbolKind::Const) && s.identifier.contains("chargeCustomer")), "must NOT also be Const");
+        let callable = symbols
+            .iter()
+            .find(|s| {
+                kind_is(s, &super::SymbolKind::Function) && s.identifier.contains("chargeCustomer")
+            })
+            .expect("callable binding");
+        assert_eq!(
+            callable.identifier,
+            "src/checkout/session.ts::chargeCustomer"
+        );
+        assert!(
+            !symbols.iter().any(|s| kind_is(s, &super::SymbolKind::Const)
+                && s.identifier.contains("chargeCustomer")),
+            "must NOT also be Const"
+        );
     }
 
     #[test]
     fn ts_extract_imports_record_is_fts_only_and_collects_reexports() {
         let symbols = extract_ts("src/checkout/session.ts", TS_CHECKOUT_FIXTURE);
-        let imports: Vec<_> = symbols.iter().filter(|s| s.symbol_kind == super::SymbolKind::Imports).collect();
+        let imports: Vec<_> = symbols
+            .iter()
+            .filter(|s| s.symbol_kind == super::SymbolKind::Imports)
+            .collect();
         assert_eq!(imports.len(), 1);
         let rec = &imports[0];
         assert!(!rec.embed);
@@ -2862,14 +3547,23 @@ export async function loadCheckout() {
     #[test]
     fn ts_extract_standalone_limitation_comment() {
         let symbols = extract_ts("src/checkout/session.ts", TS_CHECKOUT_FIXTURE);
-        let comments: Vec<_> = symbols.iter().filter(|s| s.symbol_kind == super::SymbolKind::Comments).collect();
+        let comments: Vec<_> = symbols
+            .iter()
+            .filter(|s| s.symbol_kind == super::SymbolKind::Comments)
+            .collect();
         assert_eq!(comments.len(), 1);
         let rec = &comments[0];
         assert!(!rec.embed);
         assert!(rec.text.contains("temporary limitation"));
         assert!(rec.text.contains("USD currency"));
         // JSDoc not duplicated.
-        let fn_sym = symbols.iter().find(|s| kind_is(s, &super::SymbolKind::Function) && s.identifier.contains("createCheckoutSession")).unwrap();
+        let fn_sym = symbols
+            .iter()
+            .find(|s| {
+                kind_is(s, &super::SymbolKind::Function)
+                    && s.identifier.contains("createCheckoutSession")
+            })
+            .unwrap();
         assert!(fn_sym.text.contains("Process a checkout session"));
         assert!(!rec.text.contains("Process a checkout session"));
     }
@@ -2878,9 +3572,15 @@ export async function loadCheckout() {
     fn ts_extract_variable_bindings_let_var() {
         let src = "let count = 0;\nvar legacy = \"x\";\n";
         let symbols = extract_ts("src/vars.ts", src);
-        let count = symbols.iter().find(|s| s.identifier.contains("count")).unwrap();
+        let count = symbols
+            .iter()
+            .find(|s| s.identifier.contains("count"))
+            .unwrap();
         assert_eq!(count.symbol_kind, super::SymbolKind::Variable);
-        let legacy = symbols.iter().find(|s| s.identifier.contains("legacy")).unwrap();
+        let legacy = symbols
+            .iter()
+            .find(|s| s.identifier.contains("legacy"))
+            .unwrap();
         assert_eq!(legacy.symbol_kind, super::SymbolKind::Variable);
     }
 
@@ -2931,7 +3631,11 @@ export function broken(a: number): number {\n    return a;\n}\n\
         let symbols = extract_ts("src/overloads.ts", src);
         let foo_records: Vec<_> = symbols
             .iter()
-            .filter(|s| kind_is(s, &super::SymbolKind::Function) && s.identifier.contains("foo") && !s.identifier.contains("__"))
+            .filter(|s| {
+                kind_is(s, &super::SymbolKind::Function)
+                    && s.identifier.contains("foo")
+                    && !s.identifier.contains("__")
+            })
             .collect();
         assert_eq!(
             foo_records.len(),
@@ -2961,7 +3665,9 @@ export function broken(a: number): number {\n    return a;\n}\n\
     fn ts_extract_anonymous_default_export_uses_stable_suffix() {
         let src = "export default function () {\n    return \"default\";\n}\n";
         let symbols = extract_ts("src/default.ts", src);
-        let default = symbols.iter().find(|s| s.identifier.contains("__default_export"))
+        let default = symbols
+            .iter()
+            .find(|s| s.identifier.contains("__default_export"))
             .expect("anonymous default export");
         assert_eq!(default.identifier, "src/default.ts::__default_export");
         assert_eq!(default.symbol_kind, super::SymbolKind::Function);
@@ -2972,17 +3678,29 @@ export function broken(a: number): number {\n    return a;\n}\n\
     fn ts_extract_nested_namespace_identifier() {
         let src = "export namespace Outer {\n    export namespace Inner {\n        export function nested(): number {\n            return 42;\n        }\n\n        export interface InnerConfig {\n            enabled: boolean;\n        }\n    }\n}\n";
         let symbols = extract_ts("src/namespaces.ts", src);
-        let nested = symbols.iter().find(|s| s.identifier.contains("nested")).expect("namespaced function");
+        let nested = symbols
+            .iter()
+            .find(|s| s.identifier.contains("nested"))
+            .expect("namespaced function");
         assert_eq!(nested.identifier, "src/namespaces.ts::Outer::Inner::nested");
-        let iface = symbols.iter().find(|s| s.identifier.contains("InnerConfig")).expect("namespaced interface");
-        assert_eq!(iface.identifier, "src/namespaces.ts::Outer::Inner::InnerConfig");
+        let iface = symbols
+            .iter()
+            .find(|s| s.identifier.contains("InnerConfig"))
+            .expect("namespaced interface");
+        assert_eq!(
+            iface.identifier,
+            "src/namespaces.ts::Outer::Inner::InnerConfig"
+        );
     }
 
     #[test]
     fn ts_extract_enum() {
         let src = "export enum Color {\n    Red,\n    Green,\n    Blue,\n}\n";
         let symbols = extract_ts("src/enum.ts", src);
-        let color = symbols.iter().find(|s| s.identifier.contains("Color")).expect("enum Color");
+        let color = symbols
+            .iter()
+            .find(|s| s.identifier.contains("Color"))
+            .expect("enum Color");
         assert_eq!(color.identifier, "src/enum.ts::Color");
         assert_eq!(color.symbol_kind, super::SymbolKind::Enum);
     }
@@ -2991,7 +3709,10 @@ export function broken(a: number): number {\n    return a;\n}\n\
     fn ts_extract_function_expression_binding() {
         let src = "export const make = function (): string {\n    return \"ok\";\n};\n";
         let symbols = extract_ts("src/binding.ts", src);
-        let make = symbols.iter().find(|s| s.identifier.contains("make")).expect("function-expression binding");
+        let make = symbols
+            .iter()
+            .find(|s| s.identifier.contains("make"))
+            .expect("function-expression binding");
         assert_eq!(make.symbol_kind, super::SymbolKind::Function);
         assert_eq!(make.identifier, "src/binding.ts::make");
     }
@@ -3004,8 +3725,15 @@ export function broken(a: number): number {\n    return a;\n}\n\
         }
         src.push_str("}\n");
         let symbols = extract_ts("src/long.ts", &src);
-        let long = symbols.iter().find(|s| s.identifier.contains("long")).expect("function");
-        assert!(long.text.contains("..."), "body excerpt truncated: {}", long.text);
+        let long = symbols
+            .iter()
+            .find(|s| s.identifier.contains("long"))
+            .expect("function");
+        assert!(
+            long.text.contains("..."),
+            "body excerpt truncated: {}",
+            long.text
+        );
     }
 
     // ── Epic 009 Task 3: TSX extraction tests ───────────────────────────
@@ -3073,9 +3801,17 @@ function charge(amount: number, provider: PaymentProvider): boolean {
             comp.identifier,
             "src/components/CheckoutButton.tsx::CheckoutButton"
         );
-        assert!(comp.text.contains("Pay"), "JSX body should appear in body excerpt: {}", comp.text);
+        assert!(
+            comp.text.contains("Pay"),
+            "JSX body should appear in body excerpt: {}",
+            comp.text
+        );
         // JSDoc attached
-        assert!(comp.text.contains("A button component"), "attached JSDoc: {}", comp.text);
+        assert!(
+            comp.text.contains("A button component"),
+            "attached JSDoc: {}",
+            comp.text
+        );
     }
 
     #[test]
@@ -3083,14 +3819,24 @@ function charge(amount: number, provider: PaymentProvider): boolean {
         let symbols = extract_tsx("src/components/CheckoutButton.tsx", TSX_CHECKOUT_FIXTURE);
         let comp = symbols
             .iter()
-            .find(|s| kind_is(s, &super::SymbolKind::Function) && s.identifier.contains("CheckoutLabel"))
+            .find(|s| {
+                kind_is(s, &super::SymbolKind::Function) && s.identifier.contains("CheckoutLabel")
+            })
             .expect("CheckoutLabel arrow component");
         assert_eq!(
             comp.identifier,
             "src/components/CheckoutButton.tsx::CheckoutLabel"
         );
-        assert!(comp.text.contains("CheckoutLabelProps"), "typed signature: {}", comp.text);
-        assert!(comp.text.contains("<span>"), "JSX body excerpt: {}", comp.text);
+        assert!(
+            comp.text.contains("CheckoutLabelProps"),
+            "typed signature: {}",
+            comp.text
+        );
+        assert!(
+            comp.text.contains("<span>"),
+            "JSX body excerpt: {}",
+            comp.text
+        );
     }
 
     #[test]
@@ -3098,7 +3844,10 @@ function charge(amount: number, provider: PaymentProvider): boolean {
         let symbols = extract_tsx("src/components/CheckoutButton.tsx", TSX_CHECKOUT_FIXTURE);
         let iface = symbols
             .iter()
-            .find(|s| kind_is(s, &super::SymbolKind::Interface) && s.identifier.contains("CheckoutButtonProps"))
+            .find(|s| {
+                kind_is(s, &super::SymbolKind::Interface)
+                    && s.identifier.contains("CheckoutButtonProps")
+            })
             .expect("CheckoutButtonProps interface");
         assert_eq!(
             iface.identifier,
@@ -3113,7 +3862,10 @@ function charge(amount: number, provider: PaymentProvider): boolean {
             .iter()
             .find(|s| kind_is(s, &super::SymbolKind::Function) && s.identifier.contains("::charge"))
             .expect("charge helper function");
-        assert_eq!(helper.identifier, "src/components/CheckoutButton.tsx::charge");
+        assert_eq!(
+            helper.identifier,
+            "src/components/CheckoutButton.tsx::charge"
+        );
         assert!(helper.text.contains("provider.charge"));
     }
 
@@ -3173,8 +3925,370 @@ function charge(amount: number, provider: PaymentProvider): boolean {
 
         let tsx_fn = tsx_symbols
             .iter()
-            .find(|s| kind_is(s, &super::SymbolKind::Function) && s.identifier.contains("Component"))
+            .find(|s| {
+                kind_is(s, &super::SymbolKind::Function) && s.identifier.contains("Component")
+            })
             .expect("Component function in .tsx");
         assert_eq!(tsx_fn.identifier, "src/only-tsx.tsx::Component");
+    }
+
+    const JS_TASK2_CHECKOUT_FIXTURE: &str = r#"import {
+    PaymentProvider,
+    PaymentConfig,
+} from "./payment";
+
+export {
+    legacyCheckout,
+    legacyRefund,
+} from "./legacy";
+
+const provider = require("./provider");
+const paymentClient = import("./payment-client");
+// TODO: temporary limitation — only USD checkout is supported.
+
+/**
+ * Creates a checkout session after checkout validation.
+ */
+export function createCheckoutSession(cart) {
+    if (!cart || cart.length === 0) {
+        return "empty cart";
+    }
+    return "checkout session";
+}
+
+/** Builds a payment operation with a distinctive charge statement. */
+const chargePayment = (amount) => {
+    return provider.charge(amount);
+};
+
+const DEFAULT_TIMEOUT = 3000;
+let runtimeMode = "live";
+var legacyMode = "compat";
+const destructured = { nested: true };
+const { skipped } = destructured;
+
+/** Owns the configured payment provider. */
+class PaymentGateway {
+    constructor(config) {
+        this.config = config;
+    }
+
+    static fromConfig(config) {
+        return new PaymentGateway(config);
+    }
+
+    get configured() {
+        return this.config.enabled;
+    }
+
+    set configured(value) {
+        this.config.enabled = value;
+    }
+
+    charge(amount) {
+        return this.config.provider.charge(amount);
+    }
+
+    sibling() {
+        return "sibling";
+    }
+}
+
+const paymentApi = {
+    fetchPayment() {
+        return "fetch payment";
+    },
+    submitPayment: (payload) => {
+        return payload.process();
+    },
+    nested: {
+        hiddenMethod() {
+            return "hidden";
+        },
+    },
+    [dynamicName]() {
+        return "computed";
+    },
+};
+
+PaymentGateway.prototype.refund = function (amount) {
+    return amount;
+};
+PaymentGateway.prototype[dynamicName] = () => "dynamic";
+
+function outerExecutable() {
+    function nestedFunction() {
+        return "nested";
+    }
+    const nestedCallable = () => "nested callable";
+    const localValue = 1;
+    items.map((item) => item.id);
+    return nestedFunction() + nestedCallable() + localValue;
+}
+
+export default function () {
+    return "default checkout";
+}
+
+exports.checkout = function () {
+    return "exported checkout";
+};
+module.exports = function () {
+    return "module checkout";
+};
+"#;
+
+    fn extract_js(file_path: &str, source: &str) -> Vec<super::CodeSymbol> {
+        let language = if file_path.ends_with(".jsx") {
+            super::CodeLanguage::Jsx
+        } else {
+            super::CodeLanguage::JavaScript
+        };
+        let extractor = super::CodeExtractor::for_language(language);
+        super::extract_symbols_with_extractor(
+            &extractor,
+            std::path::Path::new("."),
+            std::path::Path::new(file_path),
+            source,
+        )
+        .expect("javascript extraction")
+    }
+
+    fn js_symbol<'a>(
+        symbols: &'a [super::CodeSymbol],
+        kind: &super::SymbolKind,
+        identifier: &str,
+    ) -> &'a super::CodeSymbol {
+        symbols
+            .iter()
+            .find(|symbol| &symbol.symbol_kind == kind && symbol.identifier == identifier)
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing {identifier}: {:?}",
+                    symbols.iter().map(|s| &s.identifier).collect::<Vec<_>>()
+                )
+            })
+    }
+
+    #[test]
+    fn javascript_task2_checkout_fixture_extracts_product_evidence() {
+        let symbols = extract_js("src/checkout/session.js", JS_TASK2_CHECKOUT_FIXTURE);
+        let file = "src/checkout/session.js";
+        let checkout = js_symbol(
+            &symbols,
+            &super::SymbolKind::Function,
+            &format!("{file}::createCheckoutSession"),
+        );
+        assert!(checkout.text.contains("checkout validation"));
+        assert!(checkout.text.contains("cart.length"));
+        assert!(checkout.embed);
+
+        let provider = js_symbol(
+            &symbols,
+            &super::SymbolKind::Const,
+            &format!("{file}::provider"),
+        );
+        assert!(provider.text.contains("require"));
+        let gateway = js_symbol(
+            &symbols,
+            &super::SymbolKind::Class,
+            &format!("{file}::PaymentGateway"),
+        );
+        assert!(gateway.text.contains("configured payment provider"));
+        let charge = js_symbol(
+            &symbols,
+            &super::SymbolKind::Method,
+            &format!("{file}::PaymentGateway::charge"),
+        );
+        assert!(charge.text.contains("provider.charge"));
+        assert!(!charge.text.contains("sibling"));
+
+        for (name, kind) in [
+            ("DEFAULT_TIMEOUT", super::SymbolKind::Const),
+            ("runtimeMode", super::SymbolKind::Variable),
+            ("legacyMode", super::SymbolKind::Variable),
+            ("chargePayment", super::SymbolKind::Function),
+        ] {
+            assert!(symbols.iter().any(|symbol| {
+                symbol.identifier == format!("{file}::{name}") && symbol.symbol_kind == kind
+            }));
+        }
+
+        for identifier in [
+            "paymentApi::fetchPayment",
+            "paymentApi::submitPayment",
+            "PaymentGateway::fromConfig",
+            "PaymentGateway::configured",
+            "PaymentGateway::refund",
+            "checkout",
+        ] {
+            assert!(
+                symbols
+                    .iter()
+                    .any(|symbol| symbol.identifier == format!("{file}::{identifier}")),
+                "missing {identifier}"
+            );
+        }
+        assert!(symbols.iter().any(|symbol| {
+            symbol.identifier == format!("{file}::__default_export")
+                && symbol.symbol_kind == super::SymbolKind::Function
+        }));
+        assert!(symbols.iter().any(|symbol| {
+            symbol.identifier == format!("{file}::__module_export")
+                && symbol.symbol_kind == super::SymbolKind::Function
+        }));
+    }
+
+    #[test]
+    fn javascript_task2_methods_have_local_ranges_and_text() {
+        let source = "class Gateway {\n    first() {\n        return \"first only\";\n    }\n\n    second() {\n        return \"second only\";\n    }\n}\n\nconst api = {\n    alpha() {\n        return \"alpha only\";\n    },\n    beta() {\n        return \"beta only\";\n    },\n};\n";
+        let symbols = extract_js("src/methods.js", source);
+        let first = js_symbol(
+            &symbols,
+            &super::SymbolKind::Method,
+            "src/methods.js::Gateway::first",
+        );
+        assert_eq!(first.line_start, 2);
+        assert_eq!(first.line_end, 4);
+        assert!(first.text.contains("first only"));
+        assert!(!first.text.contains("second only"));
+        let alpha = js_symbol(
+            &symbols,
+            &super::SymbolKind::Method,
+            "src/methods.js::api::alpha",
+        );
+        assert_eq!(alpha.line_start, 12);
+        assert_eq!(alpha.line_end, 14);
+        assert!(alpha.text.contains("alpha only"));
+        assert!(!alpha.text.contains("beta only"));
+    }
+
+    #[test]
+    fn javascript_task2_excludes_nested_executables_and_unsupported_forms() {
+        let symbols = extract_js("src/nested.js", JS_TASK2_CHECKOUT_FIXTURE);
+        for name in [
+            "nestedFunction",
+            "nestedCallable",
+            "localValue",
+            "hiddenMethod",
+            "dynamicName",
+            "skipped",
+        ] {
+            assert!(
+                !symbols
+                    .iter()
+                    .any(|symbol| symbol.identifier.ends_with(&format!("::{name}"))),
+                "nested or unsupported symbol leaked: {name}"
+            );
+        }
+        assert!(!symbols
+            .iter()
+            .any(|symbol| symbol.identifier.contains("items")));
+    }
+
+    #[test]
+    fn javascript_task2_comments_and_imports_are_fts_only_and_complete() {
+        let symbols = extract_js("src/imports.js", JS_TASK2_CHECKOUT_FIXTURE);
+        let comments = symbols
+            .iter()
+            .find(|symbol| symbol.symbol_kind == super::SymbolKind::Comments)
+            .expect("comments record");
+        assert!(!comments.embed);
+        assert!(!comments.text.contains("Creates a checkout session"));
+        let imports = symbols
+            .iter()
+            .find(|symbol| symbol.symbol_kind == super::SymbolKind::Imports)
+            .expect("imports record");
+        assert!(!imports.embed);
+        for text in [
+            "PaymentProvider",
+            "PaymentConfig",
+            "legacyRefund",
+            "./provider",
+            "./payment-client",
+        ] {
+            assert!(
+                imports.text.contains(text),
+                "imports missing {text}: {}",
+                imports.text
+            );
+        }
+        assert!(imports.text.contains("import(\"./payment-client\")"));
+    }
+
+    #[test]
+    fn javascript_task2_handles_empty_comment_only_and_malformed_sources() {
+        let empty = extract_js("src/empty.js", "");
+        assert!(empty.is_empty());
+        let comment_only = extract_js(
+            "src/comments.js",
+            "// limitation only\n/* another note */\n",
+        );
+        assert_eq!(comment_only.len(), 1);
+        assert_eq!(comment_only[0].symbol_kind, super::SymbolKind::Comments);
+        assert!(!comment_only[0].embed);
+        let malformed = extract_js(
+            "src/malformed.js",
+            "function usable() { return true; }\nconst broken = {\n",
+        );
+        assert!(malformed
+            .iter()
+            .any(|symbol| symbol.identifier.ends_with("::usable")));
+    }
+
+    #[test]
+    fn javascript_task2_handles_destructuring_exports_and_jsdoc() {
+        let source = "/** Named export documentation. */\nexport function namedExport() { return 1; }\nexport default class {\n    namedMethod() { return 2; }\n}\nconst { ignored } = { ignored: true };\n";
+        let symbols = extract_js("src/exports.js", source);
+        let named = js_symbol(
+            &symbols,
+            &super::SymbolKind::Function,
+            "src/exports.js::namedExport",
+        );
+        assert!(named.text.contains("Named export documentation"));
+        assert!(!symbols
+            .iter()
+            .any(|symbol| symbol.identifier.ends_with("::ignored")));
+        assert!(symbols.iter().any(|symbol| {
+            symbol.identifier == "src/exports.js::__default_export"
+                && symbol.symbol_kind == super::SymbolKind::Class
+        }));
+        assert!(symbols.iter().any(|symbol| {
+            symbol.identifier == "src/exports.js::__default_export::namedMethod"
+                && symbol.symbol_kind == super::SymbolKind::Method
+        }));
+        let comments = symbols
+            .iter()
+            .find(|symbol| symbol.symbol_kind == super::SymbolKind::Comments);
+        assert!(
+            comments.is_none()
+                || !comments
+                    .unwrap()
+                    .text
+                    .contains("Named export documentation")
+        );
+    }
+
+    #[test]
+    fn jsx_task2_callable_binding_keeps_jsx_body_and_excludes_callbacks() {
+        let source = "/** Checkout button documentation. */\nconst CheckoutButton = ({ disabled, label }) => (\n    <button disabled={disabled} onClick={() => alert(label)}>\n        {label}\n    </button>\n);\nfunction helper() { return true; }\n";
+        let symbols = extract_js("src/CheckoutButton.jsx", source);
+        let component = js_symbol(
+            &symbols,
+            &super::SymbolKind::Function,
+            "src/CheckoutButton.jsx::CheckoutButton",
+        );
+        assert!(component.text.contains("CheckoutButton"));
+        assert!(component.text.contains("<button"));
+        assert!(component.text.contains("disabled"));
+        assert!(!symbols
+            .iter()
+            .any(|symbol| symbol.identifier.contains("alert")));
+        assert!(!symbols
+            .iter()
+            .any(|symbol| symbol.identifier.contains("button")));
+        assert!(symbols
+            .iter()
+            .any(|symbol| symbol.identifier.ends_with("::helper")));
     }
 }

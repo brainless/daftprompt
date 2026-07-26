@@ -300,7 +300,7 @@ JSX uses `language = "jsx"`.
 ### Task 2: Implement JavaScript symbol extraction
 
 **Priority:** High  
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 
 - Extract named functions, callable bindings, classes, class methods, stable
   object methods, prototype methods, constants, variables, comments, and
@@ -316,29 +316,29 @@ JSX uses `language = "jsx"`.
 
 **Acceptance Criteria:**
 
-- [ ] A `.js` checkout fixture yields a public function, payment-provider class
+- [x] A `.js` checkout fixture yields a public function, payment-provider class
       and method, configuration binding, imports/requires, and standalone
       limitation comment.
-- [ ] Arrow/function bindings are `Function`; non-callable module-scope bindings
-      are `Const` or `Variable`.
-- [ ] Callable-binding evidence contains both the binding/declaration and a
+- [x] Arrow/function bindings are `Function`; non-callable module-scope
+      bindings are `Const` or `Variable`.
+- [x] Callable-binding evidence contains both the binding/declaration and a
       distinctive bounded statement or expression from the callable body.
-- [ ] Class/object/prototype method identifiers include the enclosing stable
+- [x] Class/object/prototype method identifiers include the enclosing stable
       name and use method-local text and exact one-based ranges. A fixture with
       adjacent methods proves one record does not contain a sibling or the rest
       of its class/object.
-- [ ] Named nested functions, nested arrow/function bindings, callbacks, local
+- [x] Named nested functions, nested arrow/function bindings, callbacks, local
       variables, and declarations inside methods produce no top-level records.
-- [ ] Direct object/prototype forms covered by this epic produce the documented
+- [x] Direct object/prototype forms covered by this epic produce the documented
       identifiers; computed, nested, and dynamic forms are explicitly skipped.
-- [ ] Named and anonymous ES/CommonJS exports produce stable, non-duplicate
+- [x] Named and anonymous ES/CommonJS exports produce stable, non-duplicate
       identifiers, including `__default_export` and `__module_export` where
       specified.
-- [ ] JSDoc appears in the owning symbol and not standalone comments.
-- [ ] The single `Imports` record preserves complete multiline ES imports and
+- [x] JSDoc appears in the owning symbol and not standalone comments.
+- [x] The single `Imports` record preserves complete multiline ES imports and
       re-exports, top-level literal `require` declarations, and static
       `import("literal")` expressions; imports/comments have `embed = false`.
-- [ ] Malformed source yields any parseable evidence and one malformed or
+- [x] Malformed source yields any parseable evidence and one malformed or
       unreadable file cannot panic or roll back successfully indexed files.
 
 ### Task 3: Implement JSX component extraction
