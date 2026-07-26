@@ -452,7 +452,7 @@ Use FTS5-only product and implementation queries:
 ### Task 6: Validate CLI/UI integration and documentation
 
 **Priority:** Medium  
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 
 - Verify existing code/unified indexing, reindexing, searching, startup
   background indexing, and result cards require no JavaScript-specific UI
@@ -473,20 +473,156 @@ Use FTS5-only product and implementation queries:
 
 **Acceptance Criteria:**
 
-- [ ] Existing CLI and UI show JavaScript/JSX code evidence without a separate
-      search mode.
-- [ ] `--reindex-code` rebuilds all supported code languages and does not
-      affect commit/document records.
-- [ ] `cargo run -- --help` identifies Rust, TypeScript, TSX, JavaScript, and
-      JSX for code indexing.
-- [ ] `README.md`, `DEVELOP.md`, and `AGENTS.md` contain no stale three-language
-      code-indexing lists and document the generated-file policy.
-- [ ] A focused pre-completion review verifies method locality, nested-symbol
+- [x] Existing CLI and UI show JavaScript/JSX code evidence without a separate
+      search mode. Production paths in `src/main.rs` and `src/state.rs` call
+      language-neutral indexer APIs (`index_code`, `reindex_code`,
+      `search_code_hybrid`, `search_all_hybrid`); the only language-aware
+      logic in production code is the `SymbolKind` label formatter that
+      already covered the shared `Class`/`Method`/`Variable`/`Interface`
+      kinds introduced by Epic 009.
+- [x] `--reindex-code` rebuilds all supported code languages and does not
+      affect commit/document records. The source-specific flag routes through
+      `Indexer::reindex_code()`, which clears the shared `code_files` /
+      `items WHERE source_type='code'` / `vec_code` partition only; commit
+      and document partitions are untouched (verified by Epic 008
+      `first_index_then_reindex_removes_stale_records` and Epic 010's
+      `javascript_indexing_lifecycle_contract` /
+      `jsx_indexing_lifecycle_contract` parameterized tests).
+- [x] `cargo run -- --help` identifies Rust, TypeScript, TSX, JavaScript, and
+      JSX for code indexing. `--index-code` help text reads: "Incrementally
+      index Rust, TypeScript, TSX, JavaScript, and JSX source code only."
+- [x] `README.md`, `DEVELOP.md`, and `AGENTS.md` contain no stale three-language
+      code-indexing lists and document the generated-file policy. README's
+      code-search section now lists all five extensions and the centralized
+      `is_excluded_generated_path` filter (`node_modules/`, `vendor/`, `dist/`,
+      `build/`, `.next/`, `coverage/`, `*.min.js`); DEVELOP.md and AGENTS.md
+      list all five in their language-routing architecture notes and indexer
+      invariants.
+- [x] A focused pre-completion review verifies method locality, nested-symbol
       exclusion, callable bodies, complete import ranges, and production/docs
-      wording, with the outcome recorded in this epic.
-- [ ] `cargo check --workspace` passes.
-- [ ] `cargo test --workspace` passes and the final indexer/main/doc test counts
-      are recorded.
+      wording, with the outcome recorded in this epic. See
+      "Pre-completion review against Epic 009 guardrails" below.
+- [x] `cargo check --workspace` passes.
+- [x] `cargo test --workspace` passes and the final indexer/main/doc test counts
+      are recorded. See "Validation" below.
+
+#### Validation
+
+`cargo check --workspace` passes with 0 errors. The remaining warnings are
+pre-existing f32-literal fallbacks in upstream crates (`gix-pack`, `gix-odb`,
+`akar-components`) and `src/main.rs` / `src/ui/render.rs` layout calls — none
+of them are introduced or modified by Epic 010 and none of them block the
+build.
+
+`cargo test --workspace` passes 138 tests (127 indexer + 11 main; 0 doc
+tests), 0 failed, 0 ignored. JavaScript/JSX coverage added in Epic 010 Tasks
+1–5:
+
+- **Task 1 (grammar + dispatch):** `language_for_extension_routes_canonical_extensions`,
+  `list_tracked_code_files_supports_multi_extension_set`,
+  `code_language_as_str_matches_metadata`,
+  `javascript_indexer_wires_metadata_language_javascript`,
+  `jsx_indexer_wires_metadata_language_jsx`,
+  `is_excluded_generated_path_filters_documented_directories`,
+  `list_tracked_code_files_excludes_tracked_generated_paths`,
+  `indexer_excludes_tracked_generated_vendor_js`,
+  `indexer_dispatches_js_and_jsx_to_their_respective_extractors`,
+  `javascript_jsx_grammars_share_language_object`,
+  `code_extractor_javascript_compiles_query_once`,
+  `code_extractor_jsx_compiles_query_once`,
+  `javascript_grammar_smoke_test_for_jsx_source`.
+- **Task 2 (JavaScript extraction):** `javascript_task2_checkout_fixture_extracts_product_evidence`,
+  `javascript_task2_methods_have_local_ranges_and_text`,
+  `javascript_task2_excludes_nested_executables_and_unsupported_forms`,
+  `javascript_task2_comments_and_imports_are_fts_only_and_complete`,
+  `javascript_task2_handles_empty_comment_only_and_malformed_sources`,
+  `javascript_task2_handles_destructuring_exports_and_jsdoc`,
+  `jsx_task2_callable_binding_keeps_jsx_body_and_excludes_callbacks`.
+- **Task 3 (JSX components):** `jsx_task3_function_component_indexed_under_stable_name`,
+  `jsx_task3_function_component_retains_default_props_in_signature`,
+  `jsx_task3_function_component_body_excerpt_contains_disabled_condition`,
+  `jsx_task3_arrow_component_retains_destructured_props_and_click_handler`,
+  `jsx_task3_class_component_indexed_with_class_kind`,
+  `jsx_task3_class_component_adjacent_methods_have_method_local_evidence`,
+  `jsx_task3_helper_function_remains_independently_searchable`,
+  `jsx_task3_module_level_arrow_const_component_indexed`,
+  `jsx_task3_jsx_only_syntax_parses_without_error`,
+  `jsx_task3_jsx_fragments_nested_tags_and_expression_containers_do_not_become_symbols`,
+  `jsx_task3_items_map_callback_does_not_become_symbol`,
+  `jsx_task3_named_default_function_export_uses_name_not_default_export`,
+  `jsx_task3_anonymous_default_arrow_export_uses_default_export_identifier`,
+  `jsx_task3_anonymous_default_class_export_methods_are_namespaced`,
+  `jsx_task3_metadata_language_is_jsx_not_javascript`.
+- **Task 4 (lifecycle):** `javascript_indexing_lifecycle_contract`,
+  `jsx_indexing_lifecycle_contract`.
+- **Task 5 (retrieval):** `search_checkout_validation_returns_js_evidence`,
+  `search_payment_provider_configured_returns_js_evidence`,
+  `search_temporary_limitation_returns_js_comment_evidence`,
+  `search_checkout_button_disabled_returns_jsx_evidence`,
+  `search_payment_client_exported_returns_js_export_evidence`,
+  `search_js_imports_record_preserves_multiline_es_import_and_static_dynamic_import`,
+  `search_returns_results_across_all_five_languages`.
+
+#### Pre-completion review against Epic 009 guardrails
+
+A focused review against the five Epic 009 guardrails (lines 31–52 above)
+re-ran every relevant existing test under `cargo test --workspace` and found
+**no regressions**. Each guardrail already has at least one JS/JSX-specific
+test that proves the property; the suite was extended earlier in the epic
+(Tasks 1–5) and did not require new tests as part of Task 6.
+
+1. **Effective nodes are local.** Class/object methods use the individual
+   method node. JS regression: `javascript_task2_methods_have_local_ranges_and_text`
+   asserts `Gateway::first` covers lines 2–4 with body "first only" and not
+   "second only"; `api::alpha` covers lines 12–14 with body "alpha only" and
+   not "beta only". JSX regression:
+   `jsx_task3_class_component_adjacent_methods_have_method_local_evidence`
+   asserts adjacent `render`, `handleClick`, `anotherMethod` in
+   `CheckoutForm` retain method-local text and exact one-based ranges.
+2. **Nested executables stay nested.** Named functions, arrow/function
+   bindings, callbacks, and JSX handlers beneath another executable body do
+   not become top-level evidence. JS regression:
+   `javascript_task2_excludes_nested_executables_and_unsupported_forms`
+   asserts `nestedFunction`, `nestedCallable`, `localValue`, `hiddenMethod`,
+   `dynamicName`, and `skipped` never appear. JSX regressions:
+   `jsx_task3_jsx_fragments_nested_tags_and_expression_containers_do_not_become_symbols`
+   and `jsx_task3_items_map_callback_does_not_become_symbol`. Negative
+   protection is enforced centrally in `is_nested_executable_declaration`
+   (`code.rs:1714`) which the JS path consults at `code.rs:762`.
+3. **Callable bindings retain behavior.** A binding record keeps its
+   declaration or signature and derives a bounded body excerpt from the
+   callable value's own body, including JSX expression bodies. JSX
+   regression: `jsx_task2_callable_binding_keeps_jsx_body_and_excludes_callbacks`
+   asserts the arrow-component `CheckoutButton` keeps its declaration,
+   parameter list, and a JSX excerpt containing the `<button disabled=...>`
+   element, while the inline `onClick={() => alert(label)}` callback never
+   appears as a top-level symbol. Reinforced by
+   `jsx_task3_function_component_body_excerpt_contains_disabled_condition`
+   and `jsx_task3_arrow_component_retains_destructured_props_and_click_handler`.
+4. **Import evidence is complete.** Collection uses complete source byte
+   ranges, not only starting rows, so multiline imports/re-exports, literal
+   `require` bindings, and static dynamic imports retain their source
+   strings. Regression: `javascript_task2_comments_and_imports_are_fts_only_and_complete`
+   asserts the single `Imports` record contains `PaymentProvider`,
+   `PaymentConfig`, `legacyRefund`, `./provider`, `./payment-client`, and the
+   `import("./payment-client")` literal — every specifier comes from a
+   non-first line of a multiline ES declaration, a re-export, a literal
+   `require`, or a static dynamic-import expression. End-to-end:
+   `search_js_imports_record_preserves_multiline_es_import_and_static_dynamic_import`
+   (lib.rs:2868) re-asserts the same via FTS5 retrieval.
+5. **Production/docs wording.** CLI help, README, DEVELOP, and AGENTS now
+   consistently list `.rs`, `.ts`, `.tsx`, `.js`, and `.jsx`. The centralized
+   generated/vendor/minified exclusion policy
+   (`is_excluded_generated_path`: `node_modules/`, `vendor/`, `dist/`,
+   `build/`, `.next/`, `coverage/`, `*.min.js`) is documented in the
+   `Code language routing` architecture note in `DEVELOP.md` and in the
+   `Code indexer invariants` block in `AGENTS.md`, and is summarized in the
+   user-facing README code-search section.
+
+**Review outcome: PASS.** No regression test was added in Task 6 because
+the existing Epic 010 Task 1–5 tests already exercise every guardrail for
+both `.js` and `.jsx`. Discovered follow-ups are listed at the end of this
+epic and are explicit follow-up work, not deferred regression fixes.
 
 ## Test Matrix
 
@@ -532,4 +668,43 @@ Use FTS5-only product and implementation queries:
   conventions may require configurable exclusions later.
 - `.mjs`/`.cjs`, Flow syntax, decorators, class fields/private names, and
   framework-aware route/component relationships are follow-up candidates.
+
+### Discovered follow-ups from the Task 6 review
+
+The pre-completion review against the five Epic 009 guardrails found
+**no regressions** and required **no new regression tests** — the
+Task 1–5 tests already cover each guardrail for both `.js` and `.jsx`.
+The items below are general product follow-ups surfaced during the
+review and the documentation pass, not deferred regressions.
+
+- The 11 pre-existing f32-literal-fallback warnings in
+  `src/main.rs` and `src/ui/render.rs` (and the upstream
+  `gix-pack` / `gix-odb` / `akar-components` warnings) are unaffected
+  by this epic. They remain tracked as workspace-wide cleanup for a
+  future PR; no Epic 010 test gate is blocked.
+- `is_excluded_generated_path` is currently a hard-coded allowlist of
+  six directory prefixes plus `*.min.js`. A future epic may want to
+  expose a per-repo override (e.g. a `[daftprompt]` block in
+  `.git/config` or a checked-in `.daftprompt.toml`) so monorepos with
+  unusual vendored layouts can extend the policy without forking.
+- `tree-sitter-javascript` 0.25 shares one grammar across `.js` and
+  `.jsx`. This is fine today, but if a future epic needs JSX-only
+  features (e.g. `tsx`-style type annotations on JSX props) the
+  shared-query assumption will need a dedicated `LANGUAGE_JSX` and a
+  separate compiled query.
+- `CodeSearchResult::symbol_kind` is rendered by a single
+  `match`-on-`SymbolKind` formatter in `src/main.rs` (one per CLI
+  search mode). When the next non-TypeScript-syntax language lands
+  (e.g. `.mjs`/`.cjs` or Python decorators), consider centralizing
+  the formatter into a `format_symbol_kind(kind) -> &'static str`
+  helper inside `daftprompt_indexer` so the production binary stops
+  carrying duplicated match arms.
+- `crates/daftprompt-indexer/src/code.rs` is now 4765 lines after
+  Epic 010. The Epic 010 task already considered moving it to
+  `src/code/{language.rs,extraction.rs,...}`, but the single-file
+  layout remained because Epic 009's review pointed out that
+  splitting would force `extract_symbols_with_extractor` and
+  `list_tracked_code_files` to be re-exported through a
+  `crate::code::{router, ...}` tree. A re-export-only refactor
+  remains a clean follow-up if line growth continues.
 

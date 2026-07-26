@@ -33,9 +33,10 @@ This is a text repository explorer built with Rust and akar (a GPU UI component 
 - Three result containers on canvas (git log, codebase, documents)
 - Clear button
 
-✅ **TypeScript and TSX Code Search**
-- Git-tracked Rust (`.rs`), TypeScript (`.ts`), and TSX (`.tsx`) files share one code index
-- The existing global search box searches all three languages; no separate language mode is required
+✅ **Code Search Across Five Languages**
+- Git-tracked Rust (`.rs`), TypeScript (`.ts`), TSX (`.tsx`), JavaScript (`.js`), and JSX (`.jsx`) files share one code index
+- The existing global search box searches all five languages through the same hybrid FTS5 + vector KNN index; no separate language mode is required
+- Tracked generated/vendor/minified files are filtered out centrally (`node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, `coverage/`, and `*.min.js`), so production paths stay language-neutral
 
 ✅ **System Theme Support**
 - Dark theme (default, via `AKAR_THEME_DARK`)
@@ -79,7 +80,7 @@ daftprompt/
 │           ├── lib.rs            # Indexer public API (commits, code, documents, unified search)
 │           ├── db.rs             # SQLite schema, FTS5, vec0, queries
 │           ├── embed.rs          # model2vec-rs wrapper
-│           ├── code.rs           # tree-sitter code parsing
+│           ├── code.rs           # language registry/router + shared Rust/TypeScript/TSX/JavaScript/JSX query constants
 │           ├── documents.rs      # document discovery, chunking, incremental indexing
 │           └── schema.sql        # SQL schema definition
 └── epics/                        # feature epic specifications
@@ -94,14 +95,14 @@ daftprompt/
 - **pollster** — Async runtime
 - **gix** (gitoxide) — Git repository access (path dep)
 - **daftprompt-indexer** — in-workspace indexer crate (FTS5 + sqlite-vec + model2vec-rs)
-- **tree-sitter / tree-sitter-rust** — Rust source parsing (in the indexer crate, Epic 004)
+- **tree-sitter / tree-sitter-rust / tree-sitter-typescript / tree-sitter-javascript** — tree-sitter parsing pipelines for Rust (`.rs`), TypeScript (`.ts`), TSX (`.tsx`), and JavaScript/JSX (`.js`/`.jsx`); tree-sitter-javascript shares one grammar across JS and JSX (Epics 004, 009, 010)
 - **png** — PNG encoding for `--screenshot` output
 - **clap** — CLI argument parsing
 - **anyhow / serde_json** — error handling and serialization
 
 ## Next Steps
 
-The previous "Next Steps" list (real-data integration, document parsing, file watching) is now done by Epic 002 (git log column), Epic 003 (commit indexer), and Epic 004 (code indexer). The remaining genuine follow-ups after Epic 005 are:
+The previous "Next Steps" list (real-data integration, document parsing, file watching) is now done by Epic 002 (git log column), Epic 003 (commit indexer), Epic 004 (Rust code indexer), Epic 007 (document indexer), Epic 009 (TypeScript and TSX), and Epic 010 (JavaScript and JSX). The remaining genuine follow-ups after Epic 010 are:
 
 1. **Drag-and-drop card repositioning** — Cards are positioned in world space; drag-to-move is a follow-up epic.
 2. **Graph visualization** — Relationship mapping between documents/commits on the canvas.

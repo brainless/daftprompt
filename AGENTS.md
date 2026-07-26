@@ -71,7 +71,7 @@ crates/daftprompt-indexer/  standalone indexing + search crate
                         search_hybrid, search_code_hybrid, search_document_hybrid, search_all_hybrid)
     db.rs               SQLite schema, FTS5, vec0/vec_code/vec_documents, queries
     embed.rs            model2vec-rs wrapper
-    code.rs             language registry/router, shared Rust/TypeScript/TSX query constants
+    code.rs             language registry/router, shared Rust/TypeScript/TSX/JavaScript/JSX query constants
     documents.rs        document discovery, chunking, incremental indexing
     schema.sql          items, items_fts (external-content), vec_items, vec_code, vec_documents,
                         code_files, document_files, triggers
@@ -91,7 +91,7 @@ When implementing, keep **rejected alternatives as comments in code** (Epic 004 
 
 - **Comments:** the codebase deliberately retains commented-out rejected-alternatives and notes about future tuning. When adding to modules that have these (e.g. `db.rs`, `code.rs`), follow the pattern. Do not strip them. Otherwise follow the standard "no unnecessary comments" rule.
 - **Epic specs are the source of truth** for feature shape. If a task's acceptance criteria are not met, the task is not done. Mark task status in the epic file when completing a task.
-- **Failures degrade, never panic:** model download failure → FTS5-only search; non-git folder → substring search; parse error in a supported `.rs`, `.ts`, or `.tsx` file → index what is parseable, log, continue (one transaction per file so a bad file doesn't roll back the batch).
+- **Failures degrade, never panic:** model download failure → FTS5-only search; non-git folder → substring search; parse error in a supported `.rs`, `.ts`, `.tsx`, `.js`, or `.jsx` file → index what is parseable, log, continue (one transaction per file so a bad file doesn't roll back the batch).
 - **Per-file transactions** for `index_code()`: a single bad file must not roll back the whole run.
 - **Stable hashing:** use `xxhash-rust` xxh3 for `content_hash`, never `std::collections::hash_map::DefaultHasher`.
 - **Tree-sitter registry/router:** `code.rs` compiles each configured Rust, TypeScript, TSX, JavaScript, and JSX query once at construction, selects the language by canonical extension, and reuses the compiled query for every file; never add language branching to production CLI/UI paths.

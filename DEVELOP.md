@@ -94,7 +94,7 @@ daftprompt/
 │           ├── lib.rs            # Indexer public API (commits, code, documents, unified search)
 │           ├── db.rs             # SQLite schema, FTS5, vec0, queries
 │           ├── embed.rs          # model2vec-rs wrapper
-│           ├── code.rs           # language registry/router + shared Rust/TypeScript/TSX query constants
+│           ├── code.rs           # language registry/router + shared Rust/TypeScript/TSX/JavaScript/JSX query constants
 │           ├── documents.rs      # document discovery, chunking, incremental indexing
 │           └── schema.sql        # SQL schema definition
 └── epics/                        # feature epic specifications
