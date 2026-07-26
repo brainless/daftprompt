@@ -1196,17 +1196,27 @@ fn process_javascript_variable_declaration(
         let Some(name_node) = declarator.child_by_field_name("name") else {
             continue;
         };
-        let Some(name) = name_node.utf8_text(source.as_bytes()).ok() else {
+        let Some(_name) = name_node.utf8_text(source.as_bytes()).ok() else {
             continue;
         };
-        if name_node.kind() != "identifier" {
-            continue;
-        }
 
+        // Post-Epic 010 review item #2: collect import ranges for literal
+        // `require` bindings BEFORE filtering by binding pattern, so
+        // destructured declarations like `const { charge } = require(...)`
+        // are included in the Imports record.
         if let Some(value) = declarator.child_by_field_name("value") {
             if javascript_is_literal_require(value, source) {
                 import_ranges.push((declaration.start_byte(), declaration.end_byte()));
             }
+        }
+
+        // Only process symbol-eligible bindings with identifier names.
+        if name_node.kind() != "identifier" {
+            continue;
+        }
+        let name = _name;
+
+        if let Some(value) = declarator.child_by_field_name("value") {
             if javascript_is_callable_or_class(value) {
                 let kind = if value.kind() == "class" {
                     SymbolKind::Class
@@ -1407,6 +1417,21 @@ fn process_javascript_assignment(
         source,
         file_path,
     );
+    // Post-Epic 010 review item #3: class-valued CommonJS/ES assignments
+    // must also have their methods indexed, just like variable-declarator
+    // classes. Without this, `module.exports = class { ... }` and
+    // `exports.Gateway = class { ... }` emit the class record but lose
+    // all method evidence.
+    if right.kind() == "class" {
+        process_javascript_class_methods(
+            right,
+            &name,
+            source,
+            file_path,
+            symbols,
+            attached_doc_ranges,
+        );
+    }
 }
 
 fn javascript_assignment_symbol(
@@ -2402,6 +2427,40 @@ pub fn list_tracked_code_files(
     repo_path: &Path,
     extensions: &[&str],
 ) -> anyhow::Result<Vec<PathBuf>> {
+    let entries = list_tracked_code_file_entries(repo_path, extensions)?;
+    Ok(entries.into_iter().map(|e| e.absolute_path).collect())
+}
+
+/// A tracked code file discovered from the Git HEAD tree, carrying both
+/// the absolute worktree path and the blob content read from the HEAD tree.
+///
+/// Returned by [`list_tracked_code_files_with_content`]. Using this struct
+/// ensures the indexer reads committed content from the HEAD tree rather
+/// than uncommitted worktree changes (post-Epic 010 review item #1).
+pub struct TrackedCodeFile {
+    /// Absolute worktree path (for display, extension routing, etc.).
+    pub absolute_path: PathBuf,
+    /// Repo-relative forward-slash path (canonical tracking key).
+    pub relative_path: String,
+    /// Blob content read from the Git HEAD tree.
+    pub content: Vec<u8>,
+}
+
+/// Internal entry used during tree traversal before content is read.
+struct TrackedCodeFileEntry {
+    absolute_path: PathBuf,
+    relative_path: String,
+    oid: gix::hash::ObjectId,
+}
+
+/// Internal: traverse the HEAD tree and collect eligible code-file entries
+/// (filtered by extension, `.d.ts`, and generated/vendor policy) without
+/// reading blob content yet. Returns entries with their OIDs so the caller
+/// can batch-read blobs in a single repo session.
+fn list_tracked_code_file_entries(
+    repo_path: &Path,
+    extensions: &[&str],
+) -> anyhow::Result<Vec<TrackedCodeFileEntry>> {
     let repo = gix::discover(repo_path)?;
 
     let work_dir = match repo.workdir() {
@@ -2414,17 +2473,15 @@ pub fn list_tracked_code_files(
 
     let entries = tree.traverse().breadthfirst.files()?;
 
-    let mut files: Vec<PathBuf> = entries
+    let mut files: Vec<TrackedCodeFileEntry> = entries
         .into_iter()
         .filter(|entry| entry.mode.is_blob())
         .filter_map(|entry| {
-            entry
-                .filepath
-                .to_str()
-                .ok()
-                .map(|p| (p.to_string(), work_dir.join(p)))
+            let rel = entry.filepath.to_str().ok()?.to_string();
+            let abs = work_dir.join(Path::new(&rel));
+            Some((rel, abs, entry.oid))
         })
-        .filter(|(p, _)| {
+        .filter(|(p, _, _)| {
             // Reject `.d.ts` (declaration files) regardless of whether `.ts`
             // was requested. `.d.ts` always sits next to a `.ts` file; skipping
             // it here keeps the policy in one place.
@@ -2441,11 +2498,75 @@ pub fn list_tracked_code_files(
             }
             extensions.iter().any(|ext| p.ends_with(ext))
         })
-        .map(|(_, abs)| abs)
+        .map(|(rel, abs, oid)| TrackedCodeFileEntry {
+            absolute_path: abs,
+            relative_path: rel,
+            oid,
+        })
         .collect();
 
-    files.sort();
+    files.sort_by(|a, b| a.absolute_path.cmp(&b.absolute_path));
     Ok(files)
+}
+
+/// One-pass tracked-file traversal that reads blob content from the Git HEAD
+/// tree. Returns [`TrackedCodeFile`] values carrying both the absolute
+/// worktree path and the committed content.
+///
+/// Also returns the HEAD commit's author timestamp (seconds since UNIX epoch)
+/// as a proxy mtime for all returned files, since tree entries do not carry
+/// per-file modification times.
+///
+/// This is the preferred entry point for production indexing because it
+/// guarantees discovery, content, and deletion reconciliation all use the
+/// same Git HEAD state (post-Epic 010 review item #1).
+pub fn list_tracked_code_files_with_content(
+    repo_path: &Path,
+    extensions: &[&str],
+) -> anyhow::Result<(Vec<TrackedCodeFile>, i64)> {
+    let entries = list_tracked_code_file_entries(repo_path, extensions)?;
+
+    // Open the repo once to read all blobs and the HEAD commit time.
+    let repo = gix::discover(repo_path)?;
+
+    // HEAD commit author timestamp — used as a proxy mtime for all files
+    // because the Git tree does not store per-file modification times.
+    // Extract the timestamp while repo is alive so we don't need to open it
+    // again; the decode chain borrows from the commit object which borrows
+    // from repo, so we must complete the chain before moving on.
+    let head_mtime = repo
+        .head_id()
+        .ok()
+        .and_then(|id| id.object().ok())
+        .and_then(|obj| obj.try_into_commit().ok())
+        .and_then(|commit| {
+            let decoded = commit.decode().ok()?;
+            let author = decoded.author().ok()?;
+            let time = author.time().ok()?;
+            Some(time.seconds)
+        })
+        .unwrap_or(0);
+
+    let mut files = Vec::with_capacity(entries.len());
+    for entry in entries {
+        match repo.find_blob(entry.oid) {
+            Ok(blob) => {
+                files.push(TrackedCodeFile {
+                    absolute_path: entry.absolute_path,
+                    relative_path: entry.relative_path,
+                    content: blob.data.to_vec(),
+                });
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to read blob for {}: {}",
+                    entry.relative_path, e
+                );
+            }
+        }
+    }
+
+    Ok((files, head_mtime))
 }
 
 /// Repo-relative paths that should never be indexed, regardless of

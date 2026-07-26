@@ -379,7 +379,14 @@ impl Indexer {
         // Rejected alternative: keep `list_tracked_rust_files` and add a
         // separate `list_tracked_ts_files` later. That would double the
         // HEAD-tree walk and complicate deletion-set reconciliation.
-        let current_files = code::list_tracked_code_files(
+        //
+        // Post-Epic 010 review item #1: read file content from the Git
+        // HEAD tree instead of the worktree so discovery, content, and
+        // deletion reconciliation all use the same repository state.
+        // `list_tracked_code_files_with_content` opens the repo once,
+        // reads blobs by OID, and returns the HEAD commit timestamp as
+        // a proxy mtime (tree entries do not carry per-file times).
+        let (current_files, head_mtime) = code::list_tracked_code_files_with_content(
             &self.repo_path,
             &[".rs", ".ts", ".tsx", ".js", ".jsx"],
         )?;
@@ -387,10 +394,7 @@ impl Indexer {
 
         let current_set: std::collections::HashSet<String> = current_files
             .iter()
-            .filter_map(|p| {
-                let rel = p.strip_prefix(&self.repo_path).ok()?;
-                Some(code::canonicalize_file_path(&self.repo_path, rel))
-            })
+            .map(|f| f.relative_path.clone())
             .collect();
 
         let mut files_deleted = 0usize;
@@ -405,16 +409,14 @@ impl Indexer {
         let mut files_changed = 0usize;
         let mut symbols_indexed = 0usize;
 
-        for file_path in &current_files {
-            let canonical = {
-                let rel = file_path.strip_prefix(&self.repo_path).unwrap_or(file_path);
-                code::canonicalize_file_path(&self.repo_path, rel)
-            };
+        for tracked in &current_files {
+            let canonical = tracked.relative_path.clone();
 
             // Epic 009 Design Decision #1: production indexing must route
             // by extension and refuse unsupported dialects rather than
             // silently falling back to Rust parsing.
-            let extension = file_path
+            let extension = tracked
+                .absolute_path
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("");
@@ -424,42 +426,32 @@ impl Indexer {
                     log::warn!(
                         "Skipping unsupported code file extension '{}': {}",
                         extension,
-                        file_path.display()
+                        tracked.absolute_path.display()
                     );
                     continue;
                 }
             };
 
-
-            let metadata = match std::fs::metadata(file_path) {
-                Ok(m) => m,
-                Err(e) => {
-                    log::warn!("Failed to stat {}: {}", file_path.display(), e);
-                    continue;
-                }
-            };
-            let mtime = metadata
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-
-            let source = match std::fs::read_to_string(file_path) {
+            let source = match std::str::from_utf8(&tracked.content) {
                 Ok(s) => s,
                 Err(e) => {
-                    log::warn!("Failed to read {}: {}", file_path.display(), e);
+                    log::warn!(
+                        "Skipping non-UTF-8 file {}: {}",
+                        tracked.absolute_path.display(),
+                        e
+                    );
                     continue;
                 }
             };
 
-            let hash = db::content_hash(source.as_bytes());
+            let hash = db::content_hash(&tracked.content);
 
-            // Content hashes are authoritative: filesystem mtimes may have
-            // only second precision, so an edit can share its prior mtime.
+            // Content hashes are authoritative: the HEAD commit mtime is
+            // a coarse proxy (all files share it) so content comparison
+            // is the real change-detection gate.
             if let Some((_stored_mtime, stored_hash)) = db::code_file_get(&self.db, &canonical)? {
                 if stored_hash == hash {
-                    db::code_file_upsert(&self.db, &canonical, mtime, &hash)?;
+                    db::code_file_upsert(&self.db, &canonical, head_mtime, &hash)?;
                     continue;
                 }
             }
@@ -483,12 +475,16 @@ impl Indexer {
             let symbols = match code::extract_symbols_with_extractor(
                 extractor,
                 &self.repo_path,
-                file_path,
-                &source,
+                &tracked.absolute_path,
+                source,
             ) {
                 Ok(s) => s,
                 Err(e) => {
-                    log::warn!("Failed to parse {}: {}", file_path.display(), e);
+                    log::warn!(
+                        "Failed to parse {}: {}",
+                        tracked.absolute_path.display(),
+                        e
+                    );
                     tx.rollback()?;
                     continue;
                 }
@@ -542,7 +538,7 @@ impl Indexer {
                 }
             }
 
-            db::code_file_upsert(&tx, &canonical, mtime, &hash)?;
+            db::code_file_upsert(&tx, &canonical, head_mtime, &hash)?;
 
             tx.commit()?;
             files_changed += 1;
@@ -1347,7 +1343,9 @@ fn calculate_total(prices: &HashMap<String, f64>) -> f64 {
         let (stored_mtime, stored_hash) = db::code_file_get(&indexer.db, &canonical)
             .expect("read updated code_files row")
             .expect("updated code_files row should exist");
-        assert_eq!(stored_mtime, updated_mtime, "tracking mtime should update");
+        // Post-Epic 010 review #1: mtime now comes from the HEAD commit
+        // timestamp, so touching the worktree file does not change it.
+        assert_eq!(stored_mtime, old_mtime, "HEAD-commit mtime should not change on worktree touch");
         assert_eq!(stored_hash, old_hash, "content hash should not change");
         assert_eq!(stored_hash, db::content_hash(content.as_bytes()));
     }
@@ -1700,7 +1698,9 @@ export function TypedCheckoutButton({ label }: CheckoutButtonProps) {
         let (new_mtime, new_hash) = db::code_file_get(&indexer.db, &canonical)
             .expect("tracking lookup")
             .expect("tracked primary fixture");
-        assert_eq!(new_mtime, old_mtime + 2);
+        // Post-Epic 010 review #1: mtime now comes from the HEAD commit
+        // timestamp, so touching the worktree file does not change it.
+        assert_eq!(new_mtime, old_mtime);
         assert_eq!(new_hash, old_hash);
 
         fs::write(&primary, case.edited_contents).expect("edit fixture");
@@ -3237,6 +3237,219 @@ export default (props) => <button>{props.label}</button>;
         assert_eq!(
             js_hits, 0,
             "no code row in a .jsx file should carry language=javascript"
+        );
+    }
+
+    // ── Post-Epic 010 review regression tests ─────────────────────────────
+
+    /// Review item #1: `index_code()` must read file content from the Git HEAD
+    /// tree, not the worktree. When a tracked file is modified in the worktree
+    /// without committing, the indexer should index the committed content.
+    #[test]
+    fn index_code_reads_from_head_tree_not_worktree() {
+        let fixture = r#"export function greet() {
+    return "hello from HEAD";
+}
+"#;
+        let (repo_dir, cache_dir) = setup_repo_with_files(&[("src/greet.js", fixture)]);
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        indexer.index_code().expect("first index");
+
+        // Verify the committed content is indexed.
+        let results = indexer
+            .search_code_text("hello from HEAD", 10)
+            .expect("search");
+        assert!(
+            results.iter().any(|r| r.identifier.contains("greet")),
+            "committed content should be indexed"
+        );
+
+        // Modify the file in the worktree WITHOUT committing.
+        fs::write(
+            repo_dir.path().join("src/greet.js"),
+            r#"export function greet() {
+    return "hello from WORKTREE";
+}
+"#,
+        )
+        .unwrap();
+
+        // Re-index — should still read the HEAD content.
+        let report = indexer.index_code().expect("reindex after worktree edit");
+        assert_eq!(
+            report.files_changed, 0,
+            "worktree-only edit should not trigger re-indexing"
+        );
+
+        // The worktree content should NOT appear in search.
+        let results = indexer
+            .search_code_text("hello from WORKTREE", 10)
+            .expect("search worktree");
+        assert!(
+            results.is_empty(),
+            "uncommitted worktree content should not be indexed"
+        );
+    }
+
+    /// Review item #1: when a tracked file is deleted from the worktree but
+    /// not committed, the indexer should still index it from HEAD.
+    #[test]
+    fn index_code_indexes_deleted_worktree_file_from_head() {
+        let fixture_a = r#"export function alpha() {
+    return "alpha";
+}
+"#;
+        let fixture_b = r#"export function beta() {
+    return "beta";
+}
+"#;
+        let (repo_dir, cache_dir) =
+            setup_repo_with_files(&[("src/alpha.js", fixture_a), ("src/beta.js", fixture_b)]);
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        let first = indexer.index_code().expect("first index");
+        assert_eq!(first.files_scanned, 2);
+
+        // Delete beta.js from the worktree WITHOUT committing.
+        fs::remove_file(repo_dir.path().join("src/beta.js")).unwrap();
+
+        // Re-index — beta.js should still be found in HEAD.
+        let report = indexer.index_code().expect("reindex after worktree delete");
+        assert_eq!(
+            report.files_deleted, 0,
+            "worktree-only deletion should not remove tracked file"
+        );
+        assert!(
+            report.files_scanned >= 2,
+            "both files should still be scanned from HEAD"
+        );
+
+        // The deleted file's content should still be searchable.
+        let results = indexer
+            .search_code_text("beta", 10)
+            .expect("search deleted file");
+        assert!(
+            results.iter().any(|r| r.identifier.contains("beta")),
+            "file deleted only from worktree should still be indexed from HEAD"
+        );
+    }
+
+    /// Review item #2: destructured literal `require` declarations must be
+    /// included in the Imports record. Previously, `const { charge } = require(...)`
+    /// was skipped because the non-identifier binding pattern filtered it
+    /// before the require check.
+    #[test]
+    fn destructured_require_appears_in_imports_record() {
+        let fixture = r#"const { charge, refund } = require("./payments");
+const provider = require("./provider");
+
+export function processPayment() {
+    return charge(100);
+}
+"#;
+        let (repo_dir, cache_dir) = setup_repo_with_files(&[("src/payment.js", fixture)]);
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        indexer.index_code().expect("index_code");
+
+        // The Imports record should contain the destructured require.
+        let results = indexer
+            .search_code_text("charge", 20)
+            .expect("search_code_text");
+        let imports_hit = results
+            .iter()
+            .find(|r| r.identifier.contains("__imports__"))
+            .expect("expected __imports__ record to contain 'charge'");
+        assert!(
+            imports_hit.text.contains("require"),
+            "imports record should mention require: {}",
+            imports_hit.text
+        );
+
+        // Also verify the non-destructured require is still present.
+        let results = indexer
+            .search_code_text("provider", 20)
+            .expect("search provider");
+        let imports_hit = results
+            .iter()
+            .find(|r| r.identifier.contains("__imports__"))
+            .expect("expected __imports__ record to contain 'provider'");
+        assert!(
+            imports_hit.text.contains("require(\"./provider\")")
+                || imports_hit.text.contains("require('./provider')"),
+            "imports record should contain provider require: {}",
+            imports_hit.text
+        );
+    }
+
+    /// Review item #3: CommonJS-exported class methods must be indexed.
+    /// Previously, `module.exports = class { ... }` emitted the class record
+    /// but never called `process_javascript_class_methods`, losing all method
+    /// evidence.
+    #[test]
+    fn commonjs_exported_class_methods_are_indexed() {
+        let fixture = r#"module.exports = class PaymentProcessor {
+    charge(amount) {
+        return amount;
+    }
+
+    refund(transactionId) {
+        return transactionId;
+    }
+};
+
+exports.Helper = class HelperUtil {
+    format(value) {
+        return String(value);
+    }
+};
+"#;
+        let (repo_dir, cache_dir) = setup_repo_with_files(&[("src/processor.js", fixture)]);
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        indexer.index_code().expect("index_code");
+
+        let results = indexer
+            .search_code_text("charge OR refund OR format", 20)
+            .expect("search_code_text");
+
+        // module.exports class methods should be namespaced under __module_export
+        let charge_hit = results
+            .iter()
+            .find(|r| r.identifier.contains("charge"))
+            .expect("expected __module_export::charge method to be indexed");
+        assert!(
+            charge_hit.identifier.contains("__module_export::charge"),
+            "charge should be namespaced as __module_export::charge, got: {}",
+            charge_hit.identifier
+        );
+        assert!(
+            matches!(charge_hit.symbol_kind, code::SymbolKind::Method),
+            "charge should be a Method, got {:?}",
+            charge_hit.symbol_kind
+        );
+
+        let refund_hit = results
+            .iter()
+            .find(|r| r.identifier.contains("refund"))
+            .expect("expected __module_export::refund method to be indexed");
+        assert!(
+            refund_hit.identifier.contains("__module_export::refund"),
+            "refund should be namespaced as __module_export::refund, got: {}",
+            refund_hit.identifier
+        );
+
+        // exports.Helper class methods should be namespaced under Helper
+        let format_hit = results
+            .iter()
+            .find(|r| r.identifier.contains("format"))
+            .expect("expected Helper::format method to be indexed");
+        assert!(
+            format_hit.identifier.contains("Helper::format"),
+            "format should be namespaced as Helper::format, got: {}",
+            format_hit.identifier
+        );
+        assert!(
+            matches!(format_hit.symbol_kind, code::SymbolKind::Method),
+            "format should be a Method, got {:?}",
+            format_hit.symbol_kind
         );
     }
 }

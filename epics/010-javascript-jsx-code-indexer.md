@@ -708,3 +708,67 @@ review and the documentation pass, not deferred regressions.
   `crate::code::{router, ...}` tree. A re-export-only refactor
   remains a clean follow-up if line growth continues.
 
+## Post-completion code review
+
+Reviewed the Epic 010 commit series `fb84654..e895ea0` against this epic,
+`AGENTS.md`, `DEVELOP.md`, and `README.md`. The review also ran
+`cargo check --workspace`, `cargo test -p daftprompt-indexer` (127 passed),
+and `git diff --check`; all completed successfully after disabling the
+sandbox-incompatible `sccache` wrapper.
+
+**Review outcome: NEEDS FOLLOW-UP.** The automated coverage is substantial,
+but the following implementation gaps mean the corresponding acceptance
+claims are broader than the behavior currently proved:
+
+1. **High — tracked-file discovery and file contents come from different
+   repository states.** `list_tracked_code_files()` enumerates paths from the
+   HEAD tree, but `Indexer::index_code()` then uses `std::fs::metadata` and
+   `std::fs::read_to_string` on each worktree path (`lib.rs:434-454`). A
+   modified tracked file therefore indexes uncommitted worktree contents, and
+   a tracked path deleted only from the worktree is skipped while its prior DB
+   evidence remains. This does not satisfy Design Decision 2's explicit
+   requirement to read files from the Git HEAD tree. Resolve the intended
+   source-of-truth semantics, make discovery/content/deletion reconciliation
+   use the same state, and add dirty-worktree modification/deletion regression
+   tests.
+2. **Medium — destructured literal `require` declarations are missing from the
+   Imports record.** `process_javascript_variable_declaration()` rejects every
+   non-`identifier` binding at `code.rs:1196-1204` before checking whether its
+   value is a literal `require` at `code.rs:1206-1209`. Consequently
+   `const { charge } = require("./payments")` is neither retained as import
+   evidence nor covered by the current destructuring test, even though Task 2
+   requires complete top-level literal-require declarations. Collect the
+   import range before filtering symbol-eligible binding patterns and add both
+   extraction and FTS5 retrieval assertions.
+3. **Medium — CommonJS-exported class methods are not indexed.**
+   `process_javascript_assignment()` emits the class record for
+   `module.exports = class { ... }`, `exports.Gateway = class { ... }`, and
+   `module.exports.Gateway = class { ... }`, but unlike the variable/default
+   export paths it never calls `process_javascript_class_methods`
+   (`code.rs:1379-1410`). The class methods therefore disappear even though
+   the class has a stable `__module_export` or property namespace. Add method
+   traversal for class-valued assignments and regression tests proving stable
+   identifiers plus method-local ranges/text.
+
+### Review fixes applied
+
+All three items above have been resolved:
+
+1. **HEAD-tree reading.** `index_code()` now calls
+   `list_tracked_code_files_with_content()` which reads blob content from the
+   Git HEAD tree by OID in a single repo session. The HEAD commit's author
+   timestamp is used as proxy mtime. Two new regression tests
+   (`index_code_reads_from_head_tree_not_worktree`,
+   `index_code_indexes_deleted_worktree_file_from_head`) verify that worktree
+   edits and deletions do not affect indexed content.
+2. **Destructured require.** The import-range collection in
+   `process_javascript_variable_declaration()` now runs before the
+   identifier-only binding filter. `destructured_require_appears_in_imports_record`
+   verifies the fix.
+3. **CommonJS-exported class methods.** `process_javascript_assignment()` now
+   calls `process_javascript_class_methods()` when the right-hand side is a
+   class. `commonjs_exported_class_methods_are_indexed` verifies stable
+   `__module_export::method` and `exports.Name::method` identifiers.
+
+`cargo check --workspace` passes. `cargo test --workspace` passes 142 tests
+(131 indexer + 11 main), up from 138 before the fixes (4 new regression tests).
