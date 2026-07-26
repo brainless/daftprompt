@@ -390,24 +390,24 @@ JSX uses `language = "jsx"`.
 ### Task 4: Apply Epic 008's indexing lifecycle contracts
 
 **Priority:** High  
-**Status:** ⬜ Planned
+**Status:** ✅ Done
 
 Use the parameterized helpers from Epic 009 rather than creating another Git
 setup implementation.
 
 **Acceptance Criteria:**
 
-- [ ] The shared parameterized lifecycle contract runs for both `.js` and
+- [x] The shared parameterized lifecycle contract runs for both `.js` and
       `.jsx`: first index, unchanged second run, touch without content change,
       content replacement, tracked deletion, and untracked exclusion.
-- [ ] Content edits remove stale evidence before inserting replacement
+- [x] Content edits remove stale evidence before inserting replacement
       evidence.
-- [ ] Deleting a JavaScript/JSX file removes both items and its `code_files`
+- [x] Deleting a JavaScript/JSX file removes both items and its `code_files`
       row.
-- [ ] Lifecycle assertions verify identifier, path, one-based range, kind,
+- [x] Lifecycle assertions verify identifier, path, one-based range, kind,
       language, text, and tracking-row behavior.
-- [ ] Rust, TypeScript, and TSX lifecycle tests continue to pass.
-- [ ] Tests use temporary repositories/cache directories and no embedder.
+- [x] Rust, TypeScript, and TSX lifecycle tests continue to pass.
+- [x] Tests use temporary repositories/cache directories and no embedder.
 
 ### Task 5: Add deterministic JavaScript/JSX retrieval tests
 

@@ -1733,6 +1733,22 @@ export function TypedCheckoutButton({ label }: CheckoutButtonProps) {
             .expect("search deleted evidence")
             .is_empty());
 
+        let deleted_canonical = code::canonicalize_file_path(
+            repo_dir.path(),
+            std::path::Path::new(case.deleted_path),
+        );
+        assert!(
+            db::code_file_get(&indexer.db, &deleted_canonical)
+                .expect("lookup deleted code_files row")
+                .is_none(),
+            "code_files row for {deleted_canonical} must be removed after tracked deletion"
+        );
+        let tracked = db::code_files_all(&indexer.db).expect("list tracked code files");
+        assert!(
+            !tracked.iter().any(|path| path == &deleted_canonical),
+            "code_files_all must not contain {deleted_canonical}; got {tracked:?}"
+        );
+
         let untracked = repo_dir.path().join(case.untracked_path);
         fs::create_dir_all(untracked.parent().expect("untracked parent")).unwrap();
         fs::write(untracked, case.untracked_contents).expect("write untracked fixture");
@@ -1789,6 +1805,93 @@ export function TypedCheckoutButton({ label }: CheckoutButtonProps) {
             untracked_contents: "export function LeakedTsxSecret() { return <div>password</div>; }\n",
             untracked_query: "LeakedTsxSecret",
             language: "tsx",
+            kind: code::SymbolKind::Function,
+        });
+    }
+
+    const JS_LIFECYCLE_PRIMARY: &str = r#"/**
+ * Validate the cart contents before checkout.
+ */
+function validateCart(items) {
+    if (!items || items.length === 0) {
+        return false;
+    }
+    return true;
+}
+
+const DEFAULT_TIMEOUT = 3000;
+"#;
+
+    const JS_LIFECYCLE_SECONDARY: &str = r#"const calculateTotal = (prices) => {
+    return prices.reduce((sum, price) => sum + price, 0);
+};
+"#;
+
+    const JSX_LIFECYCLE_PRIMARY: &str = r#"import React from "react";
+
+/**
+ * Renders the checkout button.
+ *
+ * The button stays disabled while checkout validation runs.
+ */
+export function CheckoutButton({ disabled, label }) {
+    return (
+        <button disabled={disabled} onClick={() => alert(label)}>
+            {label}
+        </button>
+    );
+}
+"#;
+
+    const JSX_LIFECYCLE_SECONDARY: &str = r#"export function SecondaryControl() {
+    return <span>secondary</span>;
+}
+"#;
+
+    #[test]
+    fn javascript_indexing_lifecycle_contract() {
+        let files = [
+            ("src/cart.js", JS_LIFECYCLE_PRIMARY),
+            ("src/pricing.js", JS_LIFECYCLE_SECONDARY),
+        ];
+        run_language_lifecycle(&LifecycleCase {
+            files: &files,
+            primary_path: "src/cart.js",
+            deleted_path: "src/pricing.js",
+            initial_query: "validateCart",
+            initial_identifier: "src/cart.js::validateCart",
+            deleted_query: "calculateTotal",
+            edited_contents: "function checkCart(sku) {\n    return sku.startsWith(\"INV\");\n}\n",
+            edited_query: "checkCart",
+            edited_identifier: "src/cart.js::checkCart",
+            untracked_path: "src/secret.js",
+            untracked_contents: "function leakedJsSecret() { return \"password\"; }\n",
+            untracked_query: "leakedJsSecret",
+            language: "javascript",
+            kind: code::SymbolKind::Function,
+        });
+    }
+
+    #[test]
+    fn jsx_indexing_lifecycle_contract() {
+        let files = [
+            ("src/components/CheckoutButton.jsx", JSX_LIFECYCLE_PRIMARY),
+            ("src/components/Secondary.jsx", JSX_LIFECYCLE_SECONDARY),
+        ];
+        run_language_lifecycle(&LifecycleCase {
+            files: &files,
+            primary_path: "src/components/CheckoutButton.jsx",
+            deleted_path: "src/components/Secondary.jsx",
+            initial_query: "CheckoutButton",
+            initial_identifier: "src/components/CheckoutButton.jsx::CheckoutButton",
+            deleted_query: "SecondaryControl",
+            edited_contents: "export function ConfirmCheckoutButton() {\n    return <button>confirm</button>;\n}\n",
+            edited_query: "ConfirmCheckoutButton",
+            edited_identifier: "src/components/CheckoutButton.jsx::ConfirmCheckoutButton",
+            untracked_path: "src/components/Secret.jsx",
+            untracked_contents: "export function LeakedJsxSecret() { return <div>password</div>; }\n",
+            untracked_query: "LeakedJsxSecret",
+            language: "jsx",
             kind: code::SymbolKind::Function,
         });
     }
