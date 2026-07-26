@@ -2563,6 +2563,480 @@ export const CheckoutLabel = ({ label }: { label: string }) => <span>{label}</sp
         }
     }
 
+    // ── Epic 010 Task 5: Deterministic JavaScript/JSX retrieval tests ──────
+
+    /// Checkout-shaped JavaScript fixture for Task 5. Mirrors the Epic 009 TS
+    /// `TS_CHECKOUT_FIXTURE` shape: a multiline ES import, a function with a
+    /// JSDoc that mentions "checkout validation", a `PaymentGateway` class
+    /// with a `configured` getter and a `charge` method, a standalone
+    /// "temporary checkout limitation" comment, a CommonJS export that names
+    /// a `paymentClient` binding, an ES re-export of the same binding, and a
+    /// static dynamic `import("./payment-client")` literal whose byte range
+    /// is folded into the FTS-only `__imports__` record.
+    const JS_CHECKOUT_FIXTURE: &str = r#"const provider = require("./provider");
+const paymentClient = import("./payment-client");
+import {
+    PaymentProvider,
+    PaymentConfig,
+    PaymentClient,
+} from "./payment";
+
+/**
+ * Creates a checkout session after checkout validation.
+ *
+ * Performs checkout validation on the cart contents and delegates
+ * to the configured payment provider for charging.
+ */
+export function createCheckoutSession(cart) {
+    if (!cart || cart.length === 0) {
+        return "empty";
+    }
+    return "checkout session";
+}
+
+// TODO: temporary checkout limitation — only USD currency is supported.
+
+/** The configured payment provider gateway. */
+class PaymentGateway {
+    /** Returns whether the configured payment provider is ready. */
+    get configured() {
+        return this.config.enabled;
+    }
+
+    /** Charge using the configured payment provider. */
+    charge(amount) {
+        return this.config.provider.charge(amount);
+    }
+}
+
+/** Re-exports the configured payment client for downstream consumers. */
+export { paymentClient } from "./client";
+
+/** CommonJS export where the configured payment client is exported. */
+module.exports.paymentClient = function () {
+    return "configured payment client";
+};
+"#;
+
+    /// Checkout-shaped JSX fixture for Task 5. A function component with a
+    /// `disabled` prop, an attached JSDoc that mentions both "checkout" and
+    /// "disabled", and a JSX body that uses `disabled={disabled}` so an
+    /// FTS5 OR query "checkout OR disabled" hits it deterministically.
+    const JSX_CHECKOUT_FIXTURE: &str = r#"import React from "react";
+
+/**
+ * Renders the checkout button.
+ *
+ * The button stays disabled while checkout validation runs.
+ */
+export function CheckoutButton({ disabled, label }) {
+    return (
+        <button disabled={disabled} onClick={() => alert(label)}>
+            {label}
+        </button>
+    );
+}
+"#;
+
+    /// Build an indexer over a repo seeded with checkout-shaped JS + JSX
+    /// fixtures.
+    fn setup_js_checkout_repo() -> (tempfile::TempDir, tempfile::TempDir) {
+        setup_repo_with_files(&[
+            ("src/checkout/session.js", JS_CHECKOUT_FIXTURE),
+            ("src/components/CheckoutButton.jsx", JSX_CHECKOUT_FIXTURE),
+        ])
+    }
+
+    #[test]
+    fn search_checkout_validation_returns_js_evidence() {
+        let (repo_dir, cache_dir) = setup_js_checkout_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        indexer.index_code().expect("index_code");
+
+        let results = indexer
+            .search_code_text("checkout OR validation", 20)
+            .expect("search_code_text");
+        assert!(
+            !results.is_empty(),
+            "'checkout OR validation' should return at least one result"
+        );
+
+        let hit = expect_code_hit(
+            &results,
+            "checkout OR validation",
+            "src/checkout/session.js::createCheckoutSession",
+        );
+
+        assert_eq!(hit.file_path, "src/checkout/session.js");
+        assert!(hit.line_start > 0, "line_start should be one-based");
+        assert!(hit.line_end >= hit.line_start);
+        assert!(
+            matches!(hit.symbol_kind, code::SymbolKind::Function),
+            "expected Function, got {:?}",
+            hit.symbol_kind
+        );
+        assert!(
+            hit.text.contains("checkout validation"),
+            "JSDoc validation excerpt should appear in composed text:\n{}",
+            hit.text
+        );
+        assert!(
+            hit.text.contains("createCheckoutSession"),
+            "signature should appear in composed text:\n{}",
+            hit.text
+        );
+    }
+
+    #[test]
+    fn search_payment_provider_configured_returns_js_evidence() {
+        let (repo_dir, cache_dir) = setup_js_checkout_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        indexer.index_code().expect("index_code");
+
+        let results = indexer
+            .search_code_text("payment OR configured", 20)
+            .expect("search_code_text");
+        assert!(
+            !results.is_empty(),
+            "'payment OR configured' should return at least one result"
+        );
+
+        let class_hit = results
+            .iter()
+            .find(|r| r.identifier == "src/checkout/session.js::PaymentGateway")
+            .expect("expected PaymentGateway class record");
+        let method_hit = results
+            .iter()
+            .find(|r| r.identifier == "src/checkout/session.js::PaymentGateway::configured")
+            .expect("expected PaymentGateway::configured method record");
+
+        assert_eq!(class_hit.file_path, "src/checkout/session.js");
+        assert!(
+            matches!(class_hit.symbol_kind, code::SymbolKind::Class),
+            "expected Class, got {:?}",
+            class_hit.symbol_kind
+        );
+        assert!(
+            class_hit.text.contains("configured payment provider"),
+            "class JSDoc should mention configured payment provider:\n{}",
+            class_hit.text
+        );
+
+        assert_eq!(method_hit.file_path, "src/checkout/session.js");
+        assert!(
+            matches!(method_hit.symbol_kind, code::SymbolKind::Method),
+            "expected Method, got {:?}",
+            method_hit.symbol_kind
+        );
+        assert!(
+            method_hit.text.contains("configured payment provider"),
+            "method JSDoc should mention configured payment provider:\n{}",
+            method_hit.text
+        );
+    }
+
+    #[test]
+    fn search_temporary_limitation_returns_js_comment_evidence() {
+        let (repo_dir, cache_dir) = setup_js_checkout_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        indexer.index_code().expect("index_code");
+
+        let results = indexer
+            .search_code_text("temporary limitation", 20)
+            .expect("search_code_text");
+        assert!(
+            !results.is_empty(),
+            "'temporary limitation' should return at least one result"
+        );
+
+        let hit = expect_code_hit(
+            &results,
+            "temporary limitation",
+            "src/checkout/session.js::__comments__",
+        );
+
+        assert_eq!(hit.file_path, "src/checkout/session.js");
+        assert!(hit.line_start > 0);
+        assert!(hit.line_end >= hit.line_start);
+        assert!(
+            matches!(hit.symbol_kind, code::SymbolKind::Comments),
+            "expected Comments, got {:?}",
+            hit.symbol_kind
+        );
+        assert!(
+            hit.text.contains("USD currency"),
+            "comment text should mention USD currency:\n{}",
+            hit.text
+        );
+    }
+
+    #[test]
+    fn search_checkout_button_disabled_returns_jsx_evidence() {
+        let (repo_dir, cache_dir) = setup_js_checkout_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        indexer.index_code().expect("index_code");
+
+        let results = indexer
+            .search_code_text("checkout OR disabled", 20)
+            .expect("search_code_text");
+        assert!(
+            !results.is_empty(),
+            "'checkout OR disabled' should return at least one result"
+        );
+
+        let hit = expect_code_hit(
+            &results,
+            "checkout OR disabled",
+            "src/components/CheckoutButton.jsx::CheckoutButton",
+        );
+
+        assert_eq!(hit.file_path, "src/components/CheckoutButton.jsx");
+        assert!(hit.line_start > 0, "line_start should be one-based");
+        assert!(hit.line_end >= hit.line_start);
+        assert!(
+            matches!(hit.symbol_kind, code::SymbolKind::Function),
+            "expected Function (component), got {:?}",
+            hit.symbol_kind
+        );
+        assert!(
+            hit.text.contains("disabled"),
+            "JSX `disabled` attribute or JSDoc must appear in composed text:\n{}",
+            hit.text
+        );
+        assert!(
+            hit.text.contains("checkout"),
+            "JSDoc or signature must mention checkout in composed text:\n{}",
+            hit.text
+        );
+    }
+
+    #[test]
+    fn search_payment_client_exported_returns_js_export_evidence() {
+        // "where payment client exported" — the user-facing wording maps to
+        // an FTS5 OR query whose tokens are present in both the CommonJS
+        // export binding record (`module.exports.paymentClient = ...`) and
+        // the file-level `__imports__` record (the ES re-export declaration
+        // `export { paymentClient } from "./client"`). Both records are
+        // surfaced without an embedder and without relying on FTS5 ordering.
+        let (repo_dir, cache_dir) = setup_js_checkout_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        indexer.index_code().expect("index_code");
+
+        let results = indexer
+            .search_code_text("payment OR client", 20)
+            .expect("search_code_text");
+        assert!(
+            !results.is_empty(),
+            "'payment OR client' should return at least one result"
+        );
+
+        let payment_client_hit = results
+            .iter()
+            .find(|r| r.identifier == "src/checkout/session.js::paymentClient")
+            .expect("expected paymentClient Function record (CommonJS export)");
+        let imports_hit = results
+            .iter()
+            .find(|r| r.identifier == "src/checkout/session.js::__imports__")
+            .expect("expected __imports__ record (ES re-export)");
+
+        assert_eq!(payment_client_hit.file_path, "src/checkout/session.js");
+        assert!(
+            matches!(payment_client_hit.symbol_kind, code::SymbolKind::Function),
+            "expected Function (CommonJS export binding), got {:?}",
+            payment_client_hit.symbol_kind
+        );
+        assert!(
+            payment_client_hit.text.contains("module.exports.paymentClient"),
+            "CommonJS export signature must appear in composed text:\n{}",
+            payment_client_hit.text
+        );
+
+        assert_eq!(imports_hit.file_path, "src/checkout/session.js");
+        assert!(
+            matches!(imports_hit.symbol_kind, code::SymbolKind::Imports),
+            "expected Imports, got {:?}",
+            imports_hit.symbol_kind
+        );
+        assert!(
+            imports_hit.text.contains("paymentClient"),
+            "ES re-export of paymentClient must appear in imports record:\n{}",
+            imports_hit.text
+        );
+    }
+
+    #[test]
+    fn search_js_imports_record_preserves_multiline_es_import_and_static_dynamic_import() {
+        // Retrieval assertion depends on content beyond the first line of a
+        // multiline ES import (`PaymentConfig` lives on a non-first line of
+        // the import statement) and on a static dynamic-import literal
+        // (`import("./payment-client")`). Both are folded into the file-level
+        // FTS-only `__imports__` record by the JS extraction walker.
+        let (repo_dir, cache_dir) = setup_js_checkout_repo();
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        indexer.index_code().expect("index_code");
+
+        let results = indexer
+            .search_code_text("PaymentConfig", 20)
+            .expect("search_code_text");
+        let imports_hit = results
+            .iter()
+            .find(|r| r.identifier == "src/checkout/session.js::__imports__")
+            .expect("expected __imports__ record for non-first-line token");
+
+        assert!(
+            imports_hit.text.contains("PaymentConfig"),
+            "non-first-line token from multiline ES import must be preserved:\n{}",
+            imports_hit.text
+        );
+        assert!(
+            imports_hit.text.contains("PaymentProvider"),
+            "first non-name-line token from multiline ES import must be preserved:\n{}",
+            imports_hit.text
+        );
+        assert!(
+            imports_hit.text.contains("from \"./payment\""),
+            "import specifier source must be preserved:\n{}",
+            imports_hit.text
+        );
+        // The same __imports__ record must also expose the static
+        // dynamic-import literal captured by the JS walker.
+        assert!(
+            imports_hit.text.contains("import(\"./payment-client\")"),
+            "static dynamic-import literal must be preserved in imports record:\n{}",
+            imports_hit.text
+        );
+    }
+
+    #[test]
+    fn search_returns_results_across_all_five_languages() {
+        // One repo with five code files — Rust, TypeScript, TSX, JavaScript,
+        // and JSX. Each dialect uses the same checkout vocabulary so a
+        // single FTS5 query that names the shared "checkout" token surfaces
+        // evidence from every dialect in one result set.
+        let files = [
+            ("src/checkout.rs", CHECKOUT_FIXTURE),
+            ("src/checkout/session.ts", TS_CHECKOUT_FIXTURE),
+            ("src/components/CheckoutButton.tsx", TSX_CHECKOUT_FIXTURE),
+            ("src/checkout/session.js", JS_CHECKOUT_FIXTURE),
+            ("src/components/CheckoutButton.jsx", JSX_CHECKOUT_FIXTURE),
+        ];
+        let (repo_dir, cache_dir) = setup_repo_with_files(&files);
+        let mut indexer = make_indexer(repo_dir.path(), cache_dir.path());
+
+        let report = indexer.index_code().expect("index_code");
+        assert_eq!(
+            report.files_scanned, 5,
+            "should scan all five tracked code files"
+        );
+        assert_eq!(
+            report.files_changed, 5,
+            "all five files are new on first run"
+        );
+        assert_eq!(report.files_deleted, 0);
+
+        let results = indexer
+            .search_code_text("checkout", 50)
+            .expect("search_code_text");
+
+        let has_rust = results.iter().any(|r| r.file_path.ends_with(".rs"));
+        let has_ts = results.iter().any(|r| {
+            r.file_path.ends_with(".ts") && !r.file_path.ends_with(".tsx")
+        });
+        let has_tsx = results.iter().any(|r| r.file_path.ends_with(".tsx"));
+        let has_js = results.iter().any(|r| {
+            r.file_path.ends_with(".js") && !r.file_path.ends_with(".jsx")
+        });
+        let has_jsx = results.iter().any(|r| r.file_path.ends_with(".jsx"));
+
+        assert!(has_rust, "expected at least one Rust result for 'checkout'");
+        assert!(
+            has_ts,
+            "expected at least one TypeScript result for 'checkout'"
+        );
+        assert!(has_tsx, "expected at least one TSX result for 'checkout'");
+        assert!(
+            has_js,
+            "expected at least one JavaScript result for 'checkout'"
+        );
+        assert!(has_jsx, "expected at least one JSX result for 'checkout'");
+
+        let identifiers: Vec<&str> =
+            results.iter().map(|r| r.identifier.as_str()).collect();
+        assert!(
+            identifiers
+                .iter()
+                .any(|id| id.contains("create_checkout_session")),
+            "expected Rust identifier in identifiers: {:?}",
+            identifiers
+        );
+        assert!(
+            identifiers
+                .iter()
+                .any(|id| id.contains("createCheckoutSession")),
+            "expected TypeScript identifier in identifiers: {:?}",
+            identifiers
+        );
+        assert!(
+            identifiers
+                .iter()
+                .any(|id| id.ends_with("::CheckoutButton")),
+            "expected TSX/JSX CheckoutButton identifier in identifiers: {:?}",
+            identifiers
+        );
+        assert!(
+            identifiers.iter().any(|id| {
+                id.contains(".js::") && id.contains("createCheckoutSession")
+            }),
+            "expected JavaScript identifier in identifiers: {:?}",
+            identifiers
+        );
+        assert!(
+            identifiers.iter().any(|id| {
+                id.contains(".jsx::") && id.ends_with("::CheckoutButton")
+            }),
+            "expected JSX identifier in identifiers: {:?}",
+            identifiers
+        );
+
+        // Verify language metadata round-trips through the items table for
+        // every dialect — same invariant as the Epic 009 mixed-language test,
+        // extended to the two JS dialects.
+        for (extension_suffix, identifier_part, expected_language) in [
+            (".rs", "create_checkout_session", "rust"),
+            (".ts", "createCheckoutSession", "typescript"),
+            (".tsx", "CheckoutButton", "tsx"),
+            (".js", "createCheckoutSession", "javascript"),
+            (".jsx", "CheckoutButton", "jsx"),
+        ] {
+            let hit = results
+                .iter()
+                .find(|r| {
+                    r.identifier.contains(identifier_part)
+                        && r.file_path.ends_with(extension_suffix)
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing hit for {extension_suffix} containing {identifier_part}"
+                    )
+                });
+            let metadata: String = indexer
+                .db
+                .query_row(
+                    "SELECT metadata FROM items WHERE source_type = 'code' AND identifier = ?1",
+                    [&hit.identifier],
+                    |row| row.get(0),
+                )
+                .expect("code item metadata");
+            let metadata: serde_json::Value =
+                serde_json::from_str(&metadata).expect("valid metadata");
+            assert_eq!(
+                metadata["language"], expected_language,
+                "language metadata mismatch for identifier {:?}",
+                hit.identifier
+            );
+        }
+    }
+
     // ── Epic 010 Task 3: JSX metadata language contract ──────────────────
 
     /// Comprehensive JSX fixture for Task 3. Mirrors the code.rs fixture

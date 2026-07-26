@@ -412,7 +412,7 @@ setup implementation.
 ### Task 5: Add deterministic JavaScript/JSX retrieval tests
 
 **Priority:** High  
-**Status:** ⬜ Planned
+**Status:** ✅ Done
 
 Use FTS5-only product and implementation queries:
 
@@ -426,15 +426,28 @@ Use FTS5-only product and implementation queries:
 
 **Acceptance Criteria:**
 
-- [ ] Every query returns its expected stable identifier via
-      `search_code_text()` without an embedder.
-- [ ] Results preserve path, one-based line range, kind, exact language, and
-      useful explanatory text.
-- [ ] At least one retrieval assertion depends on content beyond the first line
+- [x] Every query returns its expected stable identifier via
+      `search_code_text()` without an embedder. Covered by
+      `search_checkout_validation_returns_js_evidence`,
+      `search_payment_provider_configured_returns_js_evidence`,
+      `search_temporary_limitation_returns_js_comment_evidence`,
+      `search_checkout_button_disabled_returns_jsx_evidence`, and
+      `search_payment_client_exported_returns_js_export_evidence`.
+- [x] Results preserve path, one-based line range, kind, exact language, and
+      useful explanatory text. Asserted by the same suite via
+      `CodeSearchHit::path`, `line_start`/`line_end`, `symbol_kind`, the stored
+      `metadata.language`, and the `text` excerpt.
+- [x] At least one retrieval assertion depends on content beyond the first line
       of a multiline import/re-export or on a static dynamic-import literal.
-- [ ] No assertion depends on exact FTS result order or vector ranking.
-- [ ] One mixed repository and search path returns evidence from all five
-      supported languages: Rust, TypeScript, TSX, JavaScript, and JSX.
+      Covered by `search_js_imports_record_preserves_multiline_es_import_and_static_dynamic_import`,
+      which asserts `PaymentConfig` on a non-first line of a multiline ES import
+      and `import("./payment-client")` literal preservation.
+- [x] No assertion depends on exact FTS result order or vector ranking. Every
+      identifier lookup uses `find()` over the FTS result set; no `==` on
+      result order or scoring.
+- [x] One mixed repository and search path returns evidence from all five
+      supported languages: Rust, TypeScript, TSX, JavaScript, and JSX. Covered
+      by `search_returns_results_across_all_five_languages`.
 
 ### Task 6: Validate CLI/UI integration and documentation
 
