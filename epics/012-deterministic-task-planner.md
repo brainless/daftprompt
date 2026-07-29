@@ -10,10 +10,11 @@ relevant graph slice into small, typed, dependency-aware actions.
 The planner is deterministic first. Project detectors establish facts such as
 the language, package manager, test runner, linter, type checker, build system,
 and repository correctness gate. Planning rules combine those facts with
-request intent and graph evidence. An optional small LLM may later classify an
-ambiguous request or render concise prose, but the durable plan is a typed
-intermediate representation rather than an unvalidated list of model-generated
-shell commands.
+request intent and graph evidence. An optional small/tiny model may perform a
+tightly scoped read-only investigation for a deterministically identified
+context gap before the final prompt is generated for a capable model. The
+durable plan is a typed intermediate representation rather than an unvalidated
+list of model-generated shell commands or relationships.
 
 The crate plans work; it does not execute commands, mutate files, spawn agents,
 or assume that parallel execution is available. Host integrations decide how
@@ -64,6 +65,11 @@ For each prompt, manually construct:
 10. Failure modes: missing evidence, misleading matches, unsafe commands,
     excessive fragmentation, redundant actions, or summaries that omit
     provenance.
+11. The initial context packet's source coverage, omissions, unsupported
+    capabilities, and unresolved gap kinds.
+12. Whether a deterministic gap trigger justifies a bounded small/tiny-model
+    investigation, which tools and budgets it receives, what it discovers, and
+    which observations can be independently validated.
 
 Write the results under
 `epics/research/012-planner-thought-experiments.md` (or an equivalently named
@@ -88,6 +94,8 @@ a plan that:
 - Detect project capabilities deterministically from repository configuration.
 - Classify common request intents conservatively.
 - Retrieve bounded, provenance-linked context from Epic 011.
+- Produce row/task evidence packets with explicit coverage, omissions,
+  candidates, and unresolved context gaps.
 - Produce small actions with explicit inputs, dependencies, execution policy,
   and output contracts.
 - Identify independent action groups without requiring parallel execution.
@@ -95,10 +103,13 @@ a plan that:
   guesses.
 - Render generic prompts and structured JSON for multiple host integrations.
 - Preserve uncertainty, missing evidence, and rejected candidate actions.
+- Deterministically trigger optional, tightly scoped context investigations and
+  validate their cited observations without promoting model interpretation to
+  repository truth.
 - Plan evidence-bounded review and cross-review comparison without treating
   model agreement as repository truth.
-- Support optional LLM classification/rendering behind an interface and feature
-  boundary without making it necessary for core planning.
+- Support an optional small/tiny-model context-investigator interface behind a
+  feature boundary without making it necessary for core planning.
 - Evaluate plan quality using real prompts and deterministic fixtures.
 
 ## Non-goals
@@ -106,11 +117,17 @@ a plan that:
 - Execute shell commands or tools.
 - Modify repository files.
 - Spawn, supervise, or communicate with sub-agents.
+- Choose, host, or directly execute a small/tiny model; planner core only emits
+  and consumes typed investigation specifications/results.
 - Encode Codex-, Claude Code-, or opencode-specific protocols in the core crate.
 - Grant command authorization or bypass host safety policy.
 - Guarantee that every task benefits from parallelism.
 - Generate a complete implementation patch from a user request.
 - Use an LLM as the source of truth for project tooling.
+- Use a model-assisted context finding as authoritative graph evidence without
+  independent deterministic validation.
+- Ask a retrieval helper to make the final product, implementation, or
+  verification decision.
 - Hard-code `python` to mean `pytest` or `javascript` to mean `npm test` without
   configuration evidence.
 - Replace agent reasoning for ambiguous product or architecture decisions.
@@ -168,6 +185,9 @@ Initial action kinds:
 - `review_diff`
 - `review_plan`
 - `compare_reviews`
+- `assemble_context_packet`
+- `investigate_context_gap`
+- `validate_context_candidates`
 - `summarize_evidence`
 - `synthesize`
 
@@ -279,8 +299,10 @@ Keyword rules alone must not turn “explain how to fix the parser” into
 authorization to edit code. When confidence is insufficient, the plan contains
 read-only investigation and a decision boundary rather than mutation.
 
-An optional classifier may suggest intent, but deterministic constraints and
-explicit user verbs remain inspectable inputs to the final assessment.
+Ambiguous intent remains explicit in the plan and is handed to the capable
+model or user as a decision boundary. The small/tiny context helper does not
+classify intent. Deterministic constraints and explicit user verbs remain
+inspectable inputs to the final assessment.
 
 ### 7. Rules consume capabilities and graph patterns
 
@@ -366,6 +388,28 @@ only with a provenance-gap diagnostic.
 Budget overflow is explicit: the planner records omitted candidates and why,
 rather than silently truncating a requirement or source block.
 
+For task-oriented retrieval, including one testing-sheet row, the planner wraps
+the bundle in an evidence packet with an explicit completeness contract:
+
+```rust
+pub struct TaskEvidencePacket {
+    pub objective: String,
+    pub primary_input: ResourceRef,
+    pub established: Vec<ContextResource>,
+    pub candidates: Vec<ContextCandidate>,
+    pub coverage: Vec<SourceCoverage>,
+    pub omissions: Vec<ContextOmission>,
+    pub unresolved_gaps: Vec<ContextGap>,
+    pub investigation_attempts: Vec<InvestigationAttemptRef>,
+}
+```
+
+The packet states which source partitions, index/detector versions, languages,
+artifact kinds, and reference/runtime capabilities were available. It keeps
+semantic-only and externally proposed candidates separate from established
+graph paths. Zero-result searches, unsupported capabilities, and budget
+omissions are observations, not proof that no relevant artifact exists.
+
 ### 10. Commands are structured and evidence-derived
 
 ```rust
@@ -392,26 +436,88 @@ A focused command may be derived from:
 When only a broad correctness gate is known, the plan says so rather than
 inventing a focused invocation.
 
-### 11. Optional LLM use is narrow and replaceable
+### 11. Small/tiny-model use is retrieval-only and replaceable
 
-Potential uses:
+The small/tiny-model role in this epic is strictly to improve the initial
+context supplied to a capable model. Potential uses:
 
-- classify genuinely ambiguous intent;
-- rank several already retrieved graph regions;
-- render an `ActionSpec` as a concise agent prompt;
-- synthesize bounded action outputs.
-- render or summarize already retrieved review claims.
+- investigate a deterministically identified retrieval gap using graph-selected
+  seeds and a small set of read-only tools;
+- rank or reject a few already retrieved candidate regions;
+- map a committed code change to candidate decision/rationale sections;
+- find conflicts between a decision document and PRD sections;
+- return exact resources, observations, and better bounded follow-up queries.
+
+It does not classify the final row/request, make product or implementation
+decisions, render the final answer, synthesize the capable-model result, mutate
+the repository, or verify behavior. Deterministic planner code renders the
+high-level handoff prompt; the capable model performs the reasoning requested
+by that prompt.
 
 The interface must accept deterministic inputs and return schema-validated
 output. Core tests run without a model or network. Model failure falls back to
-deterministic planning and rendering.
+deterministic planning and rendering, or leaves the original context packet
+usable with an unresolved-gap diagnostic.
 
 Optional model output is itself an attributed action result. If a host persists
 it, it should retain model identity, authored/observed time, prompt or prompt
 hash, reviewed input versions, and output content hash. The planner does not
 infer these fields from a later Git commit.
 
-### 12. Plan diagnostics are product data
+### 12. Context-gap investigations are deterministic, bounded, and read-only
+
+The planner may emit `investigate_context_gap` only from a recognized gap in a
+`TaskEvidencePacket`. A host may choose a small/tiny model to execute it, but
+model selection and execution are outside planner core.
+
+```rust
+pub struct InvestigationSpec {
+    pub gap: ContextGap,
+    pub question: String,
+    pub seeds: Vec<ResourceRef>,
+    pub allowed_tools: Vec<ToolCapability>,
+    pub budget: InvestigationBudget,
+    pub expected_output: InvestigationOutputContract,
+}
+
+pub struct InvestigationResult {
+    pub observations: Vec<ObservedFinding>,
+    pub candidates: Vec<CandidateFinding>,
+    pub attempted_queries: Vec<ToolObservation>,
+    pub unresolved: Vec<OpenQuestion>,
+    pub budget_exhausted: bool,
+}
+```
+
+Triggers are inspectable rules, not model decisions. Examples include:
+
+- a strong requirement candidate with no implementation path;
+- an ambiguous symbol collision;
+- no test connected to a candidate behavior;
+- a committed code change with no linked decision or rationale document;
+- conflicting PRD and later decision sections;
+- semantic candidates requiring focused source inspection.
+
+Allowed capabilities initially cover graph query, bounded text/symbol/reference
+search, focused file-range reads, and focused Git log/diff inspection. They do
+not grant general shell access, mutation, dependency installation, or test
+execution. Behavioral reproduction remains a separate authorized action for a
+capable agent or execution host.
+
+Every returned finding distinguishes an observed tool fact from model
+interpretation and cites exact resources/spans. `validate_context_candidates`
+reproduces eligible paths, symbols, spans, references, configuration keys, and
+changed-file facts using deterministic validators. The validator's evidence,
+not the model assertion, may strengthen the graph. Unsupported interpretations
+remain attributed candidates in the capable-model packet.
+
+Investigation is iterative but bounded. Plans record stable attempt identity,
+tool-call/byte/depth limits, duplicate findings, new validated resources, new
+candidate resources, remaining gaps, and budget exhaustion. Stop conditions
+and maximum enrichment rounds are explicit evaluation parameters. Failure or
+low yield does not block handoff of the initial packet.
+
+### 13. Plan diagnostics are product data
 
 Record:
 
@@ -426,11 +532,16 @@ Record:
 - unavailable chat-only reviews or missing review attribution;
 - reviews targeting stale or unknown document versions;
 - cross-review agreement unsupported by independent repository evidence.
+- unsupported source/index/reference/runtime coverage;
+- context-gap trigger and investigation budget;
+- malformed or unvalidated model-proposed findings;
+- duplicate investigations and marginal context yield;
+- exhausted enrichment rounds and remaining gaps.
 
 These diagnostics drive future detector and graph improvements and must be
 available to thought experiments and evaluation tooling.
 
-### 13. Cross-review planning separates claims from evidence
+### 14. Cross-review planning separates claims from evidence
 
 For a request to cross-check an epic or plan with multiple models, the planner
 first produces a bounded evidence review of the exact source version. Saved
@@ -621,6 +732,48 @@ artifact diagnostic. The planner can still compare the committed document
 versions, but must not infer who generated the revision from Git author
 metadata.
 
+### Plan F: Examine one client testing-sheet row
+
+Input:
+
+> Examine this testing-sheet row against the PRD, earlier decisions, code,
+> tests, and history. Decide whether it should be implemented.
+
+Expected plan:
+
+```text
+Parallel initial retrieval
+  A. Read the exact versioned row, cells, and table headers.
+  B. Retrieve requirement and decision candidates with parent constraints.
+  C. Retrieve implementation and test candidates across source partitions.
+  D. Inspect configuration and history for strong candidate files.
+
+Barrier
+  E. Assemble an evidence packet with established paths, candidates, coverage,
+     omissions, and deterministic context gaps.
+
+Conditional bounded enrichment
+  F. Investigate only recognized gaps using short prompts, graph-selected
+     seeds, specific read-only tools, and explicit call/byte/depth budgets.
+  G. Validate cited exact/structural observations independently.
+  H. Rebuild the packet with investigation provenance, yield, and remaining
+     gaps.
+
+Capable-model decision
+  I. Classify the row and recommend reject, defer, clarify, reproduce, or
+     implement.
+
+Conditional implementation
+  J. Establish behavior or add a focused failing test.
+  K. Modify the smallest supported code region.
+  L. Run focused and repository verification.
+  M. Review the result against the row and governing decision versions.
+```
+
+F-H are absent when E reports sufficient coverage or no supported investigation
+can improve it. The small/tiny model is strictly a context-retrieval helper; it
+does not make the product decision or authorize J-M.
+
 ## Tasks
 
 ### Task 0: Run and pass the blocking planner thought experiments
@@ -640,6 +793,12 @@ plans with the actual work previously done, and revise this epic.
   should be removed, delayed, or made manual.
 - [ ] At least one experiment demonstrates missing graph evidence and feeds a
   concrete follow-up into Epic 011 or a later epic.
+- [ ] At least one real per-row testing-sheet experiment compares search-only,
+  graph-only, search-plus-graph, and bounded model-assisted retrieval against
+  the artifacts a capable agent ultimately used.
+- [ ] At least one experiment records deterministic context-gap triggers,
+  read-only tool/budget contracts, validated versus candidate findings,
+  investigation yield, and stop/escalation behavior.
 - [ ] At least one experiment covers a real cross-model plan review and
   distinguishes exact document versions, attributed claims, repository
   evidence, and an unavailable chat-only artifact.
@@ -662,6 +821,8 @@ diagnostics, and plans.
   diagnostic values.
 - [ ] Review actions retain exact reviewed-version references and attributed
   claim sources.
+- [ ] Task evidence packets and investigation specs/results round-trip without
+  losing coverage, gaps, attribution, observed/inferred status, or budgets.
 - [ ] Action IDs and ordering are deterministic for identical inputs.
 - [ ] Dependency cycles are rejected with a useful error.
 - [ ] A sequential host and a parallel host can interpret the same plan.
@@ -697,8 +858,8 @@ Classify explicit user intent, scope, mutation constraints, and uncertainty.
 - [ ] Implement/fix/refactor/test/review/verify intents are distinguishable.
 - [ ] Negative constraints such as “do not change anything” are retained.
 - [ ] Ambiguous prompts produce investigation plus a decision boundary.
-- [ ] Optional classifier suggestions cannot override explicit deterministic
-  constraints silently.
+- [ ] Small/tiny context-investigation results cannot alter explicit intent or
+  mutation constraints.
 - [ ] Fixture prompts include mixed and misleading verbs.
 
 ### Task 4: Implement graph context selection and budgets
@@ -715,6 +876,12 @@ explicit budgets.
 - [ ] Parent requirement context is included without returning whole documents.
 - [ ] Nested/overlapping symbols and document chunks are deduplicated.
 - [ ] Budget omissions and missing evidence appear in diagnostics.
+- [ ] Coverage reports source/index/detector availability, unsupported
+  artifact/reference/runtime capabilities, and zero-result observations.
+- [ ] Established graph evidence, semantic candidates, and externally proposed
+  candidates remain distinct.
+- [ ] Recognized context gaps are stable typed values suitable for planning
+  rules.
 - [ ] Identical graph/request inputs produce identical context ordering.
 - [ ] An unavailable/incomplete graph falls back to bounded search actions
   rather than panicking.
@@ -734,6 +901,10 @@ review, and explanation rules using capabilities and graph patterns.
 - [ ] Rules consume capabilities such as `TestRunner`, not unnecessary language
   branches.
 - [ ] Investigation precedes mutation when required facts are missing.
+- [ ] Context-gap rules emit bounded investigations only for explicit typed
+  gaps and coalesce adjacent low-cost gaps where appropriate.
+- [ ] Enrichment failure or low yield preserves the original packet and causes
+  a diagnostic or capable-model escalation rather than recursive discovery.
 - [ ] Focused verification precedes broad gates when a reliable target exists.
 - [ ] Broad correctness gates come from project facts.
 - [ ] Duplicate rule output is normalized without losing rationale.
@@ -756,10 +927,10 @@ commands structurally.
 - [ ] Unknown focused-test syntax yields a diagnostic rather than an invented
   command.
 
-### Task 7: Add deterministic rendering and optional model interfaces
+### Task 7: Add deterministic rendering and the optional context-investigator interface
 
 Render plans/actions to concise generic prompts and JSON. Define, but do not
-require, optional classifier/renderer/synthesizer interfaces.
+require, a bounded context-investigator interface for small/tiny models.
 
 #### Acceptance Criteria
 
@@ -769,6 +940,15 @@ require, optional classifier/renderer/synthesizer interfaces.
 - [ ] JSON is sufficient for a host adapter without parsing prose.
 - [ ] Core planning and tests require no model or network.
 - [ ] Model output is schema-validated and failure falls back cleanly.
+- [ ] Context-investigation prompts contain one typed gap, graph-selected seeds,
+  allowed read-only tools, explicit call/byte/depth budgets, and a structured
+  observed-versus-inferred output contract.
+- [ ] Planner core emits and consumes investigation specs/results but never
+  chooses a model, calls tools, or treats a finding as authorized mutation.
+- [ ] Eligible cited observations pass through deterministic validation;
+  unvalidated interpretations remain attributed candidates.
+- [ ] Attempt identity, duplicate findings, marginal yield, remaining gaps, and
+  stop conditions are preserved.
 - [ ] No agent brand or proprietary protocol is embedded in the core types.
 
 ### Task 8: Integrate CLI evaluation, documentation, and validation
@@ -791,6 +971,10 @@ cargo run -- --repo . --plan-json "Fix the import cache bug"
 - [ ] JSON output is stable enough for experimental host adapters.
 - [ ] The thought-experiment corpus can be replayed as evaluation fixtures
   without private repository contents being committed inadvertently.
+- [ ] Evaluation compares search-only, graph-only, search-plus-graph, and
+  bounded model-assisted retrieval using artifact recall, irrelevant context,
+  packet sufficiency, tool calls, context bytes, and time to justified
+  decision.
 - [ ] `README.md`, `DEVELOP.md`, and `AGENTS.md` document planning scope and
   safety boundaries.
 - [ ] A focused review checks intent safety, provenance loss, cycles, unsafe
@@ -808,6 +992,9 @@ cargo run -- --repo . --plan-json "Fix the import cache bug"
 | Python facts | uv/poetry/pip, pytest/tox/nox, lint/type tools, conflicts |
 | JS/TS facts | npm/pnpm/yarn/bun lockfiles and manifest scripts |
 | Graph selection | evidence priority, parent context, deduplication |
+| Context completeness | source/index coverage, unsupported capabilities, omissions, zero results, typed gaps |
+| Context investigations | deterministic triggers, read-only tools, budgets, validation, attribution, failure fallback |
+| Investigation iteration | stable attempts, duplicate findings, marginal yield, stop/escalation behavior |
 | Review selection | exact reviewed version, stale/unknown version diagnostics, attributed claims |
 | Cross-review | agreement, conflict, unique findings, unsupported claims, missing chat artifact |
 | Budgets | bounded output, explicit omissions |
@@ -829,6 +1016,7 @@ cargo run -- --repo . --plan-json "Fix the import cache bug"
 | `crates/daftprompt-planner/src/detectors/` | Generic and ecosystem project fact detectors. |
 | `crates/daftprompt-planner/src/rules/` | Versioned generic planning rules. |
 | `crates/daftprompt-planner/src/context.rs` | Graph selection, deduplication, and budgets. |
+| `crates/daftprompt-planner/src/investigation.rs` | Typed context gaps, bounded investigation contracts, validation, and yield. |
 | `crates/daftprompt-planner/src/render.rs` | Generic prompt and JSON rendering. |
 | `src/main.rs` | Add read-only plan inspection CLI. |
 | `epics/research/012-planner-thought-experiments.md` | Blocking real-prompt planning evidence. |
@@ -845,10 +1033,17 @@ boundary and separation from execution are requirements.
   precedence must remain visible.
 - A provenance graph can be incomplete without being obviously wrong. Plans
   must communicate coverage limits.
+- Small-model context enrichment can improve recall while obscuring provenance;
+  observed facts, interpretations, deterministic validation, and final
+  capable-model decisions must remain separate.
+- Deterministic triggers can still cause wasteful repeated investigations;
+  evaluation must tune coalescing, budgets, marginal-yield thresholds, and stop
+  conditions from real rows.
 - Deterministic rules can become a scattered language matrix. Capability facts
   and data-driven conventions should remain the shared boundary.
 - Commands inferred from configuration still require host authorization.
 - Real prompt fixtures may contain confidential project information; sanitize
   them while retaining the structural planning challenge.
-- Agent-specific adapters, execution engines, result collection, prompt-corpus
-  generation, learned ranking, and small-model selection are follow-up epics.
+- Agent-specific adapters, execution engines, model hosting/selection, result
+  collection, prompt-corpus generation, and learned ranking are follow-up
+  epics.

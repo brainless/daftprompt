@@ -43,15 +43,20 @@ The long-term direction is:
 
 1. Bring repository context into an explainable graph.
 2. Break work into small, focused actions or prompts.
-3. Run independent actions in parallel where the host supports it.
-4. Collect bounded, source-linked results.
-5. Give a capable model a focused synthesis or implementation prompt.
+3. Detect when the initial graph/search packet has explicit coverage gaps.
+4. Let a host run tightly bounded context investigations where useful.
+5. Validate model-discovered observations deterministically when possible.
+6. Collect bounded, source-linked results.
+7. Give a capable model a focused synthesis or implementation prompt.
 
 The graph-building process should itself be incremental and decomposable.
 Deterministic rules come first and remain explicit tuning points as the project
 learns from more repositories. A future planner may use a small model for
-ambiguous classification or prompt wording, but it must not ask a model to infer
-facts that repository structure or configuration can establish reliably.
+tightly scoped retrieval-gap investigation. A model may propose resources and
+relationships, but it must not author authoritative graph facts. Exact or
+structural observations become graph evidence only when the corresponding
+deterministic validator reproduces them; unsupported interpretations remain
+attributed candidates.
 
 This epic builds the provenance half of that direction. Epic 012 consumes it to
 produce plans.
@@ -101,6 +106,11 @@ For every prompt, write down:
 9. Whether relevant files or document sections changed over time, which source
    timestamps are trustworthy, and whether Git/non-Git reconciliation preserves
    the intended logical identity.
+10. Whether the initial result can state its source coverage, omissions, and
+    unresolved gaps rather than implying completeness.
+11. Whether a deterministic gap trigger plus a bounded, read-only small-model
+    investigation finds useful context that graph/search retrieval missed, and
+    which returned observations can be validated independently.
 
 The results must be committed as a design artifact under
 `epics/research/011-provenance-thought-experiments.md` (or an equivalently named
@@ -136,6 +146,11 @@ search.
 - Use semantic search only for candidate generation in v1.
 - Reconcile changed and deleted inputs incrementally.
 - Query and explain relevant subgraphs through a library API and CLI.
+- Return evidence packets that distinguish established graph paths, semantic
+  candidates, externally proposed candidates, coverage, omissions, and
+  unresolved gaps.
+- Accept bounded external candidate proposals through a validation boundary
+  without treating model output as authoritative evidence.
 - Surface strong document-code-history clusters only when multiple independent
   evidence paths support them.
 - Degrade safely when Git history, embeddings, or an individual detector is
@@ -144,6 +159,9 @@ search.
 ## Non-goals
 
 - Let an LLM author authoritative graph edges.
+- Execute or orchestrate small/tiny models or their tools; the graph only
+  exposes coverage/gaps and validates externally supplied candidate
+  observations.
 - Build a complete compiler-grade call graph or resolve dynamic dispatch.
 - Infer runtime behavior by executing indexed code.
 - Replace `items`, `items_fts`, or the existing vector partitions.
@@ -627,7 +645,79 @@ Chat-only output is outside the graph until a host exports it or an ingestion
 integration supplies it. The graph must identify the missing artifact rather
 than reconstructing or attributing unseen review content.
 
-### 13. Failures degrade, never panic
+### 13. Context packets expose coverage, candidates, and gaps
+
+A graph query can enumerate its indexed universe, but cannot prove that a
+bounded result contains every artifact relevant to a task. An empty graph
+neighborhood is not evidence that no implementation, test, decision, or
+rationale exists.
+
+Context-oriented queries therefore return a completeness contract alongside
+resources:
+
+```rust
+pub struct ContextEvidencePacket {
+    pub established: Vec<ExplainedResource>,
+    pub candidates: Vec<ContextCandidate>,
+    pub coverage: Vec<SourceCoverage>,
+    pub omissions: Vec<ContextOmission>,
+    pub unresolved_gaps: Vec<ContextGap>,
+}
+```
+
+The exact types are settled during Task 0 and Task 1, but the boundary must
+preserve:
+
+- source families queried and their index/detector versions;
+- established resources with complete evidence paths;
+- semantic-only candidates;
+- externally proposed candidates and their attribution;
+- unsupported artifact kinds, languages, or reference/runtime capabilities;
+- context-budget omissions;
+- zero-result searches as observations, not proof of absence;
+- unresolved gap kinds suitable for deterministic planner rules.
+
+Initial gap kinds should cover at least an unlinked requirement, ambiguous
+symbol collision, missing implementation path, missing test, unknown
+configuration, a committed code change with no linked decision/rationale,
+conflicting decision/PRD sections, unsupported source coverage, and exhausted
+candidate budget.
+
+### 14. Model-assisted context discovery remains outside the trust boundary
+
+A host or planner may deterministically trigger a short, read-only
+investigation when a context packet contains a recognized gap. The graph does
+not choose a model, render its prompt, execute tools, or decide whether to run
+the investigation.
+
+An external investigation may submit candidate findings containing:
+
+- investigator/model attribution and optional prompt/action identity;
+- seed graph resources and exact versions;
+- tool observations and queries attempted;
+- cited paths, symbols, spans, commits, and candidate relationships;
+- observed-versus-inferred classification;
+- confidence, unresolved ambiguity, and budget exhaustion.
+
+Model output is an attributed claim artifact. Deterministic validators may
+reproduce exact paths, symbols, source spans, references, configuration keys,
+and changed-file facts. Reproduced observations contribute the validator's
+normal evidence method, while retaining the investigation artifact as
+provenance. A model interpretation such as “implements filtered export” remains
+a candidate unless independent deterministic evidence supports that relation.
+
+Established evidence, semantic candidates, externally proposed candidates,
+validated observations, and unsupported claims must remain distinguishable in
+storage and query output. Model agreement is not an independent evidence
+method.
+
+Repeated investigations need stable attempt identity and measurable yield:
+new validated resources, new attributed candidates, duplicate findings,
+tool-call count, returned bytes, elapsed time when supplied by the host, and
+remaining gaps. This enables iterative evaluation without allowing recursive
+investigation to imply increasing confidence.
+
+### 15. Failures degrade, never panic
 
 - Missing embeddings skip semantic candidates.
 - A non-git folder omits commit and changed-file evidence.
@@ -638,6 +728,10 @@ than reconstructing or attributing unseen review content.
 - A malformed metadata row is logged and skipped.
 - One detector failure does not discard other detector output.
 - An incomplete graph remains queryable and identifies which detectors ran.
+- A failed, unavailable, or exhausted external context investigation leaves the
+  initial packet usable and reports the unresolved gap.
+- Malformed model-proposed candidates are rejected diagnostically and cannot
+  affect established graph evidence.
 
 ## Representative Graph Queries
 
@@ -705,6 +799,30 @@ Expected graph contribution:
 5. Treat cross-model agreement as claim agreement, not independent proof.
 6. Report a chat-only review as unavailable rather than inventing its contents.
 
+### Testing-sheet row context
+
+Input:
+
+> Examine this testing-sheet row. Cross-check the PRD and earlier decisions,
+> determine the relevant implementation and tests, and assemble the initial
+> context needed to decide whether to implement it.
+
+Expected graph contribution:
+
+1. Resolve the exact table snapshot, row, cells, and column meanings.
+2. Search document, code, test, and commit partitions independently.
+3. Expand strong seeds through containment, mentions, definitions, tests,
+   configuration, changes, and version history.
+4. Preserve parent requirement constraints and potentially superseding
+   decisions.
+5. Return established resources and semantic candidates separately.
+6. Report source coverage, budget omissions, missing reference/runtime
+   capabilities, and recognized context gaps.
+7. Accept externally proposed resources from a bounded investigation and
+   validate cited exact/structural observations deterministically.
+8. Never claim that the packet is complete or that a linked test proves the
+   reported behavior.
+
 ## Tasks
 
 ### Task 0: Run and pass the blocking thought experiments
@@ -730,6 +848,11 @@ Collect real prompts and repository evidence, execute the process defined in
   demonstrates when section continuity must not be inferred automatically.
 - [ ] At least one real cross-model review records original/revised document
   versions, review attribution, supported findings, and missing chat provenance.
+- [ ] At least one real per-row testing-sheet workflow compares graph-only,
+  search-plus-graph, and bounded model-assisted context retrieval.
+- [ ] The per-row experiment records a completeness contract, deterministic gap
+  triggers, model-proposed candidates, independently validated observations,
+  investigation budgets, and unresolved gaps.
 - [ ] This epic's schema, detector list, and task boundaries are revised from
   the findings.
 - [ ] The research artifact is reviewed and committed.
@@ -750,6 +873,10 @@ node, relation, evidence, candidate, build-report, and query-result types.
   represented without treating chunk ordinals or line numbers as stable IDs.
 - [ ] Review/analysis artifacts retain author kind, optional model identity,
   prompt provenance, and exact reviewed-version references when available.
+- [ ] Context packets distinguish established evidence, semantic candidates,
+  externally proposed candidates, coverage, omissions, and unresolved gaps.
+- [ ] External investigation attempts and findings retain attribution, seeds,
+  exact input versions, observed/inferred status, budget use, and yield.
 - [ ] Relation and evidence types serialize to stable string keys.
 - [ ] Unknown stored relation/evidence keys can be surfaced diagnostically
   rather than silently mapped to an unrelated variant.
@@ -773,6 +900,9 @@ build lifecycle, and explain queries.
   timestamps, and exact content identity without duplicating full item text.
 - [ ] Artifact inputs reference exact node versions and degrade explicitly to a
   node-level link when the reviewed version is unavailable.
+- [ ] Persisted context-investigation artifacts retain exact seed/input
+  versions, attempt identity, observed/inferred findings, budgets, yield, and
+  validation status without making candidate claims authoritative edges.
 - [ ] Edge and evidence first/last observation fields survive unchanged rebuilds
   and advance only according to completed build semantics.
 - [ ] All timestamps are UTC RFC 3339 and authored time is distinguishable from
@@ -804,7 +934,7 @@ incremental reconciliation.
 - [ ] One malformed/unreadable commit diff logs and continues where possible.
 - [ ] `cargo check --workspace` passes.
 
-### Task 4: Import corpus and structural nodes
+### Task 4: Import corpus, tables, and structural nodes
 
 Import item-backed nodes and create repository/file/test/tool virtual nodes.
 Build containment, definition, and commit-change edges.
@@ -815,6 +945,9 @@ Build containment, definition, and commit-change edges.
 - [ ] Code/document nodes link to normalized containing files.
 - [ ] Document chunks link to their file and, when metadata permits, heading
   hierarchy.
+- [ ] CSV records and Markdown-table rows/cells can enter through the normalized
+  corpus boundary with exact snapshot versions, headers, source spans, and
+  conservative logical identity.
 - [ ] Stable heading anchors identify addressable document sections; line ranges
   and chunk ordinals remain locators.
 - [ ] Paragraph/sub-paragraph evidence can carry precise source spans without
@@ -823,6 +956,8 @@ Build containment, definition, and commit-change edges.
   identity through the same corpus API.
 - [ ] Saved reviews are imported as distinct attributed nodes; Git author
   metadata alone never creates model-authorship evidence.
+- [ ] Imported table rows/cells retain exact snapshot provenance; row position
+  is a locator rather than stable logical identity.
 - [ ] Code symbols link to their defining file.
 - [ ] File classification does not relabel all files containing “test” as tests;
   conventions are explicit and tested.
@@ -859,6 +994,11 @@ source constraints and conservative validation.
 - [ ] Common repository words alone cannot create high-confidence edges.
 - [ ] Semantic-only evidence is labeled and cannot masquerade as structural or
   exact evidence.
+- [ ] Externally proposed candidates cannot create durable authoritative edges
+  without deterministic validation.
+- [ ] Deterministic validators can reproduce cited exact paths, symbols, spans,
+  references, configuration, and changed-file observations while retaining
+  proposal provenance.
 - [ ] FTS5-only operation remains useful when the embedder is unavailable.
 - [ ] Fixture tests include compelling near matches and misleading false
   friends.
@@ -885,6 +1025,10 @@ strong-cluster queries.
   independent evidence.
 - [ ] Deleted files/items remove stale active evidence.
 - [ ] Query results include paths, confidence, and all supporting evidence.
+- [ ] Context queries include source coverage, unsupported capabilities,
+  budget omissions, semantic/external candidates, and unresolved gaps.
+- [ ] Failed or exhausted context-investigation attempts do not invalidate the
+  initial graph packet and remain measurable.
 - [ ] Strong clusters enforce the corroboration rules in Design Decision 10.
 - [ ] Results use deterministic tie breaking.
 
@@ -928,6 +1072,9 @@ Exact flags may change during Task 0.
 | Document identity | heading continuity, inserted text, duplicate/renamed headings, ambiguous matches |
 | Review provenance | exact reviewed version, saved/chat-only review, prompt/model attribution, unsupported claims |
 | Cross-model comparison | agreement versus independent repository evidence, conflicts, missing attribution |
+| Table context | snapshot/row/cell identity, row reorder/edit ambiguity, source spans |
+| Context completeness | source coverage, unsupported capabilities, omissions, zero results, unresolved gaps |
+| External candidates | attribution, bounded attempts, observed/inferred split, deterministic validation, yield |
 | Exact detectors | paths, symbols, collisions, quoted/backticked forms |
 | Test/tool detection | conventions across Rust, Python, JS/TS |
 | Lexical detection | rare overlap, common-token rejection |
@@ -948,6 +1095,7 @@ Exact flags may change during Task 0.
 | `crates/daftprompt-graph/src/schema.sql` | Graph tables and indexes. |
 | `crates/daftprompt-indexer/src/schema.sql` | Add normalized commit-file facts if integration ownership remains here. |
 | `crates/daftprompt-indexer/src/lib.rs` | Populate/reconcile commit changed-file data and expose corpus integration. |
+| `crates/daftprompt-indexer/src/tables.rs` | Candidate deterministic CSV/Markdown-table extraction and normalized row/cell metadata, if owned by the indexer. |
 | `src/main.rs` | Add graph CLI integration. |
 | `epics/research/011-provenance-thought-experiments.md` | Blocking real-prompt design evidence. |
 | `README.md`, `DEVELOP.md`, `AGENTS.md` | Document graph behavior and commands. |
@@ -963,6 +1111,11 @@ than requiring a premature file layout.
 - Common domain language may produce convincing false lexical matches.
 - Symbol references are not a compiler call graph. A future reference indexer
   should add distinct evidence rather than strengthening lexical edges.
+- Model-assisted retrieval can improve recall while quietly weakening
+  provenance; externally proposed findings must remain candidates until
+  independently validated.
+- Repeated bounded investigations can still waste time if attempt identity,
+  duplicate findings, marginal yield, and stop conditions are not measured.
 - Very large repositories need detector work queues and bounded candidate sets.
 - Framework-specific project detectors may eventually become plugins or data
   packs.
