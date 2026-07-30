@@ -13,10 +13,11 @@ returns the deterministic initial packet, coverage, and gap diagnostics.
 
 The shipped adapter will use `~/Projects/llm-sdk/` through an OpenAI-compatible
 API. Model choice is a closed supported-model value rather than an arbitrary
-string. The initial supported set and default remain intentionally unsettled
-until manual testing measures retrieval quality, correct bounded tool use,
-latency, and cost. Recorded fixtures exercise planner core without credentials
-or network access.
+string. The first manual run used Groq `openai/gpt-oss-20b`. It obeyed
+closed-tool and call/byte/time budgets and had useful recall, but validation
+rejected several confident interpretations and its complete-coverage claim.
+Model selection remains unsettled pending broader comparison. Recorded fixtures
+exercise planner core without credentials or network access.
 
 ## Experiment 1: Cross-model review of akar Epic 020
 
@@ -325,6 +326,25 @@ types, `investigate_context_gap`, `validate_context_candidates`, and
 candidate-versus-observation validation, attempt/yield diagnostics, and
 conditional mutation boundaries.
 
-Its value must be established empirically by replaying historical rows and
-comparing search-only, graph-only, search-plus-graph, and bounded-enrichment
-retrieval against the artifacts the capable agent ultimately used.
+The real Sri `LOG-019` replay, provenance, practical relevance set, four-way
+comparison, GPT-OSS metrics, and independent validation are recorded in the
+Epic 011 research artifact under “Real Keystone LOG-019 replay and fixed-budget
+helper run.”
+
+Planner policy changes from the run:
+
+- a helper's empty gap list cannot clear deterministic host gaps;
+- three repeated searches consumed 13,142 result bytes without adding a
+  validated resource beyond search-plus-graph, so duplicate/marginal yield is
+  a host stop signal;
+- exact observations may be promoted after validation, while requirement
+  satisfaction, test-scope equivalence, and history remain claims;
+- a history finding without a recorded history-tool observation fails
+  validation structurally;
+- packet rebuilding unions host gaps with validated additions and retains the
+  exact-test, runtime, requirement, and upstream-lineage gaps the helper omitted.
+
+`investigate_context_gap` returns proposed gap dispositions, not authoritative
+ones. `validate_context_candidates` checks claimed evidence kind against tool
+observations. `assemble_context_packet` never replaces host gaps with the
+model's list.

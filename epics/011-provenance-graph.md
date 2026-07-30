@@ -904,7 +904,7 @@ Collect real prompts and repository evidence, execute the process defined in
   demonstrates when section continuity must not be inferred automatically.
 - [x] At least one real cross-model review records original/revised document
   versions, review attribution, supported findings, and missing chat provenance.
-- [ ] At least one real per-row testing-sheet workflow compares graph-only,
+- [x] At least one real per-row testing-sheet workflow compares graph-only,
   search-plus-graph, and bounded model-assisted context retrieval.
 - [ ] At least one real multi-file implementation epic is split into shared
   context and tasks, queried at an exact pre-implementation repository version,
@@ -912,7 +912,7 @@ Collect real prompts and repository evidence, execute the process defined in
 - [ ] The multi-file experiment distinguishes requested future changes from
   observed graph facts, overlapping task scope from exclusive ownership, and
   static retrieval from runtime/build discoveries.
-- [ ] The per-row experiment records a completeness contract, deterministic gap
+- [x] The per-row experiment records a completeness contract, deterministic gap
   triggers, model-proposed candidates, independently validated observations,
   investigation budgets, and unresolved gaps.
 - [ ] This epic's schema, detector list, and task boundaries are revised from

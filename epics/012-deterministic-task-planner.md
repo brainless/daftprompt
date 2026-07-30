@@ -847,10 +847,10 @@ plans with the actual work previously done, and revise this epic.
   should be removed, delayed, or made manual.
 - [ ] At least one experiment demonstrates missing graph evidence and feeds a
   concrete follow-up into Epic 011 or a later epic.
-- [ ] At least one real per-row testing-sheet experiment compares search-only,
+- [x] At least one real per-row testing-sheet experiment compares search-only,
   graph-only, search-plus-graph, and bounded model-assisted retrieval against
   the artifacts a capable agent ultimately used.
-- [ ] At least one experiment records deterministic context-gap triggers,
+- [x] At least one experiment records deterministic context-gap triggers,
   read-only tool/budget contracts, validated versus candidate findings,
   investigation yield, and stop/escalation behavior.
 - [ ] At least one experiment covers a real cross-model plan review and

@@ -391,6 +391,92 @@ which channel found each useful artifact. Classify every miss as unindexed
 source, missing seed, missing edge, insufficient expansion, budget omission,
 cross-repository evidence, runtime-only evidence, or later-discovered need.
 
+### Real Keystone LOG-019 replay and fixed-budget helper run
+
+This replay uses Sri's `LOG-019` row dated 2026-07-23, not the unrelated Liz
+`LOG-019` row dated 2026-07-28. The source CSV is ignored by Git and remains
+private. Its local snapshot is identified without committing raw content:
+
+```text
+local path: misc_documents/Sri_Testing_Test_Log.csv
+size: 11,498 bytes
+Git blob hash: 99a1f135b4de4a9d537ee7e9df56115f412dfd07
+SHA-256: 2871d581df184d001f0aa38629181eee18d3f636817094036b38e47aa6338d46
+observed mtime: 2026-07-27T22:18:33+05:30
+row key/date: LOG-019 / 2026-07-23
+```
+
+No upstream Google revision, formula/comment history, or stable record ID is
+available. Code and documents were evaluated at immutable Keystone commit
+`5f4562688fd7dcf2101b88cf05c7d6e4bf0d22a4`. Its cross-check is the
+historical capable-agent result. The helper received a behaviorally faithful
+sanitized row abstraction, never the private row.
+
+The result's practical relevance set was: the row; `PRD.md` §5.4 (blob
+`00a009f82728930d7dabafd921b8eee720123937`); the global route
+(`cb0e3d1ed0771920cb46dab6b82a5119e38ad282`); `OverdueCertBanner`
+(`2d3bfbb4e043cb7cf020b739d29412bdbd6cfa1a`); and history, especially
+`91ab196`, `c06a7ad`, and `ce96e3a`. The cross-check blob is
+`3e7608182aad6e708e4add0736323a34058fa917`. A focused test candidate,
+`e2e/tests/dashboard/overdue-banner.spec.ts`
+(`1444d2c08b57ccb5eb78cde3d921ec116b9a7a2a`), verifies a property
+dashboard, not global-page expansion or a start action.
+
+#### Four-way comparison
+
+Exact tracked-source search for `LOG-019` returned only the cross-check because
+`misc_documents/` is ignored. A broad recertification/overdue/action search
+returned 54 files and could not retrieve history.
+
+No production graph exists. “Graph-only” is an expected-result simulation using
+only exact/structural facts: snapshot contains row; cross-check heading
+identifies row; explicit paths identify resources; route renders the banner;
+containment identifies spans; and Git changed-file facts identify commits. No
+semantic `implements` or `tests` edge is assumed.
+
+| Mode | Practical-set recall | Irrelevant context | Packet sufficiency | Cost |
+|---|---:|---|---|---|
+| search only | 4/5; no history | high: 54 files | insufficient without filtering/history | 2 local queries |
+| simulated graph only | 5/5 expected | low | sufficient for static review; runtime gap | 5 expansions; 17,183 focused bytes |
+| search + simulated graph | 5/5 expected, plus test candidate | low after validation | best deterministic packet; test/runtime gaps explicit | 2 searches + 5 expansions |
+| plus bounded helper | 4/5 submitted; no history | low volume, high interpretive risk | insufficient until host validation restores gaps | 4 calls; 13,155 result bytes; 7,670 tokens; 2,243 ms |
+
+These are fixture expectations, not production graph performance.
+
+#### Bounded run and validation
+
+Triggers were: no implementation path linked to the row, no focused behavior
+test, and a topically inconsistent cited PRD section. `groq_context_gap` ran
+Groq `openai/gpt-oss-20b`, template `keystone-context-gap-v1`, low reasoning,
+temperature zero, 512 completion tokens/round, 30 seconds/request, at most five
+sequential calls, and 12 KiB/result. Its finite catalog allowed search,
+allowlisted revision-pinned excerpt/history reads, and structured submission;
+it had no shell, mutation, arbitrary paths, or recursion.
+
+It stopped after three searches and submission, leaving one call unused. No
+search returned zero results. Usage was 7,083 prompt and 587 completion tokens;
+result bytes were 194, 5,501, 7,447, and 13; latencies were 683, 307, 391, and
+862 ms.
+
+Independent validation classified:
+
+- route renders banner: **validated**;
+- expansion contains a unit table and actions: **validated**;
+- `UT-153` exists: **validated but narrower than the reported workflow**;
+- PRD §5.4 requires a per-unit list/start action: **rejected**;
+- `View unit` proves the requested workflow is satisfied: **rejected**;
+- UI history belongs to `5f45626`/`certification_router`: **rejected**; no
+  history tool was called, and Git identifies the three earlier commits.
+
+Yield was three observations, one behavior-mismatched test candidate, zero new
+validated resources beyond search-plus-graph, and three rejected/overstated
+interpretations. The helper wrongly returned no gaps. The host must retain: no
+exact global-page test, no runtime reproduction in this run, no written
+requirement for the requested start action, and unavailable upstream lineage.
+This supports the helper as a candidate generator, not a coverage or
+relationship authority. Repeated searches justify duplicate/marginal-yield
+diagnostics and early stop when validated marginal yield is zero.
+
 ## Experiment 3: Multi-file ownership refactor from a task-split epic
 
 ### Repository and hypothetical workflow
@@ -1095,11 +1181,10 @@ assertions against the eventual Task 0 harness.
 
 Still blocked:
 
-- The real Keystone LOG-019 row identified after Experiment 2 still needs to
-  replace the sanitized representative row and execute graph-only,
-  search-plus-graph, and bounded-helper comparisons.
-- No deterministic-gap-triggered, fixed-budget small/tiny-model investigation
-  has been executed and independently validated.
+- The real Keystone LOG-019 comparison and deterministic-gap-triggered,
+  fixed-budget GPT-OSS 20B investigation are complete. Graph-only results
+  remain labelled simulations until implementation; findings-driven detector
+  and task-boundary revisions remain to finish.
 - The commit, non-Git document, and ambiguous-heading policies need
   reproducible expected-result fixtures rather than source inspection alone.
 - Epic 018 needs a per-task shared-context/retrieval-versus-diff table.
