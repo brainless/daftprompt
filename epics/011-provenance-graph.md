@@ -314,11 +314,12 @@ Store commit-file facts in a normalized table rather than burying the only copy
 inside commit metadata JSON. Metadata may include a summary for display, but
 graph building and reconciliation require queryable rows.
 
-Merge commits and root commits need explicit, tested semantics. The initial
-policy may compare each commit to its first parent, but the choice must be
-documented in code and in this epic's thought experiments. Renames should retain
-old and new paths when gitoxide exposes them reliably; otherwise represent the
-observed delete/add pair honestly.
+Root commits compare against the empty tree. Merge commits retain a separate
+change set for every named parent; the first-parent set is the default query
+view, not the only stored truth. Callers may request another parent or all
+parent-relative sets. Renames should retain old and new paths when gitoxide
+exposes them reliably; otherwise represent the observed delete/add pair
+honestly.
 
 ### 6. Graph schema lives beside, not inside, the text indexes
 
@@ -327,10 +328,12 @@ Proposed schema:
 ```sql
 CREATE TABLE IF NOT EXISTS commit_files (
     commit_sha TEXT NOT NULL,
+    parent_sha TEXT,
+    parent_index INTEGER NOT NULL,
     file_path TEXT NOT NULL,
     previous_path TEXT,
     change_kind TEXT NOT NULL,
-    PRIMARY KEY (commit_sha, file_path, change_kind)
+    PRIMARY KEY (commit_sha, parent_index, file_path, change_kind)
 );
 
 CREATE TABLE IF NOT EXISTS graph_builds (
@@ -424,6 +427,10 @@ CREATE TABLE IF NOT EXISTS graph_detector_state (
     PRIMARY KEY (detector, input_key)
 );
 ```
+
+For a root commit, `parent_sha` is NULL and `parent_index` is 0. Merge parents
+use their Git order beginning at 0. This preserves facts that differ by parent
+without inventing a parent-independent change.
 
 The exact schema may change during Task 0. Foreign keys and cascade behavior
 must be tested with SQLite foreign-key enforcement enabled. Graph migrations
@@ -881,13 +888,13 @@ Collect real prompts and repository evidence, execute the process defined in
 
 #### Acceptance Criteria
 
-- [ ] At least six real prompts from at least three other repositories are
+- [x] At least six real prompts from at least three other repositories are
   documented.
-- [ ] The required prompt categories are represented.
-- [ ] Every prompt includes desired steps, required nodes, required edges,
+- [x] The required prompt categories are represented.
+- [x] Every prompt includes desired steps, required nodes, required edges,
   deterministic evidence, gaps, and expected graph benefit.
-- [ ] At least four prompts meet the “materially useful” threshold.
-- [ ] False-positive and missing-evidence cases are documented, not removed from
+- [x] At least four prompts meet the “materially useful” threshold.
+- [x] False-positive and missing-evidence cases are documented, not removed from
   the report.
 - [ ] Commit changed-file semantics are tested against at least one merge, root
   commit, rename, deletion, and ordinary modification.
@@ -895,7 +902,7 @@ Collect real prompts and repository evidence, execute the process defined in
   logical identity, immutable version identity, and observation timestamps.
 - [ ] At least one heading rename, duplicate heading, or ambiguous section edit
   demonstrates when section continuity must not be inferred automatically.
-- [ ] At least one real cross-model review records original/revised document
+- [x] At least one real cross-model review records original/revised document
   versions, review attribution, supported findings, and missing chat provenance.
 - [ ] At least one real per-row testing-sheet workflow compares graph-only,
   search-plus-graph, and bounded model-assisted context retrieval.
@@ -911,7 +918,7 @@ Collect real prompts and repository evidence, execute the process defined in
 - [ ] This epic's schema, detector list, and task boundaries are revised from
   the findings.
 - [ ] The research artifact is reviewed and committed.
-- [ ] Tasks 1–8 have not begun before every Task 0 criterion is checked.
+- [x] Tasks 1–8 have not begun before every Task 0 criterion is checked.
 
 ### Task 1: Add the graph crate and stable domain model
 
@@ -984,7 +991,8 @@ incremental reconciliation.
 - [ ] Identical blobs at different paths do not merge copied files into one
   logical node.
 - [ ] Root and merge commit comparison policy matches the Task 0 decision and
-  is covered by repository fixtures.
+  is covered by repository fixtures, including the empty-tree root case and
+  distinct parent-relative merge results with a first-parent default view.
 - [ ] Paths are repository-relative with forward slashes.
 - [ ] Reindexing removes stale `commit_files` rows.
 - [ ] A commit node can connect through `changes` to file nodes.

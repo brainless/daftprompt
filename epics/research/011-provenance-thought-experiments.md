@@ -771,3 +771,338 @@ Important misses and limitations:
 9. The graph can extract what the epic explicitly requests and connect it to
    current evidence; synthesis of a concrete implementation remains planner or
    capable-model work.
+
+## Experiment 4: Six real prompt thought experiments across three repositories
+
+### Corpus and provenance policy
+
+The corpus was selected from the local OpenCode and Codex histories with the
+project-scoped `nocodo/scripts/prompt-log` extractor. Bulk prompt text remained
+outside this repository. The table records only the minimum intent needed to
+make the experiment reviewable.
+
+| Case | Repository/session | Real prompt intent | Required category |
+|---|---|---|---|
+| 4A | `dwata`, `ses_3ce0ebc85ffePGWQYna0iXJx4k` | Implement the financial-data-extractor task from the development guide. | requirement implementation, Rust/Cargo |
+| 4B | `dwata`, `ses_332cfb80fffeuT0mf7uH3MILGw` | Use Git history to compare two inspection paths and remove the obsolete binary if redundant. | Git rationale |
+| 4C | `dwata`, `ses_32f864e74ffe20I9LBUMepIafw` | Reproduce an email-cleaning defect with a focused test and reconcile CLI/API behavior. | bug investigation, tests/tooling |
+| 4D | `dwata`, `ses_2b652aa68ffe2LfLjsdvatiGtg` | Fix a Unicode byte-boundary panic in email ranking. | bug investigation, Rust/TypeScript |
+| 4E | `nocodo`, `ses_1a6b93488ffev1JWW7or7kJNSr` | Build Tree-sitter extraction and a persisted identifier index for coding agents. | multi-file implementation, Rust/Tree-sitter |
+| 4F | `akar`, `019f8dcc-64a6-7bb3-989f-388848876bc6` | Implement Epic 018 task by task, reviewing, testing, updating status, and committing each task. | task-split epic, tests/tooling |
+
+OpenCode did not record a checkout SHA for Cases 4A–4E. Their pre-versions are
+therefore reconstructed from the last pre-session commit and the parent of the
+matching post-work commit. Timestamp and diff agreement is strong evaluation
+evidence but not proof of prompt-to-commit causality. Case 4F has exact Codex
+session metadata: checkout
+`0a381f8ebd434b5308fe7d73ea068dd10ed8e841` on `main`.
+
+The six cases use the same eleven-question worksheet below. Each packet must
+return established paths separately from semantic candidates, attributed
+conversation/runtime observations, source coverage, omissions, and unresolved
+gaps.
+
+### Case 4A: Financial extractor task
+
+1. **Steps:** read `DEVELOP.md` and the task; inspect the existing financial
+   pattern schema/extractor; create and register `dwata-agents`; implement the
+   agent, storage, tools, API/config/routes, shared types, and tests.
+2. **Nodes:** the task version, development guide, workspace manifests,
+   financial-pattern storage, agent/storage/tool symbols, handler, route,
+   configuration key, tests, and commits `2e504f8`, `33a3882`, and `d0db807`.
+3. **Edges:** containment, exact path/symbol mentions, Cargo dependencies,
+   definitions/imports, route/configuration, tests, and commit changed-file
+   facts. Requested changes remain claims rather than observed implementation.
+4. **Evidence:** path literals, Cargo member/dependency declarations,
+   Tree-sitter definitions and references, route/config identifiers, and Git
+   trees/diffs. The task was not committed at prompt time and appears in Git
+   only later; reconcile a captured non-Git hash to the later blob rather than
+   inventing an earlier Git version.
+5. **Gaps:** prompt-time dirty state, exact checkout, task snapshot, command
+   results, runtime behavior, and causal prompt-to-commit attribution.
+6. **Semantic candidates:** generic agent/session/storage vocabulary may find
+   useful precedents, but only exact imports, schema identifiers, paths,
+   routes, or configuration references validate them.
+7. **Rediscovery:** DB ownership, route conventions, nocodo integration, test
+   commands, and whether the proposed tools actually save/test patterns.
+8. **Benefit:** materially useful. The task, existing pattern implementation,
+   workspace manifest, and handler/configuration form a focused packet.
+9. **Identity/time:** code paths and symbols retain logical identity across
+   immutable Git blobs. Conversation time is not repository version time; file
+   mtime is not authored time.
+10. **Coverage:** Git/code/doc coverage is useful, while the untracked task,
+    exact checkout, shell output, and external nocodo source remain omitted.
+11. **Gap helper:** not run under the fixed-budget protocol. Missing task
+    provenance and storage/test coverage are appropriate future triggers.
+
+False-positive controls include generic `Agent`, `Session`, `Message`, and
+`execute` matches, co-change without dependency, and treating every requested
+task item as shipped. `2e504f8` is post-work evaluation evidence: 19 changed
+files and 889 insertions.
+
+### Case 4B: History check and obsolete binary removal
+
+1. **Steps:** inspect recent history; recover additions, deletions, and renames;
+   compare the two inspectors and backend path; inspect Cargo registration;
+   remove only the redundant binary; verify the workspace.
+2. **Nodes:** `1928d38`, `6d1d2fc`, both inspector versions, Cargo bin target,
+   reverse-template and variable-extractor modules, renamed agent symbol, and
+   deletion tombstone.
+3. **Edges:** commit add/delete/rename/change facts, manifest configuration,
+   definitions/imports/calls, and low-confidence similarity between inspectors.
+4. **Evidence:** Git status and similarity records, exact `[[bin]]` entries,
+   AST/import references, and the `6d1d2fc` deletion of the 259-line binary plus
+   its manifest entry.
+5. **Gaps:** behavioral equivalence, executed verification, exact checkout, and
+   complete symbol continuity through a partial rename.
+6. **Semantic candidates:** filename/import overlap proposes comparison;
+   shared call sequences and types validate observations. Similar filenames
+   alone do not establish duplication.
+7. **Rediscovery:** historical blobs, full control-flow comparison, backend
+   authority, Cargo target discovery, and build/test results.
+8. **Benefit:** materially useful. History immediately focuses the two
+   inspectors, Cargo registration, renamed modules, deletion, and rationale.
+9. **Identity/time:** the inspectors are separate logical files. Rename
+   evidence preserves both path versions and confidence; deletion closes the
+   active version without erasing history.
+10. **Coverage:** strong Git/path/manifest/AST coverage; runtime equivalence,
+    exact checkout, uncommitted edits, and build results remain unresolved.
+11. **Gap helper:** not run. A bounded comparison of only the two blobs,
+    manifest stanza, backend path, and types is the appropriate experiment.
+
+The commit message is attributed rationale, not independent proof of
+equivalence. A durable `duplicate_of` edge is deliberately rejected.
+
+### Case 4C: Email-content test and normalization refactor
+
+1. **Steps:** reproduce email 1479 with the documented CLI; trace CLI/API
+   normalization and HTML fallback; find tests; add and run a regression;
+   compare call order; update accepted callers; verify.
+2. **Nodes:** `DEVELOP.md`, `inspect_email_content`, normalization/cleaning/HTML
+   helpers, API and template/financial callers, value extraction, tests, Cargo
+   targets, runtime email observation, and `79dc8bc`.
+3. **Edges:** definitions, exact references/imports, configuration of commands,
+   test targets, changed files, and attributed runtime/prompt observations.
+4. **Evidence:** exact CLI path, Rust definitions and calls, Git parent/diff,
+   and test invocations where preserved. Email content and output are runtime
+   evidence, not repository facts.
+5. **Gaps:** local DB row/version, actual CLI output, dynamic LLM behavior,
+   compiler-grade calls, reverted uncommitted tests, and semantic correctness.
+6. **Semantic candidates:** cleaning/normalization/HTML vocabulary proposes
+   helpers; exact paths, imports, calls, and test invocations validate them.
+7. **Rediscovery:** trace CLI and API paths, inspect fallback behavior, execute
+   DB-backed reproduction, and diagnose value reconstruction.
+8. **Benefit:** materially useful. The CLI seed expands to normalization,
+   callers, value extraction, and verification commands.
+9. **Identity/time:** paths retain logical identity across parent and
+   `79dc8bc`; the external email needs captured content identity beyond ID 1479.
+10. **Coverage:** exported conversation, Git diff, Rust symbols, and documented
+    commands are covered; tool trace, DB/MIME version, model output,
+    uncommitted diffs, and runtime equivalence are not.
+11. **Gap helper:** not run. The historical agent found API/financial callers
+    iteratively, but this was not a controlled bounded retrieval experiment.
+
+The report retains failed hypotheses and the explicitly reverted first test and
+fix. `79dc8bc` changed six files, showing why reference expansion is material.
+
+### Case 4D: Unicode byte-boundary panic
+
+1. **Steps:** open the supplied file/line, confirm both unsafe slices, find a
+   caller and focused test, add a Unicode regression, replace byte slicing,
+   and run the focused Cargo/CLI gate.
+2. **Nodes:** runtime panic observation, `email_ranking/mod.rs::contains_date`,
+   ranking CLI/caller, dateparser configuration, tests, and `8165cd2`. A later
+   GUI date request is a separate task despite sharing the commit.
+3. **Edges:** exact prompt path/span, definition/reference, test/configuration,
+   and commit-change facts.
+4. **Evidence:** the parent source slices at byte minima 50 and 100; the panic
+   locates byte 100 inside U+200C; the diff uses character iteration.
+5. **Gaps:** frozen runtime input, executed test/CLI results, complete calls,
+   and whether character rather than grapheme/display count matches intent.
+6. **Semantic candidates:** Unicode/byte-boundary terms find unsafe slicing;
+   exact spans and caller references validate. Unrelated UI formatting is
+   rejected.
+7. **Rediscovery:** little is needed to locate the fault because the prompt
+   already gives it; test/caller/tool retrieval supplies the possible benefit.
+8. **Benefit:** borderline control case. It passes only if replay adds a
+   focused test/tool or caller to the supplied high-value line.
+9. **Identity/time:** stable Rust file, new blob, and an attributed runtime
+   observation tied to a reconstructed pre-state.
+10. **Coverage:** prompt, response, parent source, and diff are covered; exact
+    checkout, reproduction, input, test execution, and full references are not.
+11. **Gap helper:** not run.
+
+The response claimed success without preserved verification. Co-change with
+`Emails.tsx` must not create a dependency edge.
+
+### Case 4E: Tree-sitter extractor and identifier index
+
+1. **Steps:** inspect design documents and the existing codebase index; examine
+   representative Rust shapes; settle extraction APIs and SQLite ownership;
+   implement queries, extraction, index/reindex, lookup, tests, and docs.
+2. **Nodes:** design documents, existing scanner/source discovery, manifests,
+   DB/schema precedents, representative external symbols, new extractor/index
+   modules, tests, and `8c320c3`.
+3. **Edges:** containment, exact document paths/symbols, dependencies,
+   definitions/references, tests, changed files, and requested-change claims.
+4. **Evidence:** literal paths/identifiers, AST containment and canonical
+   symbols, Cargo declarations, SQLite DDL, and exact Git diff/name status.
+5. **Gaps:** exact checkout, prompt causality, cross-repository `rustysolid`
+   evidence, runtime serialization, private tool traces, and design judgments.
+6. **Semantic candidates:** reuse and persistence vocabulary proposes scanner
+   and DB precedents; imports/query APIs/source-walking/SQLite use validate.
+7. **Rediscovery:** schema ownership, template code shapes, duplicate names,
+   traits, and dependency compatibility. Build-time Tree-sitter incompatibility
+   and an SQL insertion failure were runtime discoveries.
+8. **Benefit:** materially useful. Exact seeds focus the existing index,
+   manifests, design, and DB precedents.
+9. **Identity/time:** parent `72b5070` is inferred; `8c320c3` and its blobs are
+   exact post-work versions. No cross-repository edge is created.
+10. **Coverage:** nocodo Rust/docs/history at the inferred parent; exclude
+    external repositories, generated DB contents, exact tool output, and
+    unsupported namespaces.
+11. **Gap helper:** not run. Dependency compatibility, trait implementations,
+    duplicate identifiers, and DB ownership are appropriate bounded gaps.
+
+Lexical same-name collisions, re-exports, and parse failures remain explicit
+false-positive/false-absence risks.
+
+### Case 4F: Akar Epic 018 task-by-task implementation
+
+1. **Steps:** load the exact epic and shared context; split tasks; retrieve
+   affected input/core/widget/C-ABI/example/test nodes; implement and review
+   each task; run focused tests; update status; commit separately.
+2. **Nodes:** exact Epic 018 version/tasks, winit translation, core input and
+   context types, `text_input`, `textarea`, shared edit engine, C bridge,
+   examples/scripts/tests, tool/environment nodes, and task commits.
+3. **Edges:** epic containment, exact task mentions, module containment,
+   consumer/reference and test candidates, build configuration, changed files,
+   and requested-change claims distinct from implementation facts.
+4. **Evidence:** exact session checkout, task spans, definitions/imports/calls,
+   commit parents and changed files, scripts/tests/manifests, and epic status
+   changes. Runtime claims require preserved command output.
+5. **Gaps:** sub-agent authorship and prompts, exact review artifacts, runtime
+   rendering, platform semantics, headless GPU classification, and later-task
+   causality.
+6. **Semantic candidates:** duplicated editing/cursor behavior can propose both
+   widgets and bridges; exact references and build declarations validate them.
+7. **Rediscovery:** winit behavior, migrated callers, platform shortcuts,
+   script timing, C ABI compatibility, and GPU/window constraints. Compilation
+   exposed initially missed `textarea` and caller work.
+8. **Benefit:** materially useful. The exact pre-version and task seeds produce
+   several focused artifacts per task without contamination from later code.
+9. **Identity/time:** checkout `0a381f8` is exact. Each task commit supplies
+   immutable blobs and Git times; task-section versions bind to the epic blob.
+10. **Coverage:** indexed Rust/docs/history at `0a381f8`, focused tests/scripts,
+    and task commits; missing worker artifacts, raw command traces, runtime GPU
+    coverage, and later sessions are disclosed.
+11. **Gap helper:** not run. Implementation delegation is not a bounded,
+    read-only context investigation.
+
+Commit subjects and task checkboxes do not prove completion. Overlapping task
+scope prevents exclusive file ownership. The real task commits
+`99233d8`, `e85c639`, `8b0ca1a`, and `2de8be8` are evaluation evidence.
+
+### Corpus conclusion
+
+Cases 4A, 4B, 4C, 4E, and 4F meet the material-usefulness threshold. Case 4D is
+retained as a borderline/negative control. The corpus therefore passes the
+four-of-six gate while preserving false positives, failed hypotheses, missing
+evidence, and runtime-only discoveries.
+
+No case completed the fixed-budget, deterministic-gap-triggered small-model
+comparison. The historical agent conversations are not substitutes: they were
+capable implementation/investigation sessions with broader tools and incomplete
+tool provenance. That acceptance criterion remains blocked.
+
+## Experiment 5: Commit changed-file semantics
+
+The following real history cases were inspected:
+
+| Kind | Repository/commit | Observed policy evidence |
+|---|---|---|
+| root | `akar` `311e7d6` | no parent; adds `LICENSE`; compare against the empty tree |
+| merge | `dwata` `f14ac5c` | parents `90f8e7f9` and `070cbe83`; retain parent-relative change sets and use first parent only as the documented default |
+| rename | `nocodo` `18bb8b4` | `DBDeveloperPage.tsx` → `DatabasePage.tsx` at 99% similarity, among other renames; preserve old/new paths and confidence |
+| deletion | `akar` `3e17af8` | deletes `CLAUDE.md`; close the current version/edges but retain the logical node and history |
+| modification | `akar` `13d7692` | modifies `stat.rs` and demo `main.rs`; stable logical paths receive new immutable blob versions |
+
+Merge changes are facts relative to a named parent. The graph must not flatten
+different parent-relative statuses into one supposedly absolute merge diff.
+When rename detection is unavailable, an honest delete/add pair is preferable
+to invented continuity.
+
+## Experiment 6: Document version and section identity
+
+### Git-backed edit
+
+Experiment 1's Epic 020 path is one stable logical document with exact blobs
+`git-sha1:cff1699...` and `git-sha1:4987828...`. Git records source commit time;
+daftprompt observation time remains separate. The revision changed and split
+headings, including the original TextStyle discussion and Tasks 1–10 into a
+revised lifecycle/layout/typography structure and Tasks 1–11. Exact diff and
+content evidence support version lineage, but heading text alone does not prove
+one-to-one section continuity.
+
+### Non-Git edit
+
+A temporary non-Git `guide.md` was observed through four states:
+
+| State | Observed at | Observation | XXH3 |
+|---|---|---|---|
+| T1 | `2026-07-30T16:24:55+05:30` | `Alpha configuration uses port 6624.` | `cca361ed4bf26501` |
+| T2 | `2026-07-30T16:25:01+05:30` | touch only; mtime changed | `cca361ed4bf26501` |
+| T3 | `2026-07-30T16:25:05+05:30` | port changed to 7624 | `a62ac9d3837c6cfc` |
+| T4 | `2026-07-30T16:25:14+05:30` | original content restored | `cca361ed4bf26501` |
+
+The observations used `xxhsum -H3`, `stat`, an explicit `touch`, and two
+content edits. The desired graph policy is: T2 does not create a content
+version; T3 creates one; T4 reuses an existing content identity but starts a
+new observation interval. The current experiment proves the filesystem/hash
+inputs, not graph behavior that has not yet been implemented. Filesystem mtime
+is neither authored time nor content identity.
+
+### Ambiguous duplicate headings
+
+For a document with two `## Configuration` sections, inserting a third section
+before them, swapping the prior bodies, and editing all three makes
+path-plus-heading collide. Ordinal and line number are locators, while content
+similarity is only a candidate. When neighboring anchors and fingerprints do
+not establish a unique successor, new section nodes are required rather than
+silently attaching history to the wrong section.
+
+## Task 0 status after the real-prompt pass
+
+Satisfied by this artifact:
+
+- six real prompts from three repositories;
+- all required prompt categories;
+- the eleven-question worksheet for every prompt;
+- five materially useful cases;
+- retained false positives and missing evidence;
+- the cross-model review in Experiment 1;
+- no Tasks 1–8 implementation began while Task 0 was incomplete.
+
+The artifact also assembles real root/merge/rename/delete/modify source cases,
+Git/non-Git document observations, an ambiguous-heading scenario, and an exact
+Epic 018 version/diff series. These are inputs to the remaining executable
+fixtures, not completed acceptance claims.
+
+The commit/document/heading cases above establish real source facts and a
+proposed policy, but do not yet execute graph reconciliation because Tasks 1–8
+remain blocked. They therefore remain unchecked pending reproducible fixture
+assertions against the eventual Task 0 harness.
+
+Still blocked:
+
+- The real Keystone LOG-019 row identified after Experiment 2 still needs to
+  replace the sanitized representative row and execute graph-only,
+  search-plus-graph, and bounded-helper comparisons.
+- No deterministic-gap-triggered, fixed-budget small/tiny-model investigation
+  has been executed and independently validated.
+- The commit, non-Git document, and ambiguous-heading policies need
+  reproducible expected-result fixtures rather than source inspection alone.
+- Epic 018 needs a per-task shared-context/retrieval-versus-diff table.
+- The detector list and task boundaries still need findings-driven revision;
+  only merge storage/API semantics have been revised so far.
+- The revised artifact still requires final independent review and commit.
