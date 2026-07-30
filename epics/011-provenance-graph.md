@@ -63,6 +63,18 @@ This epic builds the provenance foundation. Epic 012 consumes it to produce
 plans and packets; Epic 013 gives a mandatory helper a closed graph-tool facade
 and keeps capable models tool-free.
 
+A note on the real prompts collected for the thought-experiment gate below: they
+are not disposable test inputs. The author already has a large corpus of real
+prompts on this machine, used across Codex, Claude Code, opencode, and other
+agents. Sanitized and normalized, that corpus becomes the seed of a versioned
+**prompt-pattern library** that the Epic 013 helper draws on to shape better
+capable-model prompts (Epic 013, Design Decision 14), later broadened with
+curated web-sourced patterns. The same prompts therefore serve three roles:
+proving the graph supplies useful evidence (Epic 011), proving the planner
+produces a better bounded plan (Epic 012), and seeding the pattern corpus the
+helper reasons with (Epic 013). Patterns inform prompt *shape* only; they never
+become authoritative graph facts.
+
 ## Dependency
 
 Requires Epics 003, 004, 007, 009, and 010: commits, code, and documents must

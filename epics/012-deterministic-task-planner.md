@@ -474,6 +474,16 @@ Core planner tests require no model or network. A host may inspect planner
 output independently for diagnostics, but production capable-model
 conversations use the mandatory Epic 013 helper path.
 
+The planner's rendered prompt material is the deterministic substrate the Epic
+013 helper reshapes; the *shape* of that reshaping is informed by the prompt-
+pattern library (Epic 013, Design Decision 14) seeded from the same real prompt
+corpus this epic's thought experiments draw on. That corpus is reused
+deliberately: the prompts that establish whether the planner produces a better
+bounded plan are the same ones that later teach the helper what a good capable-
+model prompt looks like. Pattern material and planner rendering both stay
+distinct from repository facts, which remain sourced only from validated graph
+evidence.
+
 ### 12. Context-gap investigations are deterministic, bounded, and read-only
 
 The planner may emit `investigate_context_gap` only from a recognized gap in a

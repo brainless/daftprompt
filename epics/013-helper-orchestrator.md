@@ -71,6 +71,39 @@ The helper is therefore evaluated as a prompt engineer and conversational
 intermediary, not merely as a retrieval agent. Graph tool use is one mechanism
 for building better prompts.
 
+### Accessibility hypothesis: who this is for
+
+A secondary but explicit hypothesis is about *who* can drive a capable agent at
+all. Today, getting good work out of a coding or research agent rewards users
+who already prompt well: who know the right vocabulary, decompose a request,
+supply the relevant context, and anticipate what the model will ask. That skill
+is unevenly distributed and largely excludes non-technical users.
+
+If the helper+graph system can reliably perform that translation, the population
+of people who can productively use agents widens. The concrete, measurable
+claims are:
+
+- **Lower the entry bar.** A vague or non-expert request should still produce a
+  precise, evidence-backed capable-model prompt, so a non-technical user reaches
+  a comparable outcome to an expert prompter on the same task.
+- **Reduce ambiguity.** Deterministic gap reporting plus helper clarification
+  should convert implicit success criteria and conflicting constraints into
+  explicit, attributed decisions before the capable model is engaged.
+- **Reduce token cost.** Supplying the smallest useful evidence-backed context
+  should cost fewer capable-model tokens than handing a capable model broad
+  native tools and letting it discover context by repeated retrieval.
+- **Reduce time.** Front-loading bounded, cheap helper/graph work should shorten
+  the wall-clock path to a justified answer versus multi-round tool-using
+  exploration by the capable model.
+
+These are hypotheses to be measured in Task 0, not assumed. Whether the
+architecture or the emergent helper+graph behavior is genuinely novel remains
+the open question stated in the Introduction; the accessibility and efficiency
+claims must be demonstrated against the baselines rather than asserted. The
+value proposition — more users, less ambiguity, lower token cost, less time —
+is only as strong as the measured deltas over an expert-prompted, tool-enabled
+capable-model baseline.
+
 ## Dependencies
 
 Requires:
@@ -100,9 +133,17 @@ core crates.
 **Task 0 is a hard blocker. No implementation task may begin until Task 0 is
 complete.**
 
-Use real conversations and prompts from prior experiments with models below 20B
-parameters. Include at least twelve cases across at least three repositories and
-at least three helper models. The set must cover:
+Draw the cases from the author's existing local prompt corpus — the same real
+prompts used across Codex, Claude Code, opencode, and other agents that seed the
+Epic 011/012 thought experiments and the prompt-pattern library (Design Decision
+14) — rather than prompts invented only for this epic.
+
+The helper model set must probe how small the helper can be while remaining
+useful. Compare at least three open-weight helper models spanning the tier
+ladder, and include at least two models below 10B parameters alongside the
+sub-20B tier, so the results show where capability degrades rather than only
+confirming a single size. Include at least twelve cases across at least three
+repositories. The set must cover:
 
 - sufficient initial deterministic context requiring no tool call;
 - missing implementation, test, configuration, decision, or history context;
@@ -155,9 +196,15 @@ Compare at minimum:
 - capable model receiving the raw human prompt without tools;
 - capable model with deterministic packet only;
 - mandatory helper plus deterministic graph tools;
-- mandatory helper with each candidate small/tiny model;
+- mandatory helper with each candidate small/tiny model, including at least two
+  sub-10B models;
+- mandatory helper with versus without the prompt-pattern library;
+- stateless host-reconstructed single-turn helper versus a multi-turn (appended
+  transcript) helper on the same cases and models;
 - ablations for response inspection and deterministic stop rules.
-- the same capable model receiving human-authored versus helper-authored prompts.
+- the same capable model receiving human-authored versus helper-authored prompts;
+- a non-expert or deliberately under-specified rendering of a case versus an
+  expert-authored version of the same underlying request.
 
 Implementation remains blocked unless the selected helper configuration:
 
@@ -172,7 +219,12 @@ Implementation remains blocked unless the selected helper configuration:
 - terminates every fixture within explicit round and budget limits.
 - preserves intended outcome and explicit constraints at an agreed high rate;
 - materially improves capable-model answer quality or decision usefulness over
-  raw human prompts on the selected corpus.
+  raw human prompts on the selected corpus;
+- narrows the outcome gap between a non-expert and an expert rendering of the
+  same request by an agreed margin;
+- does not increase capable-model token cost or time-to-justified-answer versus
+  the tool-enabled baseline, and ideally reduces both (report the deltas even
+  when the target is not met).
 
 Write the results under
 `epics/research/013-helper-orchestrator-experiments.md`. Document thresholds,
@@ -210,11 +262,24 @@ the winning setup.
   modes against strong baselines.
 - Measure intent preservation, clarification quality, prompt quality, and the
   capable model's improvement over receiving the raw human request.
+- Ground helper prompt-shaping in a versioned **prompt-pattern library** seeded
+  from a real corpus of the author's existing prompts and, later, curated
+  web-sourced patterns, treated as attributed evidence rather than instructions.
+- Measure whether the system lets a non-expert or non-technical user reach an
+  expert-comparable outcome, and quantify the ambiguity, token-cost, and
+  wall-clock-time deltas against an expert-prompted, tool-enabled baseline.
+- Run the helper as stateless, host-reconstructed single-turn prompts rather than
+  a growing chat, so sub-10B models see a clean purpose-built request each round.
+- Keep the helper tool catalog closed but host-extensible: allow the host to add
+  specific, typed, validated, strictly read-only operations behind a Rust safety
+  layer without ever exposing a generic file/shell surface or model-expandable
+  tools.
 
 ## Non-goals
 
-- Give the helper shell, filesystem, network, editor, test-runner, or mutation
-  tools.
+- Give the helper generic or arbitrary shell, filesystem, network, editor,
+  test-runner, or mutation tools. (Any host-added tool stays typed, validated,
+  closed, and strictly read-only per Design Decision 16.)
 - Give capable models hidden or direct tools.
 - Let either model create authoritative graph evidence.
 - Let the helper override explicit human intent, authorization, or negative
@@ -319,6 +384,11 @@ Rejected alternative retained for evaluation: exposing generic `read_file`,
 would make the graph boundary cosmetic and greatly expand prompt-injection and
 authorization risk.
 
+The catalog is closed but not frozen. Design Decision 16 describes how the host
+may extend it with specific, typed, validated, strictly read-only operations
+behind a Rust safety layer — never the generic file/shell surface rejected
+above, and never model-expandable.
+
 ### 5. Capable models are tool-free conversational reasoners
 
 A capable-model request contains:
@@ -395,6 +465,12 @@ Every transition is recorded. The state machine enforces:
 
 No model may recursively invoke another model or tool outside this host-owned
 loop.
+
+The host owns all session state across these rounds, but does not replay it to
+the helper as a growing chat. Each round the helper sees a freshly reconstructed
+single-turn prompt that inlines the context gathered so far (Design Decision 15).
+The rounds and budgets above are enforced by the host, not by conversational
+memory in the helper.
 
 ### 8. Prompt shaping is a first-class artifact
 
@@ -478,6 +554,14 @@ This ceiling is deliberate and must be measured. The experiment should reveal
 which missing graph operations or indexers are worth adding. It must not be
 quietly bypassed with a generic file tool.
 
+When the experiment shows a recurring gap the graph cannot reasonably carry, the
+principled response is either a new graph operation/indexer or a specific,
+typed, host-validated, strictly read-only operation behind the Rust safety layer
+of Design Decision 16 — added deliberately and measured, never a generic
+file/shell escape hatch and never model-expandable. The graph-only configuration
+remains the default and the measured baseline against which any such extension
+must prove its value.
+
 ### 13. Failure is explicit
 
 - Helper unavailable: fail orchestration; preserve deterministic diagnostics.
@@ -490,6 +574,130 @@ quietly bypassed with a generic file tool.
 - Budget exhaustion: return the best supported state, never invent completion.
 - Unsupported repository claim: validate, request context, qualify, or reject;
   do not relay it as established fact.
+
+### 14. Prompt patterns are attributed, versioned evidence — not instructions
+
+The helper's prompt-shaping quality depends heavily on having good exemplars of
+how a well-formed capable-model request looks for a given intent. This epic
+grounds that in a **prompt-pattern library**: a versioned, per-pattern-attributed
+corpus that the helper may retrieve from and few-shot against when refining a
+request or reshaping a capable-model prompt.
+
+The library is seeded in two stages:
+
+1. **Local corpus.** The author already has a large body of real prompts on
+   this machine, used across Codex, Claude Code, opencode, and other agents.
+   These are the same prompts feeding the Epic 011 and 012 thought experiments.
+   Normalized and sanitized, they become the first pattern set: concrete
+   examples of clarified objectives, decompositions, constraint extraction,
+   evidence selection, question sequencing, and output contracts, tagged by
+   intent and transformation kind.
+2. **Web-sourced patterns.** Later, additional patterns are curated from public
+   sources to broaden coverage of intents, domains, and phrasings the local
+   corpus underrepresents.
+
+Rules that keep the library from weakening the trust boundary:
+
+- A pattern is **reference evidence**, not an instruction. Patterns are injected
+  into the helper prompt as clearly-delimited, trust-labeled exemplars under the
+  same untrusted-content handling as repository content (Design Decision 10). A
+  web-sourced pattern that contains embedded directives, tool requests, or
+  injection attempts must not be able to expand the tool catalog, alter
+  deterministic policy, or change human intent.
+- Each pattern carries provenance: source (local corpus vs. a specific web
+  origin), a stable pattern ID and version, intent/transformation tags, and a
+  content hash. Selection of a pattern for a given turn is recorded in session
+  provenance alongside the prompt-template version.
+- Patterns inform *shape*, never *facts*. A pattern may model how to structure a
+  bug-fix prompt; it may never supply repository facts, which continue to come
+  only from validated graph evidence.
+- The library is not authoritative graph content. It lives beside the graph as
+  helper tooling, and the graph's evidence/candidate distinction is unaffected.
+
+The evaluation must include a helper-with-library versus helper-without-library
+ablation so the pattern corpus is credited only if it measurably improves prompt
+quality, intent preservation, or gap-detection recall rather than merely making
+prompts longer. If patterns prove to overfit a helper model or degrade a
+different one, the library, its tags, or its injection policy can be revised
+behind the same typed boundary without touching the graph.
+
+### 15. Helper turns are stateless, host-reconstructed prompts
+
+Small models degrade over a growing multi-turn transcript: they lose earlier
+instructions, drift from the objective, and follow stray text in accumulated
+history. This epic therefore does not run the helper as a chat that appends
+turns. Each helper decision is a **fresh, single-turn completion** whose entire
+prompt is reconstructed by deterministic host code from the current session
+state.
+
+Where a conventional agent would append a tool result to a conversation and ask
+the model to continue, the host instead runs the requested graph operation (or,
+under Design Decision 16, another permitted operation), then builds a new
+self-contained prompt that inlines the gathered context *as if the prompt had
+always contained it*. From the helper's perspective there is no "previous turn";
+there is one well-structured request carrying the objective, preserved
+constraints, all context gathered so far, the trust labels, and the specific
+decision being asked this round.
+
+This is single-turn from the model's perspective and multi-round from the
+host's. The state machine in Design Decision 7 still bounds rounds, budgets, and
+yield; only the *presentation* to the helper changes. Consequences:
+
+- **Reliability.** The small model always sees a clean, purpose-built prompt
+  instead of a lengthening transcript, which is where sub-10B models are
+  strongest.
+- **Determinism and replay.** Each helper call is a pure function of the
+  assembled state, so it can be scripted, cached, and replayed exactly.
+- **Injection control.** Every prompt is freshly assembled with current trust
+  labels (Design Decision 10); untrusted content cannot accrete across turns.
+- **Provenance.** Each reconstructed prompt is itself an attributed artifact
+  (Design Decision 8) recording exactly which context, patterns, and template
+  version produced this round's decision.
+
+Session history is retained by the host for provenance and for building the next
+prompt; it is not replayed to the helper as conversational memory. Capable
+models, which handle multi-turn context well, may still receive a genuine
+conversation (Design Decision 5); the stateless discipline is specifically a
+helper-side reliability measure. The evaluation compares stateless
+reconstruction against a multi-turn helper baseline so the choice is credited by
+measured reliability rather than assumed.
+
+### 16. The tool catalog is closed but host-extensible behind a Rust safety layer
+
+Design Decision 4 keeps the helper as the only tool caller and ships a graph-only
+catalog. The graph-only ceiling (Design Decision 12) is real and must be
+measured — but the response to a proven, recurring capability gap is not a
+generic file or shell tool. It is one of two deliberate, bounded moves:
+
+1. add a graph operation or indexer so the material enters the graph; or
+2. add a **specific, typed, host-authored operation** behind a Rust safety layer
+   that the helper may request from the same closed catalog.
+
+The safety burden lives in Rust, not in the model. The deliberate design choice
+is that daftprompt may invest in a substantial Rust layer that makes a *narrow*
+set of file operations — and, later, a strict allow-list of read-only commands —
+safe to expose: repository-relative path confinement and normalization, no
+escape outside the indexed repository, byte/line/time bounds, no mutation, no
+network, argument validation independent of model output, and deterministic
+results. The helper may only *request* one of these named operations; the host
+validates and executes the corresponding typed API, exactly as it does for graph
+tools. The model can never name an arbitrary path or command, and tool results
+can never define new tools or permissions.
+
+This is precisely the distinction Design Decision 4 draws: a generic
+`read_file`/`grep`/shell surface is rejected because it makes the boundary
+cosmetic and explodes injection and authorization risk; a curated, typed,
+validated, read-only operation behind the Rust layer is a bounded extension of
+the same closed catalog. Any such operation is added only when the experiment
+shows the graph cannot reasonably carry the need, and its value is measured, not
+assumed.
+
+Scope guard for this epic: mutation and arbitrary command execution remain out
+of scope and belong to a separate authorization/execution epic (see Non-goals
+and Risks). The only operations contemplated here are strictly read-only. The
+graph-only ceiling stays the default and the measured baseline; the safe tool
+layer is the principled, still-closed path for the specific gaps the ceiling
+exposes.
 
 ## Public Boundaries
 
@@ -570,10 +778,16 @@ Create the research artifact and satisfy the Blocking Experiment Gate.
 
 #### Acceptance Criteria
 
-- [ ] At least twelve real cases across three repositories are documented.
-- [ ] At least three sub-20B open-weight helper models are compared.
+- [ ] At least twelve real cases, drawn from the author's local prompt corpus,
+  across three repositories are documented.
+- [ ] At least three open-weight helper models are compared, including at least
+  two below 10B parameters alongside the sub-20B tier.
 - [ ] All required success, failure, ambiguity, and injection cases are covered.
-- [ ] Baselines and ablations are measured.
+- [ ] Baselines and ablations are measured, including helper-with versus
+  helper-without the prompt-pattern library, and stateless single-turn versus
+  multi-turn helper prompting.
+- [ ] The accessibility comparison (non-expert versus expert rendering of the
+  same request) and the ambiguity/token-cost/time deltas are recorded.
 - [ ] Tool calls, prompt versions, budgets, context yield, and final quality are
   recorded.
 - [ ] Model selection and orchestration thresholds are justified by results.
@@ -606,6 +820,10 @@ Expose only the bounded graph operations defined by this epic.
 - [ ] Every result reports provenance, coverage, omissions, and byte cost.
 - [ ] Candidate validation preserves model claim versus graph fact.
 - [ ] Tool results cannot dynamically define new tools or permissions.
+- [ ] The catalog is a closed set the helper can only request from; any
+  host-added non-graph operation (Design Decision 16) is typed, argument-
+  validated, repository-confined, and strictly read-only, with no mutation,
+  execution, or network access in this epic.
 
 ### Task 3: Implement the orchestration state machine
 
@@ -617,6 +835,10 @@ turns, and response assessment.
 - [ ] Every capable-model call passes through the helper.
 - [ ] Every capable-model response receives helper assessment before relay.
 - [ ] Capable-model requests contain no tool definitions.
+- [ ] Each helper decision is a stateless, host-reconstructed single-turn prompt
+  built from session state, not an appended chat transcript.
+- [ ] The same session state deterministically reconstructs the same helper
+  prompt, enabling exact scripted replay.
 - [ ] Invalid helper calls are rejected without execution.
 - [ ] Duplicate calls, marginal yield, rounds, tokens, and bytes are bounded.
 - [ ] Human clarification and explicit exhaustion states are supported.
@@ -635,6 +857,9 @@ Create versioned helper and capable-model prompt templates.
   rewrite.
 - [ ] Fixtures cover clarification, decomposition, terminology normalization,
   evidence selection, question sequencing, and output-contract design.
+- [ ] Prompt-pattern-library exemplars are injected as trust-labeled reference
+  evidence with pattern ID/version/source provenance, and cannot expand tools,
+  alter policy, or change human intent.
 - [ ] Genuine product ambiguity produces a human question rather than an
   invented assumption or graph call.
 - [ ] Repository/model content is clearly delimited as untrusted evidence.
@@ -648,7 +873,8 @@ OpenAI-compatible `llm-sdk` boundary.
 
 #### Acceptance Criteria
 
-- [ ] Supported helper variants form a closed serializable type.
+- [ ] Supported helper variants form a closed serializable type and include at
+  least two sub-10B models alongside the sub-20B tier.
 - [ ] Exact API model identifiers and prompt-template compatibility are tested.
 - [ ] Unknown variants fail explicitly.
 - [ ] Model output is schema-validated.
@@ -702,14 +928,18 @@ cargo run -- --replay-orchestration <fixture>
 | Intent safety | preserved objectives, negative constraints, authorization |
 | Request refinement | clarification, structure, assumptions, ambiguity, output contracts |
 | Graph tools | closed schemas, read-only scope, budgets, provenance |
+| Tool-layer extension | typed/validated/read-only host op, path confinement, no mutation, closed catalog |
+| Stateless prompting | deterministic reconstruction, no appended transcript, single-turn vs multi-turn ablation |
 | Helper decisions | call, no-call, clarify, follow-up, stop |
 | Response assessment | unsupported claims, new gaps, relay decisions |
 | Capable model | tool-free payloads, multi-turn conversation |
 | Prompt shaping | bounded context, trust labels, provenance retention |
+| Prompt-pattern library | trust-labeled exemplars, provenance, with/without ablation, injection-safe patterns |
 | Injection | document, code comment, commit, and saved-review attacks |
 | Loops | duplicate calls, low yield, round and budget exhaustion |
 | Failure | helper, graph, capable-model, and malformed-output failures |
-| Model selection | at least three sub-20B helpers and baselines |
+| Model selection | at least three helpers including two sub-10B, plus baselines |
+| Accessibility | non-expert versus expert rendering, ambiguity/token/time deltas |
 | Replay | deterministic scripted-model fixture execution |
 
 ## File-change Summary
@@ -717,8 +947,10 @@ cargo run -- --replay-orchestration <fixture>
 | File | Change |
 |---|---|
 | `Cargo.toml` | Add orchestrator and adapter crates to the workspace. |
-| `crates/daftprompt-orchestrator/` | Provider-independent session state machine, policy, prompts, and graph-tool facade. |
+| `crates/daftprompt-orchestrator/` | Provider-independent session state machine, policy, stateless helper-prompt reconstruction, and graph-tool facade. |
+| `crates/daftprompt-orchestrator/` (safe tool layer) | Optional typed, validated, repository-confined, read-only file/command operations behind the closed catalog (Design Decision 16), added only for measured gaps. |
 | `crates/daftprompt-orchestrator-llm/` | `llm-sdk` helper and capable-model adapters. |
+| `epics/research/prompt-patterns/` | Versioned prompt-pattern library seeded from the sanitized local prompt corpus, later extended with curated web patterns. |
 | `src/main.rs` | Add read-only orchestration and replay CLI modes. |
 | `epics/research/013-helper-orchestrator-experiments.md` | Blocking model and policy evaluation. |
 | `README.md`, `DEVELOP.md`, `AGENTS.md` | Document mandatory helper architecture and graph-only tools. |
@@ -737,6 +969,26 @@ requirements.
   evolve.
 - Small models may overfit prompt templates, miss subtle context needs, or
   follow repository prompt injection.
+- Sub-10B helpers may be too weak for structured tool calls or gap detection;
+  the tier ladder must reveal where capability degrades rather than assuming a
+  single size works, and the closed model set can be revised from results.
+- Web-sourced prompt patterns are untrusted content: they may carry injection,
+  encode bad habits, or overfit one helper. They must stay trust-labeled
+  reference evidence, be credited only via the with/without-library ablation,
+  and never supply repository facts.
+- The accessibility claim is easy to assert and hard to prove; non-expert versus
+  expert deltas must come from real paired renderings, not intuition, and the
+  claim should be dropped if the deltas do not hold.
+- Stateless reconstruction moves the burden onto host prompt-assembly: if the
+  host omits context a multi-turn model would have retained, the helper can
+  regress. The single-turn-versus-multi-turn ablation must confirm the win
+  rather than assume it, and reconstructed prompts must stay within budget.
+- A host-built safe tool layer is real engineering cost and new attack surface;
+  each added operation widens injection/authorization exposure even when
+  read-only. The layer must justify itself against a measured graph-only
+  baseline, keep the catalog closed, and never become the generic file/shell
+  surface rejected in Design Decision 4. Mutation and command execution stay in
+  a separate authorization/execution epic and must not be added implicitly here.
 - Verbose helper prompts and repeated capable turns may erase cost/latency gains.
 - The helper may distort human intent while trying to improve a prompt.
 - Prompt quality is difficult to measure independently of capable-model quality;
