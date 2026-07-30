@@ -43,23 +43,25 @@ The long-term direction is:
 
 1. Bring repository context into an explainable graph.
 2. Break work into small, focused actions or prompts.
-3. Detect when the initial graph/search packet has explicit coverage gaps.
-4. Let a host run tightly bounded context investigations where useful.
+3. Combine deterministic packets with a mandatory small/tiny helper model.
+4. Let that helper use only tightly bounded graph operations to gather context.
 5. Validate model-discovered observations deterministically when possible.
-6. Collect bounded, source-linked results.
-7. Give a capable model a focused synthesis or implementation prompt.
+6. Let the helper shape tool-free conversations with capable models.
+7. Collect bounded, source-linked results with complete orchestration
+   provenance.
 
 The graph-building process should itself be incremental and decomposable.
-Deterministic rules come first and remain explicit tuning points as the project
-learns from more repositories. A future planner may use a small model for
-tightly scoped retrieval-gap investigation. A model may propose resources and
-relationships, but it must not author authoritative graph facts. Exact or
+Deterministic rules remain explicit tuning points as the project learns from
+more repositories. Epic 013 makes a small/tiny helper model a co-foundation of
+the interaction runtime, but not of graph truth. A model may propose resources
+and relationships, but it must not author authoritative graph facts. Exact or
 structural observations become graph evidence only when the corresponding
 deterministic validator reproduces them; unsupported interpretations remain
 attributed candidates.
 
-This epic builds the provenance half of that direction. Epic 012 consumes it to
-produce plans.
+This epic builds the provenance foundation. Epic 012 consumes it to produce
+plans and packets; Epic 013 gives a mandatory helper a closed graph-tool facade
+and keeps capable models tool-free.
 
 ## Dependency
 
@@ -67,8 +69,8 @@ Requires Epics 003, 004, 007, 009, and 010: commits, code, and documents must
 already share the per-repository `items` source of truth and preserve stable
 source-specific identifiers.
 
-Epic 012 depends on this epic's public graph types and query API, but the graph
-crate must not depend on the planner crate.
+Epics 012 and 013 depend on this epic's public graph types and query API, but
+the graph crate must not depend on the planner or orchestrator crates.
 
 ## Blocking Thought-Experiment Gate
 
@@ -170,8 +172,9 @@ search.
 - Replace `items`, `items_fts`, or the existing vector partitions.
 - Store complete copies of item text in graph tables.
 - Support cross-repository graph edges in v1.
-- Implement task planning, prompt rendering, agent execution, or sub-agent
-  scheduling; those belong to Epic 012 or later execution integrations.
+- Implement task planning, prompt rendering, helper orchestration, capable-model
+  conversations, agent execution, or sub-agent scheduling; planning belongs to
+  Epic 012 and model orchestration belongs to Epic 013.
 - Treat semantic similarity alone as proof that a requirement is implemented.
 - Add graph visualization to the canvas in this epic.
 
@@ -727,16 +730,14 @@ candidate budget.
 
 ### 15. Model-assisted context discovery remains outside the trust boundary
 
-A host or planner may deterministically trigger a short, read-only
-investigation when a context packet contains a recognized gap. The graph does
-not choose a model, render its prompt, execute tools, or decide whether to run
-the investigation.
+A helper orchestrator may initiate a bounded investigation before or after a
+capable-model turn. The graph does not choose a model, render its prompt,
+execute model calls, or decide whether an investigation is required.
 
-Whether that helper path is enabled is host/planner configuration, not graph
-state. Epic 012's host-facing library API enables it by default, permits an
-explicit no-model path, and restricts the first-party adapter to a manually
-tested supported-model set. Both paths consume the same graph packet and retain
-the same validation and provenance boundary.
+Epic 013 makes the helper path mandatory at the orchestration layer. That
+requirement does not turn the helper into graph authority. The helper receives
+only a closed set of read-only graph operations, while capable models receive
+no tools. Every path retains the same validation and provenance boundary.
 
 An external investigation may submit candidate findings containing:
 

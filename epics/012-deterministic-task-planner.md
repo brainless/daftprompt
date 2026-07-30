@@ -7,18 +7,17 @@ documents, code, tests, configuration, files, and history. This epic adds a
 reusable `daftprompt-planner` crate that maps an incoming user request and a
 relevant graph slice into small, typed, dependency-aware actions.
 
-The planner is deterministic first. Project detectors establish facts such as
+The planner is deterministic. Project detectors establish facts such as
 the language, package manager, test runner, linter, type checker, build system,
 and repository correctness gate. Planning rules combine those facts with
-request intent and graph evidence. An optional small/tiny model may perform a
-tightly scoped read-only investigation for a deterministically identified
-context gap before the final prompt is generated for a capable model. The
-durable plan is a typed intermediate representation rather than an unvalidated
-list of model-generated shell commands or relationships.
+request intent and graph evidence. The durable plan is a typed intermediate
+representation rather than an unvalidated list of model-generated shell
+commands or relationships. Epic 013 consumes these plans and packets in a
+mandatory helper-orchestrated conversation with tool-free capable models.
 
-The crate plans work; it does not execute commands, mutate files, spawn agents,
-or assume that parallel execution is available. Host integrations decide how
-authorized actions run.
+The crate plans work; it does not execute commands, call models, mutate files,
+spawn agents, or assume that parallel execution is available. Host integrations
+decide how authorized actions run.
 
 ## Dependency
 
@@ -27,7 +26,9 @@ identity, explain queries, commit changed-file provenance, and conservative
 evidence rules.
 
 The planner may depend on `daftprompt-graph`. The graph crate must not depend on
-the planner. Neither reusable crate may depend on akar or the daftprompt UI.
+the planner. Epic 013 may consume both crates; neither may depend on its
+orchestrator. None of the reusable core crates may depend on akar or the
+daftprompt UI.
 
 ## Blocking Thought-Experiment Gate
 
@@ -103,14 +104,13 @@ a plan that:
   guesses.
 - Render generic prompts and structured JSON for multiple host integrations.
 - Preserve uncertainty, missing evidence, and rejected candidate actions.
-- Deterministically trigger optional, tightly scoped context investigations and
-  validate their cited observations without promoting model interpretation to
+- Emit typed context gaps and validation contracts that the mandatory Epic 013
+  helper orchestrator can consume without promoting model interpretation to
   repository truth.
 - Plan evidence-bounded review and cross-review comparison without treating
   model agreement as repository truth.
-- Support a small/tiny-model context-investigator interface behind a
-  replaceable boundary. Host-facing library configuration enables it by
-  default and lets callers disable it explicitly.
+- Provide deterministic prompt material and structured packets for the Epic 013
+  helper orchestrator.
 - Evaluate plan quality using real prompts and deterministic fixtures.
 
 ## Non-goals
@@ -118,9 +118,7 @@ a plan that:
 - Execute shell commands or tools.
 - Modify repository files.
 - Spawn, supervise, or communicate with sub-agents.
-- Let planner rules or graph evidence choose an arbitrary model. A host adapter
-  selects one explicitly supported model and executes typed investigation
-  specifications; planner core remains provider-independent.
+- Choose or invoke helper or capable models; that belongs to Epic 013.
 - Encode Codex-, Claude Code-, or opencode-specific protocols in the core crate.
 - Grant command authorization or bypass host safety policy.
 - Guarantee that every task benefits from parallelism.
@@ -456,76 +454,33 @@ A focused command may be derived from:
 When only a broad correctness gate is known, the plan says so rather than
 inventing a focused invocation.
 
-### 11. Small/tiny-model use is retrieval-only and replaceable
+### 11. Planner output is the deterministic substrate for orchestration
 
-The small/tiny-model role in this epic is strictly to improve the initial
-context supplied to a capable model. Potential uses:
+This epic defines the facts, constraints, plans, evidence packets, gaps,
+budgets, and output contracts consumed by Epic 013. It does not implement or
+configure a helper model, capable model, model adapter, tool-calling loop, or
+response assessment.
 
-- investigate a deterministically identified retrieval gap using graph-selected
-  seeds and a small set of read-only tools;
-- rank or reject a few already retrieved candidate regions;
-- map a committed code change to candidate decision/rationale sections;
-- find conflicts between a decision document and PRD sections;
-- return exact resources, observations, and better bounded follow-up queries.
+The planner must preserve enough structure for the mandatory helper to:
 
-It does not classify the final row/request, make product or implementation
-decisions, render the final answer, synthesize the capable-model result, mutate
-the repository, or verify behavior. Deterministic planner code renders the
-high-level handoff prompt; the capable model performs the reasoning requested
-by that prompt.
+- distinguish human intent from detected repository facts;
+- see which context is established, candidate-only, omitted, or unavailable;
+- ask bounded graph questions without inventing filesystem access;
+- retain exact repository and graph versions across prompt rewrites;
+- identify decisions that require human clarification;
+- construct a capable-model output contract without losing constraints.
 
-The interface must accept deterministic inputs and return schema-validated
-output. Core tests run without a model or network. Model failure falls back to
-deterministic planning and rendering, or leaves the original context packet
-usable with an unresolved-gap diagnostic.
-
-The public library configuration makes the optional execution path explicit:
-
-```rust
-pub struct ContextInvestigatorConfig {
-    pub enabled: bool,
-    pub model: SupportedInvestigatorModel,
-}
-
-impl Default for ContextInvestigatorConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            model: SupportedInvestigatorModel::default(),
-        }
-    }
-}
-```
-
-`enabled = false` prevents construction or invocation of a network/model
-investigator while preserving deterministic planning, the initial context
-packet, and gap diagnostics.
-
-`SupportedInvestigatorModel` is a closed, serializable set accepted by the
-shipped adapter. Its initial variants and default are selected only after
-manual quality, latency, bounded-tool-use, and cost testing. Unknown persisted
-model keys produce a configuration diagnostic rather than silently selecting
-another model. Embedding hosts may still provide a custom investigator.
-
-The first-party host adapter uses `~/Projects/llm-sdk/` through its
-OpenAI-compatible client surface. Endpoint and credentials are host
-configuration, never planner facts or task evidence. The adapter maps each
-supported variant to an exact API model identifier and records it in
-investigation provenance. Keep this integration outside planner core so core
-tests remain network-free and provider-independent.
-
-Optional model output is itself an attributed action result. If a host persists
-it, it should retain model identity, authored/observed time, prompt or prompt
-hash, reviewed input versions, and output content hash. The planner does not
-infer these fields from a later Git commit.
+Core planner tests require no model or network. A host may inspect planner
+output independently for diagnostics, but production capable-model
+conversations use the mandatory Epic 013 helper path.
 
 ### 12. Context-gap investigations are deterministic, bounded, and read-only
 
 The planner may emit `investigate_context_gap` only from a recognized gap in a
-`TaskEvidencePacket`. A host adapter may execute it when
-`ContextInvestigatorConfig` is enabled. Execution and credentials remain
-outside planner core, while supported model selection and the on/off policy are
-public library APIs.
+`TaskEvidencePacket`. Epic 013 decides how its mandatory helper reasons over the
+gap and whether it requests a permitted graph operation. Model execution,
+credentials, tool schemas, and orchestration policy remain outside planner
+core.
 
 ```rust
 pub struct InvestigationSpec {
@@ -625,11 +580,12 @@ Comparison
      stale-version findings, and missing provenance.
 ```
 
-The planner may schedule review generation through an optional model interface
-when a host supports it, but it does not execute the model call or assume that a
-chat-only result was persisted. Two reviews reaching the same conclusion count
-as claim agreement. Confidence increases only when their claims point to
-independent structural, exact, test, configuration, or history evidence.
+The planner may emit a review action and its evidence contract, but Epic 013
+owns all helper and capable-model turns. The planner does not execute a model
+call or assume that a chat-only result was persisted. Two reviews reaching the
+same conclusion count as claim agreement. Confidence increases only when their
+claims point to independent structural, exact, test, configuration, or history
+evidence.
 
 ## Representative Plans
 
@@ -1045,10 +1001,10 @@ commands structurally.
 - [ ] Unknown focused-test syntax yields a diagnostic rather than an invented
   command.
 
-### Task 7: Add deterministic rendering and the optional context-investigator interface
+### Task 7: Add deterministic rendering and orchestration handoff types
 
-Render plans/actions to concise generic prompts and JSON. Define, but do not
-require, a bounded context-investigator interface for small/tiny models.
+Render plans/actions to concise generic prompt material and JSON. Define the
+typed packet and gap boundary consumed by Epic 013.
 
 #### Acceptance Criteria
 
@@ -1057,19 +1013,12 @@ require, a bounded context-investigator interface for small/tiny models.
 - [ ] Prompts do not reproduce unrelated files or unbounded prior outputs.
 - [ ] JSON is sufficient for a host adapter without parsing prose.
 - [ ] Core planning and tests require no model or network.
-- [ ] Host-facing library configuration enables the helper by default; an
-  explicit disabled path performs no model/network invocation while retaining
-  deterministic output and gap diagnostics.
-- [ ] A closed, serializable supported-model type rejects unknown keys; its
-  initial variants and default are documented from manual test results.
-- [ ] A first-party adapter integrates `~/Projects/llm-sdk/` through an
-  OpenAI-compatible API and maps supported variants to exact model identifiers.
-- [ ] Model output is schema-validated and failure falls back cleanly.
 - [ ] Context-investigation prompts contain one typed gap, graph-selected seeds,
-  allowed read-only tools, explicit call/byte/depth budgets, and a structured
-  observed-versus-inferred output contract.
+  proposed graph capabilities, explicit call/byte/depth budgets, and a
+  structured observed-versus-inferred output contract.
 - [ ] Planner core emits and consumes investigation specs/results but never
-  chooses a model, calls tools, or treats a finding as authorized mutation.
+  chooses a model, defines the final tool catalog, calls tools, or treats a
+  finding as authorized mutation.
 - [ ] Eligible cited observations pass through deterministic validation;
   unvalidated interpretations remain attributed candidates.
 - [ ] Attempt identity, duplicate findings, marginal yield, remaining gaps, and
@@ -1143,9 +1092,7 @@ cargo run -- --repo . --plan-json "Fix the import cache bug"
 | `crates/daftprompt-planner/src/rules/` | Versioned generic planning rules. |
 | `crates/daftprompt-planner/src/context.rs` | Graph selection, deduplication, and budgets. |
 | `crates/daftprompt-planner/src/investigation.rs` | Typed context gaps, bounded investigation contracts, validation, and yield. |
-| `crates/daftprompt-planner/src/config.rs` | Default-on investigator policy and closed supported-model selection. |
 | `crates/daftprompt-planner/src/render.rs` | Generic prompt and JSON rendering. |
-| `crates/daftprompt-planner-llm/src/lib.rs` | Candidate first-party `llm-sdk` OpenAI-compatible adapter; exact boundary settled during Task 0/7. |
 | `src/main.rs` | Add read-only plan inspection CLI. |
 | `epics/research/012-planner-thought-experiments.md` | Blocking real-prompt planning evidence. |
 | `README.md`, `DEVELOP.md`, `AGENTS.md` | Document planner behavior and safety boundaries. |
@@ -1172,7 +1119,5 @@ boundary and separation from execution are requirements.
 - Commands inferred from configuration still require host authorization.
 - Real prompt fixtures may contain confidential project information; sanitize
   them while retaining the structural planning challenge.
-- Agent-specific adapters, general execution engines, result collection,
-  prompt-corpus generation, and learned ranking are follow-up epics. Epic 012
-  includes the narrow first-party OpenAI-compatible `llm-sdk` context
-  investigator and its supported model selection.
+- Model adapters, helper/capable-model communication, graph tool calling,
+  response assessment, and prompt-engineering evaluation belong to Epic 013.
