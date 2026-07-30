@@ -23,5 +23,8 @@ Thumbs.db
 # Logs
 *.log
 
+# Local credentials
+.env
+
 # Coding agents
 .commandcode
