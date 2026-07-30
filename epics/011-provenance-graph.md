@@ -141,6 +141,9 @@ search.
   evidence.
 - Ingest saved reviews and other external analyses as attributed artifacts
   linked to the exact repository versions they examined.
+- Preserve implementation epics, their shared context, split tasks, and
+  normative requested-change statements as versioned attributed artifacts
+  without pretending that requested future code already exists.
 - Build exact path, exact symbol, containment, commit-change, test-target,
   configuration, and conservative lexical relationships.
 - Use semantic search only for candidate generation in v1.
@@ -645,7 +648,46 @@ Chat-only output is outside the graph until a host exports it or an ingestion
 integration supplies it. The graph must identify the missing artifact rather
 than reconstructing or attributing unseen review content.
 
-### 13. Context packets expose coverage, candidates, and gaps
+### 13. Requested changes are attributed claims, not future-code edges
+
+An implementation epic can state valuable future changes precisely: remove a
+field, add a join table, replace an UPSERT, update a named type, or run a
+repository command. Those statements answer what the document requests, not
+what the repository currently contains.
+
+When a deterministic document parser identifies shared epic context and task
+sections, retain:
+
+- the exact epic version and task/source spans;
+- the task's parent epic and ordered task identity;
+- shared goals, assumptions, non-goals, target design, and verification text
+  needed to interpret the task;
+- normalized requested-change claims where the syntax is sufficiently
+  explicit;
+- exact mentioned paths, symbols, fields, tables, configuration keys, and
+  commands;
+- ambiguity or unsupported syntax without inventing a structured operation.
+
+Requested-change claims are attributed document artifacts. They may seed exact,
+lexical, semantic, and graph expansion against the current repository version,
+but they do not create authoritative `changes`, `implements`, `defines`, or
+future-code edges. A statement such as “add `agent_task_messages`” does not
+prove that the table exists. A task-to-resource mention means the task names or
+describes that resource, not that the resource is exclusively owned by the
+task.
+
+Task-oriented context queries include both the task-local section and bounded
+shared epic context. They query a specified graph/repository version so
+already-completed prerequisite work can change the returned change surface.
+Overlapping tasks may return the same file or symbol; the graph does not infer
+exclusive ownership, implementation ordering, or patch boundaries.
+
+Rejected alternative retained for tuning: converting imperative task prose
+directly into durable future relations would make requested intent
+indistinguishable from observed repository state and would encode a planner
+inside the provenance graph.
+
+### 14. Context packets expose coverage, candidates, and gaps
 
 A graph query can enumerate its indexed universe, but cannot prove that a
 bounded result contains every artifact relevant to a task. An empty graph
@@ -683,12 +725,18 @@ configuration, a committed code change with no linked decision/rationale,
 conflicting decision/PRD sections, unsupported source coverage, and exhausted
 candidate budget.
 
-### 14. Model-assisted context discovery remains outside the trust boundary
+### 15. Model-assisted context discovery remains outside the trust boundary
 
 A host or planner may deterministically trigger a short, read-only
 investigation when a context packet contains a recognized gap. The graph does
 not choose a model, render its prompt, execute tools, or decide whether to run
 the investigation.
+
+Whether that helper path is enabled is host/planner configuration, not graph
+state. Epic 012's host-facing library API enables it by default, permits an
+explicit no-model path, and restricts the first-party adapter to a manually
+tested supported-model set. Both paths consume the same graph packet and retain
+the same validation and provenance boundary.
 
 An external investigation may submit candidate findings containing:
 
@@ -717,7 +765,7 @@ tool-call count, returned bytes, elapsed time when supplied by the host, and
 remaining gaps. This enables iterative evaluation without allowing recursive
 investigation to imply increasing confidence.
 
-### 15. Failures degrade, never panic
+### 16. Failures degrade, never panic
 
 - Missing embeddings skip semantic candidates.
 - A non-git folder omits commit and changed-file evidence.
@@ -850,6 +898,12 @@ Collect real prompts and repository evidence, execute the process defined in
   versions, review attribution, supported findings, and missing chat provenance.
 - [ ] At least one real per-row testing-sheet workflow compares graph-only,
   search-plus-graph, and bounded model-assisted context retrieval.
+- [ ] At least one real multi-file implementation epic is split into shared
+  context and tasks, queried at an exact pre-implementation repository version,
+  and compared with the files/symbols actually changed.
+- [ ] The multi-file experiment distinguishes requested future changes from
+  observed graph facts, overlapping task scope from exclusive ownership, and
+  static retrieval from runtime/build discoveries.
 - [ ] The per-row experiment records a completeness contract, deterministic gap
   triggers, model-proposed candidates, independently validated observations,
   investigation budgets, and unresolved gaps.
@@ -873,6 +927,9 @@ node, relation, evidence, candidate, build-report, and query-result types.
   represented without treating chunk ordinals or line numbers as stable IDs.
 - [ ] Review/analysis artifacts retain author kind, optional model identity,
   prompt provenance, and exact reviewed-version references when available.
+- [ ] Split epics/tasks and requested-change claims retain exact document
+  versions, source spans, parent/shared context, mentioned resources, and
+  unsupported or ambiguous statement diagnostics.
 - [ ] Context packets distinguish established evidence, semantic candidates,
   externally proposed candidates, coverage, omissions, and unresolved gaps.
 - [ ] External investigation attempts and findings retain attribution, seeds,
@@ -956,6 +1013,9 @@ Build containment, definition, and commit-change edges.
   identity through the same corpus API.
 - [ ] Saved reviews are imported as distinct attributed nodes; Git author
   metadata alone never creates model-authorship evidence.
+- [ ] Implementation epics import shared context and task sections without
+  duplicating full text; explicit requested-change claims remain attributed
+  claims and cannot masquerade as existing `changes` or `implements` edges.
 - [ ] Imported table rows/cells retain exact snapshot provenance; row position
   is a locator rather than stable logical identity.
 - [ ] Code symbols link to their defining file.
@@ -1027,6 +1087,11 @@ strong-cluster queries.
 - [ ] Query results include paths, confidence, and all supporting evidence.
 - [ ] Context queries include source coverage, unsupported capabilities,
   budget omissions, semantic/external candidates, and unresolved gaps.
+- [ ] Task-oriented queries include bounded shared epic context, retain the
+  exact task and repository/graph versions queried, and allow overlapping tasks
+  to return the same affected candidates without asserting exclusive ownership.
+- [ ] Exact absence results report the covered sources and detector/index
+  versions rather than claiming universal absence.
 - [ ] Failed or exhausted context-investigation attempts do not invalidate the
   initial graph packet and remain measurable.
 - [ ] Strong clusters enforce the corroboration rules in Design Decision 10.
@@ -1071,6 +1136,8 @@ Exact flags may change during Task 0.
 | Structural graph | repository/file/item containment, definitions, document section/chunk hierarchy |
 | Document identity | heading continuity, inserted text, duplicate/renamed headings, ambiguous matches |
 | Review provenance | exact reviewed version, saved/chat-only review, prompt/model attribution, unsupported claims |
+| Requested changes | exact task/epic version, shared context, normalized explicit operations, ambiguous prose, no future-code edges |
+| Task change surface | exact seeds, reference candidates, overlapping tasks, pre/post-version comparison, generated consumers |
 | Cross-model comparison | agreement versus independent repository evidence, conflicts, missing attribution |
 | Table context | snapshot/row/cell identity, row reorder/edit ambiguity, source spans |
 | Context completeness | source coverage, unsupported capabilities, omissions, zero results, unresolved gaps |

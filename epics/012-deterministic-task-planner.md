@@ -108,8 +108,9 @@ a plan that:
   repository truth.
 - Plan evidence-bounded review and cross-review comparison without treating
   model agreement as repository truth.
-- Support an optional small/tiny-model context-investigator interface behind a
-  feature boundary without making it necessary for core planning.
+- Support a small/tiny-model context-investigator interface behind a
+  replaceable boundary. Host-facing library configuration enables it by
+  default and lets callers disable it explicitly.
 - Evaluate plan quality using real prompts and deterministic fixtures.
 
 ## Non-goals
@@ -117,8 +118,9 @@ a plan that:
 - Execute shell commands or tools.
 - Modify repository files.
 - Spawn, supervise, or communicate with sub-agents.
-- Choose, host, or directly execute a small/tiny model; planner core only emits
-  and consumes typed investigation specifications/results.
+- Let planner rules or graph evidence choose an arbitrary model. A host adapter
+  selects one explicitly supported model and executes typed investigation
+  specifications; planner core remains provider-independent.
 - Encode Codex-, Claude Code-, or opencode-specific protocols in the core crate.
 - Grant command authorization or bypass host safety policy.
 - Guarantee that every task benefits from parallelism.
@@ -368,6 +370,8 @@ The planner must:
 ```rust
 pub struct ContextBundle {
     pub objective: String,
+    pub shared_context: Vec<ContextResource>,
+    pub requested_changes: Vec<RequestedChangeClaimRef>,
     pub resources: Vec<ContextResource>,
     pub facts: Vec<DetectedFact>,
     pub unresolved: Vec<OpenQuestion>,
@@ -378,6 +382,13 @@ pub struct ContextBundle {
 Every resource includes its `NodeKey` or file/span provenance and the graph path
 that selected it. Deduplicate overlapping document chunks and nested code
 symbols. Prefer exact/structural paths before lexical/semantic candidates.
+
+For a deterministically split implementation epic, `shared_context` retains the
+bounded goals, assumptions, non-goals, target design, and verification contract
+needed to interpret each task. `requested_changes` preserves what the exact
+task version explicitly asks to add, remove, replace, or verify. These are
+attributed requirement claims, not detected facts that the future code already
+exists and not authorization to mutate.
 
 For reviews and other derived analyses, a resource also retains the exact
 `graph_node_versions` input it examined when available. Comparing a review
@@ -395,6 +406,9 @@ the bundle in an evidence packet with an explicit completeness contract:
 pub struct TaskEvidencePacket {
     pub objective: String,
     pub primary_input: ResourceRef,
+    pub repository_version: RepositoryVersionRef,
+    pub shared_context: Vec<ContextResource>,
+    pub requested_changes: Vec<RequestedChangeClaimRef>,
     pub established: Vec<ContextResource>,
     pub candidates: Vec<ContextCandidate>,
     pub coverage: Vec<SourceCoverage>,
@@ -409,6 +423,12 @@ artifact kinds, and reference/runtime capabilities were available. It keeps
 semantic-only and externally proposed candidates separate from established
 graph paths. Zero-result searches, unsupported capabilities, and budget
 omissions are observations, not proof that no relevant artifact exists.
+
+Task packets may overlap in affected resources. The planner uses that overlap
+to create dependencies or serialize mutations; it must not infer exclusive
+file ownership from task headings. Querying the same task after a prerequisite
+lands may legitimately return a smaller remaining change surface, so packet
+identity includes the graph/repository version.
 
 ### 10. Commands are structured and evidence-derived
 
@@ -459,6 +479,41 @@ output. Core tests run without a model or network. Model failure falls back to
 deterministic planning and rendering, or leaves the original context packet
 usable with an unresolved-gap diagnostic.
 
+The public library configuration makes the optional execution path explicit:
+
+```rust
+pub struct ContextInvestigatorConfig {
+    pub enabled: bool,
+    pub model: SupportedInvestigatorModel,
+}
+
+impl Default for ContextInvestigatorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            model: SupportedInvestigatorModel::default(),
+        }
+    }
+}
+```
+
+`enabled = false` prevents construction or invocation of a network/model
+investigator while preserving deterministic planning, the initial context
+packet, and gap diagnostics.
+
+`SupportedInvestigatorModel` is a closed, serializable set accepted by the
+shipped adapter. Its initial variants and default are selected only after
+manual quality, latency, bounded-tool-use, and cost testing. Unknown persisted
+model keys produce a configuration diagnostic rather than silently selecting
+another model. Embedding hosts may still provide a custom investigator.
+
+The first-party host adapter uses `~/Projects/llm-sdk/` through its
+OpenAI-compatible client surface. Endpoint and credentials are host
+configuration, never planner facts or task evidence. The adapter maps each
+supported variant to an exact API model identifier and records it in
+investigation provenance. Keep this integration outside planner core so core
+tests remain network-free and provider-independent.
+
 Optional model output is itself an attributed action result. If a host persists
 it, it should retain model identity, authored/observed time, prompt or prompt
 hash, reviewed input versions, and output content hash. The planner does not
@@ -467,8 +522,10 @@ infer these fields from a later Git commit.
 ### 12. Context-gap investigations are deterministic, bounded, and read-only
 
 The planner may emit `investigate_context_gap` only from a recognized gap in a
-`TaskEvidencePacket`. A host may choose a small/tiny model to execute it, but
-model selection and execution are outside planner core.
+`TaskEvidencePacket`. A host adapter may execute it when
+`ContextInvestigatorConfig` is enabled. Execution and credentials remain
+outside planner core, while supported model selection and the on/off policy are
+public library APIs.
 
 ```rust
 pub struct InvestigationSpec {
@@ -774,6 +831,47 @@ F-H are absent when E reports sufficient coverage or no supported investigation
 can improve it. The small/tiny model is strictly a context-retrieval helper; it
 does not make the product decision or authorize J-M.
 
+### Plan G: Implement one task from a multi-file epic
+
+Input:
+
+> Implement Task 5 from the contact-ownership refactor epic.
+
+Expected plan:
+
+```text
+Versioned task input
+  A. Read the exact Task 5 section and bounded shared epic goals, assumptions,
+     non-goals, target schema, and verification contract.
+  B. Normalize explicit requested changes as attributed claims.
+
+Parallel current-state retrieval
+  C. Resolve named tables, fields, types, functions, migrations, and commands
+     against the selected repository version.
+  D. Expand exact/structural seeds to candidate consumers and focused tests.
+  E. Inspect history for the current deduplication and ownership behavior.
+
+Barrier
+  F. Assemble established facts, requested changes, candidate change surface,
+     cross-task overlap, unsupported reference/data-flow coverage, and open
+     design questions.
+
+Implementation
+  G. Decide concrete signatures, transaction behavior, and compatibility where
+     the epic does not specify them.
+  H. Modify the evidence-supported regions without assuming Task 5 exclusively
+     owns shared files.
+  I. Run focused and repository gates, then perform exact old-identifier
+     absence checks within declared coverage.
+  J. Review the diff against both Task 5 and the shared epic constraints.
+```
+
+If Tasks 1–4 have already landed, C-F are recomputed against that newer
+repository version rather than replaying a stale pre-epic change surface.
+Requested-change claims say what the epic asks for; they do not prove that a
+table exists, authorize mutation, or determine a concrete patch. Runtime SQLx,
+database, compiler, and smoke-test discoveries remain execution results.
+
 ## Tasks
 
 ### Task 0: Run and pass the blocking planner thought experiments
@@ -802,6 +900,10 @@ plans with the actual work previously done, and revise this epic.
 - [ ] At least one experiment covers a real cross-model plan review and
   distinguishes exact document versions, attributed claims, repository
   evidence, and an unavailable chat-only artifact.
+- [ ] At least one multi-file epic experiment plans per-task implementation
+  using bounded shared epic context and requested-change claims, compares the
+  candidate change surface with actual diffs, and records cross-task overlap
+  plus runtime/build-only misses.
 - [ ] Plan size and expected tool/context savings are compared with the
   original prompting workflow.
 - [ ] This epic's models, rules, and tasks are revised from the results.
@@ -821,6 +923,9 @@ diagnostics, and plans.
   diagnostic values.
 - [ ] Review actions retain exact reviewed-version references and attributed
   claim sources.
+- [ ] Requested-change claims round-trip with exact epic/task version, source
+  span, shared-context references, normalized operation when known, and
+  ambiguity diagnostics.
 - [ ] Task evidence packets and investigation specs/results round-trip without
   losing coverage, gaps, attribution, observed/inferred status, or budgets.
 - [ ] Action IDs and ordering are deterministic for identical inputs.
@@ -874,6 +979,11 @@ explicit budgets.
 - [ ] Review resources target the exact document/node version where available;
   stale or unknown targets produce diagnostics.
 - [ ] Parent requirement context is included without returning whole documents.
+- [ ] Split-task selection includes bounded shared goals, assumptions,
+  non-goals, target design, and verification requirements needed to interpret
+  the task.
+- [ ] Explicit requested-change claims seed current-code retrieval but remain
+  distinct from established graph facts and mutation authorization.
 - [ ] Nested/overlapping symbols and document chunks are deduplicated.
 - [ ] Budget omissions and missing evidence appear in diagnostics.
 - [ ] Coverage reports source/index/detector availability, unsupported
@@ -883,6 +993,10 @@ explicit budgets.
 - [ ] Recognized context gaps are stable typed values suitable for planning
   rules.
 - [ ] Identical graph/request inputs produce identical context ordering.
+- [ ] Packet identity includes the repository/graph version; overlapping tasks
+  may select the same resources without implying exclusive ownership.
+- [ ] Absence checks preserve exact indexed coverage and cannot become
+  universal “no references exist” claims.
 - [ ] An unavailable/incomplete graph falls back to bounded search actions
   rather than panicking.
 
@@ -908,6 +1022,10 @@ review, and explanation rules using capabilities and graph patterns.
 - [ ] Focused verification precedes broad gates when a reliable target exists.
 - [ ] Broad correctness gates come from project facts.
 - [ ] Duplicate rule output is normalized without losing rationale.
+- [ ] Rules may derive candidate edit scope from requested-change claims and
+  current evidence, but concrete patch steps remain agent/manual actions when
+  signatures, transaction behavior, compatibility, or product decisions
+  require reasoning.
 - [ ] Rule fixtures cover all representative plans in this epic.
 
 ### Task 6: Implement dependencies, parallel groups, and command specs
@@ -939,6 +1057,13 @@ require, a bounded context-investigator interface for small/tiny models.
 - [ ] Prompts do not reproduce unrelated files or unbounded prior outputs.
 - [ ] JSON is sufficient for a host adapter without parsing prose.
 - [ ] Core planning and tests require no model or network.
+- [ ] Host-facing library configuration enables the helper by default; an
+  explicit disabled path performs no model/network invocation while retaining
+  deterministic output and gap diagnostics.
+- [ ] A closed, serializable supported-model type rejects unknown keys; its
+  initial variants and default are documented from manual test results.
+- [ ] A first-party adapter integrates `~/Projects/llm-sdk/` through an
+  OpenAI-compatible API and maps supported variants to exact model identifiers.
 - [ ] Model output is schema-validated and failure falls back cleanly.
 - [ ] Context-investigation prompts contain one typed gap, graph-selected seeds,
   allowed read-only tools, explicit call/byte/depth budgets, and a structured
@@ -992,6 +1117,7 @@ cargo run -- --repo . --plan-json "Fix the import cache bug"
 | Python facts | uv/poetry/pip, pytest/tox/nox, lint/type tools, conflicts |
 | JS/TS facts | npm/pnpm/yarn/bun lockfiles and manifest scripts |
 | Graph selection | evidence priority, parent context, deduplication |
+| Epic task context | bounded shared context, requested-change claims, exact repository version, overlapping change surfaces |
 | Context completeness | source/index coverage, unsupported capabilities, omissions, zero results, typed gaps |
 | Context investigations | deterministic triggers, read-only tools, budgets, validation, attribution, failure fallback |
 | Investigation iteration | stable attempts, duplicate findings, marginal yield, stop/escalation behavior |
@@ -1017,7 +1143,9 @@ cargo run -- --repo . --plan-json "Fix the import cache bug"
 | `crates/daftprompt-planner/src/rules/` | Versioned generic planning rules. |
 | `crates/daftprompt-planner/src/context.rs` | Graph selection, deduplication, and budgets. |
 | `crates/daftprompt-planner/src/investigation.rs` | Typed context gaps, bounded investigation contracts, validation, and yield. |
+| `crates/daftprompt-planner/src/config.rs` | Default-on investigator policy and closed supported-model selection. |
 | `crates/daftprompt-planner/src/render.rs` | Generic prompt and JSON rendering. |
+| `crates/daftprompt-planner-llm/src/lib.rs` | Candidate first-party `llm-sdk` OpenAI-compatible adapter; exact boundary settled during Task 0/7. |
 | `src/main.rs` | Add read-only plan inspection CLI. |
 | `epics/research/012-planner-thought-experiments.md` | Blocking real-prompt planning evidence. |
 | `README.md`, `DEVELOP.md`, `AGENTS.md` | Document planner behavior and safety boundaries. |
@@ -1044,6 +1172,7 @@ boundary and separation from execution are requirements.
 - Commands inferred from configuration still require host authorization.
 - Real prompt fixtures may contain confidential project information; sanitize
   them while retaining the structural planning challenge.
-- Agent-specific adapters, execution engines, model hosting/selection, result
-  collection, prompt-corpus generation, and learned ranking are follow-up
-  epics.
+- Agent-specific adapters, general execution engines, result collection,
+  prompt-corpus generation, and learned ranking are follow-up epics. Epic 012
+  includes the narrow first-party OpenAI-compatible `llm-sdk` context
+  investigator and its supported model selection.

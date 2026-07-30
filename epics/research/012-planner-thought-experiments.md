@@ -4,6 +4,20 @@ This artifact records real planning cases used to revise Epic 012. It is
 intentionally cumulative. Task 0 remains incomplete until the full required
 corpus and acceptance criteria in the epic are satisfied.
 
+## Cross-cutting helper configuration conclusion
+
+The bounded small/tiny-model investigation is optional in capability but
+enabled by default in host-facing library configuration. Callers can set
+`enabled = false`; that path performs no model or network call and still
+returns the deterministic initial packet, coverage, and gap diagnostics.
+
+The shipped adapter will use `~/Projects/llm-sdk/` through an OpenAI-compatible
+API. Model choice is a closed supported-model value rather than an arbitrary
+string. The initial supported set and default remain intentionally unsettled
+until manual testing measures retrieval quality, correct bounded tool use,
+latency, and cost. Recorded fixtures exercise planner core without credentials
+or network access.
+
 ## Experiment 1: Cross-model review of akar Epic 020
 
 The repository facts, commits, blob IDs, evidence, and provenance gaps are
