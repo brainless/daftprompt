@@ -91,6 +91,26 @@ remaining tasks in this epic may change in response to recorded evidence.
 Failed experiments and rejected variants are useful results and must remain
 visible rather than being rewritten into an apparently linear success story.
 
+### Repository expansion sequencing
+
+Build and debug the harness end-to-end against the daftprompt repository
+itself first: snapshot, graph extraction, packet selection, prompt rendering,
+and, once available, helper refinement and replay should all get their
+mechanics proven on one deeply understood corpus before other repositories
+enter the loop. Iterating on a broken mechanism is cheaper when the author can
+debug the corpus fastest.
+
+This is a sequencing preference, not a scope reduction. The multi-repository
+corpus required by Task 0's manifest (at least three repositories) and by the
+parent Epics 011-013 gates remains mandatory before any Task 0 criterion in
+this epic or its parents is marked complete. A single-repository pass proves
+the harness runs; it does not by itself satisfy a corpus-level acceptance
+criterion and must not be reported as though it does (see Design Constraint 7
+and the single-anecdote guardrail in Task 6). Once the harness produces
+materially useful, reproducible results on daftprompt fixtures, extend the
+manifest to the required additional repositories under the same
+immutable-revision and sanitization rules already stated in Task 0.
+
 ### Experiment notes live in this epic
 
 Use the `Experiment Notes` section at the end of this file as the chronological
@@ -218,7 +238,11 @@ Every run records at least:
 - lab, detector, prompt-template, and optional model versions.
 
 A prompt must not combine current working-tree text, a stale index, and historic
-Git evidence without exposing that mismatch.
+Git evidence without exposing that mismatch. This constraint also governs the
+downstream task-outcome runs added by Design Constraint 7: a disposable
+worktree checked out to evaluate a prompt is a second live snapshot, and its
+resolved commit must be compared against the revision the prompt and packet
+claim to describe, not assumed to match it.
 
 ### 3. Minimal evidence graph
 
@@ -279,6 +303,31 @@ Passing a lab task is not itself proof that a parent Task 0 criterion passes.
 Each replay must state which exact criterion it supports, include its evidence,
 and update the corresponding research artifact and epic checkbox only when that
 criterion is genuinely satisfied.
+
+### 7. Task outcome is measured independently of prompt quality
+
+A polished, well-cited generated prompt is not evidence that the downstream
+work will be correct, complete, or safe. A prompt can read as detailed and
+still omit a governing constraint, cite a stale source, or hand off a gap the
+agent will not notice. Prompt quality and task outcome are therefore always
+scored as two distinct measurements, and neither substitutes for the other:
+
+- **Prompt quality** covers the prompt artifact itself: intent preservation,
+  provenance labelling, coverage/gap disclosure, and budget compliance, all
+  checkable from the prompt text and its packet without running an agent.
+- **Task outcome** covers what happened after a coding agent received the
+  prompt: whether the resulting change builds, passes the project's
+  verification commands, touches the artifacts in the case's known practical
+  relevance set, respects stated negative constraints, and does not act on an
+  unsupported claim the prompt should have flagged as a suggestion.
+
+Task outcome runs execute each prompt variant for a case in its own disposable
+Git worktree, never the pinned evaluation checkout, so an agent's edits cannot
+contaminate the fixture or a later variant's run. Because coding-agent
+behavior is not deterministic, a single run is an anecdote; Task 6 requires
+repeated runs before a case-level conclusion is drawn, and the deterministic
+lab replay (graph, packet, prompt generation) remains fully reproducible
+independent of any downstream agent run.
 
 ## Tasks
 
@@ -471,6 +520,21 @@ without committing private raw material or credentials.
   research record.
 - [ ] No single successful anecdote is used to pass a parent epic's corpus-level
   criterion.
+- [ ] Each case's raw, deterministic, and helper-refined prompt variants are
+  handed to a coding agent in a disposable Git worktree per variant and
+  revision, never the pinned evaluation checkout, and the resulting diff,
+  build/verification result, and touched artifacts are captured.
+- [ ] Task outcome is scored against the case's known practical relevance set
+  (artifact precision/recall) and its verification commands, independent of
+  any subjective rating of the prompt text (Design Constraint 7).
+- [ ] A downstream unsupported or extraneous edit is traced back to the
+  prompt claim or omission that produced it, and a gap the agent independently
+  rediscovered or missed is recorded against the prompt's disclosed gaps.
+- [ ] Stated negative constraints are checked against the actual diff, not
+  against the prompt's restatement of the constraint.
+- [ ] Each case-variant pair runs more than once before a case-level
+  conclusion is drawn, and the report distinguishes a stable result from
+  single-run variance.
 
 ### Task 7: Close the parent Task 0 gates from evidence
 
@@ -596,6 +660,32 @@ bounded as follows:
   requires a documented parent-epic decision backed by repeated evidence.
 - Private prompt corpora and client artifacts must never be committed raw.
   Sanitization, hashes, and immutable public fixture abstractions are required.
+- Downstream task-outcome runs (Design Constraint 7, Task 6) execute a coding
+  agent against a generated prompt. That run must happen in a disposable
+  worktree separate from the pinned evaluation revision so an agent's
+  mutations never contaminate the lab's own fixtures, indexes, or a sibling
+  variant's run.
+- That same run reintroduces the mixed-snapshot danger of Design Constraint 2
+  in a new place, and is worth calling out explicitly rather than assuming the
+  existing snapshot rule automatically covers it: the worktree the agent edits
+  in is a second live checkout, distinct from whatever revision the graph was
+  built against and whatever revision the index was last built against. Three
+  concrete failure modes to guard against:
+  - the worktree is checked out at a commit other than the one the prompt and
+    packet claim to describe (e.g. a stale branch, an uncommitted local change
+    carried over, or the agent pulling new commits mid-run);
+  - the index consumed when generating the packet was built at an earlier or
+    later watermark than the worktree's checked-out commit, so retrieval
+    reflects coverage the worktree does not actually have, or is missing
+    coverage the worktree does have;
+  - running several case-variant worktrees concurrently against the same
+    repository path lets one experiment's in-place state leak into another's
+    result unless each worktree and its resolved commit are tracked and
+    reported independently.
+  Each recorded task-outcome result must therefore state the worktree's own
+  resolved commit and index watermark alongside the prompt's claimed revision,
+  and disclose any mismatch instead of silently scoring the agent's diff as if
+  it answered the pinned snapshot.
 
 ## Experiment Notes
 
