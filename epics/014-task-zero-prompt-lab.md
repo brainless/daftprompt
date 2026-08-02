@@ -339,24 +339,49 @@ relevance sets, expected graph facts, and parent acceptance criteria.
 
 #### Acceptance Criteria
 
-- [ ] The manifest includes the existing Epic 011/012 cases and identifies
+- [x] The manifest includes the existing Epic 011/012 cases and identifies
   which additional cases are required to reach Epic 013's twelve-case corpus.
-- [ ] At least three repositories are represented by immutable revisions.
-- [ ] Private inputs are sanitized while retaining content hashes and enough
-  behavioral structure for reproducible evaluation.
-- [ ] Each case records original intent, mutation constraints, expert and
+  See `epics/research/task-zero-lab/manifest.md` §2–§3 (nine cases, C01–C09,
+  each linked back to its originating 011/012 experiment) and §5 (gap
+  analysis: at least three more cases needed to reach twelve, with the
+  highest-priority content gap identified as injection coverage).
+- [x] At least three repositories are represented by immutable revisions.
+  Five repositories (akar, Keystone, ReporGo, dwata, nocodo) with revisions
+  re-verified against local clones on 2026-08-02 (manifest §1).
+- [x] Private inputs are sanitized while retaining content hashes and enough
+  behavioral structure for reproducible evaluation. Keystone (C02) and
+  ReporGo (C03) private material is represented only by content hashes,
+  blob IDs, and structural facts; no raw client, patient, or message content
+  is present (manifest §3, §8).
+- [x] Each case records original intent, mutation constraints, expert and
   deliberately minimal/non-expert request renderings where required.
-- [ ] Each case records its known practical relevance set and the evidence by
-  which that set was established.
+  Satisfied for all nine documented cases (manifest §3); non-expert
+  renderings are newly authored for this manifest and explicitly marked NEW.
+- [x] Each case records its known practical relevance set and the evidence by
+  which that set was established. Satisfied for all nine cases, mostly by
+  direct `git diff`/`git show` comparison against already-completed
+  historical work (manifest §3).
 - [ ] Cases cover positive retrieval, missing evidence, ambiguity, conflict,
   injection, exhausted coverage, history dependence, multi-file work, and
-  runtime-only discoveries.
-- [ ] Metrics include artifact recall, irrelevant context, context bytes,
+  runtime-only discoveries. Left unchecked: the manifest's coverage matrix
+  (§4) shows positive retrieval, missing evidence, history dependence,
+  multi-file work, and runtime-only discoveries are covered, but ambiguity
+  and injection have no sourced case yet (explicit content gaps) and conflict
+  and exhausted graph coverage are only partially exhibited by existing cases.
+  Closing this requires sourcing or authoring the cases identified in
+  manifest §5, not further documentation of the current nine.
+- [x] Metrics include artifact recall, irrelevant context, context bytes,
   capable-model tokens, wall time, prompt quality, intent preservation, gap
-  recall, duplicate calls, unsupported claims, and task outcome.
-- [ ] Every case maps to one or more unchecked Task 0 criteria in Epics
-  011–013.
-- [ ] No production implementation task in Epics 011–013 has begun.
+  recall, duplicate calls, unsupported claims, and task outcome. All eleven
+  are defined with source fields in manifest §7. No values are measured yet
+  because no extraction/packet/prompt/helper code exists (Tasks 1–5 are
+  unstarted); this criterion covers definition, not measurement.
+- [x] Every case maps to one or more unchecked Task 0 criteria in Epics
+  011–013. Each of the nine cases states its mapped unchecked criteria
+  explicitly in manifest §3.
+- [x] No production implementation task in Epics 011–013 has begun.
+  `crates/` contains only `daftprompt-indexer` (re-verified 2026-08-02), and
+  every Task 1+ checkbox in Epics 011, 012, and 013 remains unchecked.
 
 ### Task 1: Add immutable snapshot and index-coverage inspection
 
@@ -710,3 +735,59 @@ delete superseded notes; add a later note that revises or rejects them.
 - Next iteration:
 - Detailed artifacts:
 ```
+
+### 2026-08-02 — Task 0 case manifest
+
+- Parent criterion/question: Epic 014 Task 0, all bullets — define the lab
+  corpus and success measurements by mapping existing Epic 011/012 real cases
+  to immutable revisions, sanitized requests, relevance sets, expected graph
+  facts, and parent acceptance criteria.
+- Repository and immutable revision: five repositories, all revisions
+  re-verified with `git cat-file -e` on 2026-08-02 — see
+  `epics/research/task-zero-lab/manifest.md` §1 for the full table (akar,
+  Keystone, ReporGo, dwata, nocodo).
+- Fixture and input request: no new fixtures executed; this iteration is pure
+  documentation synthesis over the already-committed
+  `epics/research/011-provenance-thought-experiments.md` and
+  `epics/research/012-planner-thought-experiments.md` experiments.
+- Harness/detector/prompt/policy/model versions: none — no lab code exists
+  yet (Task 1 unstarted).
+- Harness change: none (documentation only). Created
+  `epics/research/task-zero-lab/manifest.md`.
+- Observed result and measurements: nine real cases (C01–C09) indexed across
+  five repositories; coverage matrix against Epic 013's fifteen required
+  properties shows five properties covered, two partial, five behavior-gaps
+  (cannot be pre-filled without a running harness), and six pure content gaps
+  (ambiguity, injection, vague/clarification-recoverable, verbose/poorly
+  structured, genuine-ambiguity-preserving — some cases may close more than
+  one gap at once). Eleven required metrics defined with source fields; no
+  values measured yet.
+- Validated findings: the existing Epic 011 research corpus already supplies
+  enough real, revision-pinned, cross-repository material to satisfy most of
+  Epic 014 Task 0's structural criteria (repository count, sanitization,
+  intent/relevance-set recording, criterion mapping) without inventing new
+  cases. The twelve-case corpus and full coverage-property list required by
+  Epic 013 Task 0 are not yet reachable from existing material alone.
+- Rejected or unsupported interpretations: did not fabricate plausible
+  content for the ambiguity, injection, over-calling, early-stop (beyond
+  C02's already-real instance), multi-helper-comparison, or intent-drift
+  properties; recording them as open gaps was preferred over a manufactured
+  passing conclusion (per Design Constraint 1 and the epic's guardrail
+  against this).
+- Remaining gaps: at least three more real or carefully-authored cases needed
+  to reach Epic 013's twelve-case floor; injection coverage specifically
+  needs a constructed fixture since it is inherently adversarial; five
+  behavior-gap properties require Epic 014 Tasks 1–5 to exist and run before
+  they can be marked covered; candidate unexplored local repositories
+  (`admin-gui`, `pi`, `pixlie`, `rustysolid`, `SmartCrawler`, others) have not
+  been searched for additional real cases in this pass.
+- User decision or pending decision: pending review of the manifest and this
+  note before treating the nine-case corpus as a stable base for Task 1+
+  fixtures.
+- Next iteration: mine additional local repositories for real ambiguous and
+  vague/clarification-recoverable cases; author a controlled injection
+  fixture in a disposable worktree of an existing corpus repository; only
+  after Task 1 (snapshot/index-coverage inspection) exists, begin executing
+  C01–C09 as actual harness runs to start closing the behavior-gap
+  properties.
+- Detailed artifacts: `epics/research/task-zero-lab/manifest.md`.
