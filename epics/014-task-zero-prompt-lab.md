@@ -391,21 +391,64 @@ matches that snapshot.
 
 #### Acceptance Criteria
 
-- [ ] Git runs record the resolved commit, tree/blob identities, parents, and
+- [x] Git runs record the resolved commit, tree/blob identities, parents, and
   whether the working tree differs from the requested revision.
-- [ ] Non-Git fixtures use deterministic xxh3 content identities and separate
+  `crates/task-zero-lab/src/git_snapshot.rs::GitSnapshot` records
+  `resolved_commit`, `tree_id`, `parents`, per-changed-file `blob_id`/
+  `previous_blob_id`, `resolved_is_head`, `head_is_dirty`, and the combined
+  `worktree_differs_from_revision` signal. Full-repo blob enumeration beyond
+  changed files is out of scope (not required by Design Constraint 2's
+  wording and would duplicate `code.rs`'s existing tree traversal).
+- [x] Non-Git fixtures use deterministic xxh3 content identities and separate
   content identity from filesystem mtime and observation time.
-- [ ] Index coverage reports available source partitions, supported languages,
+  `crates/task-zero-lab/src/content_identity.rs` reuses
+  `daftprompt_indexer::db::content_hash` (xxh3) for `content_hash`, and keeps
+  `mtime_unix`/`observed_at_unix` as separate, hash-independent fields;
+  covered by touch/edit/restore tests.
+- [x] Index coverage reports available source partitions, supported languages,
   index/database identity, and any detectable staleness or version mismatch.
-- [ ] Historic runs never silently read current file content as if it belonged
-  to the pinned revision.
-- [ ] Dirty or unindexed inputs are included only by explicit fixture policy and
-  remain visibly labelled.
-- [ ] Root, merge, rename, deletion, and ordinary modification fixtures expose
+  `crates/task-zero-lab/src/index_coverage.rs::IndexCoverage` reports
+  `db_path`/`db_exists`, per-source-type `partitions`, `supported_languages`,
+  `recorded_repo_path`/`repo_path_mismatch`, and `embedding_dimension`. The
+  current `repo_meta` schema records only a wall-clock `indexed_at`
+  timestamp, not the Git commit an index was built from; `staleness_note`
+  states this schema gap explicitly on every report rather than fabricating
+  a revision-level freshness claim the data cannot support.
+- [x] Historic runs never silently read current file content as if it belonged
+  to the pinned revision. `diff_against_first_parent` reads only Git tree/
+  blob objects (never worktree files) to compute `changed_files`, and
+  `worktree_differs_from_revision` is `true` whenever `resolved_commit !=
+  HEAD`, independent of whether the tree happens to be clean.
+- [x] Dirty or unindexed inputs are included only by explicit fixture policy and
+  remain visibly labelled. `run::DirtyInputPolicy` (`ExcludeDirty` by
+  default, `IncludeDirtyLabelled` only via the CLI's explicit
+  `--include-dirty` flag) is recorded on every `RunSnapshot`; Task 1 itself
+  never substitutes worktree content for pinned-revision content regardless
+  of this flag, so the label is a declared policy for later tasks' packet
+  selection rather than an actual content-inclusion mechanism yet.
+- [x] Root, merge, rename, deletion, and ordinary modification fixtures expose
   honest Git evidence; uncertain rename detection degrades to delete/add.
-- [ ] Snapshot inspection performs no mutation, checkout, network call, or
-  dependency installation.
-- [ ] Tests use local fixtures and pass without credentials.
+  Exercised by both self-contained synthetic fixtures and the exact real
+  commits from manifest.md §6: akar `311e7d6` (root), dwata `f14ac5c`
+  (merge, parents `90f8e7f9…`/`070cbe83…`), nocodo `18bb8b4` (rename,
+  `admin-gui/src/pages/DBDeveloperPage.tsx` → `DatabasePage.tsx`), akar
+  `3e17af8` (deletion, `CLAUDE.md`), akar `13d7692` (modification,
+  `crates/akar-components/src/stat.rs` + `examples/demo-rust/src/main.rs`).
+  `uncertain_rename_degrades_to_delete_and_add` covers the below-threshold
+  case. Real-fixture tests skip (not fail) if the local `~/Projects/<repo>`
+  clone is absent, so `cargo test --workspace` stays portable.
+- [x] Snapshot inspection performs no mutation, checkout, network call, or
+  dependency installation. The index database is opened with
+  `SQLITE_OPEN_READ_ONLY` and `db::init_schema`/`Indexer::new` are never
+  called; `db_path_for_repo_readonly` deliberately duplicates
+  `db::db_path_for_repo`'s slug formula without its `create_dir_all` side
+  effect. `existing_index_reports_partitions_and_metadata_read_only`
+  asserts the DB file size is unchanged across two read-only opens.
+- [x] Tests use local fixtures and pass without credentials.
+  19 tests in `crates/task-zero-lab` (synthetic temp-repo fixtures plus the
+  six real manifest-commit fixtures above), all offline and
+  credential-free; confirmed via `cargo test --workspace` (162 tests total
+  across the workspace, 0 failures).
 
 ### Task 2: Extract the minimal epic and repository evidence graph
 
@@ -791,3 +834,111 @@ delete superseded notes; add a later note that revises or rejects them.
   C01–C09 as actual harness runs to start closing the behavior-gap
   properties.
 - Detailed artifacts: `epics/research/task-zero-lab/manifest.md`.
+
+### 2026-08-02 — Task 1 snapshot and index-coverage harness
+
+- Parent criterion/question: Epic 014 Task 1, all eight bullets — implement
+  the read-only run boundary that resolves a requested repository revision,
+  inventories allowed inputs, and reports whether currently indexed data
+  matches that snapshot.
+- Repository and immutable revision: daftprompt itself (`HEAD` at the time
+  of this note) plus six real, revision-pinned commits from
+  `epics/research/task-zero-lab/manifest.md` §6: akar `311e7d6` (root),
+  dwata `f14ac5c` (merge), nocodo `18bb8b4` (rename), akar `3e17af8`
+  (deletion), akar `13d7692` (modification). Local clones under
+  `~/Projects/` re-verified present with `git cat-file -e` before writing
+  the fixtures.
+- Fixture and input request: no human-request fixture — Task 1 is
+  infrastructure, not the request→prompt path. Inputs were the six manifest
+  commits above plus twelve self-contained synthetic temp-repo fixtures
+  (root, ordinary modification, deletion, above-threshold rename,
+  below-threshold rename-that-degrades-to-delete/add, merge, historic-
+  revision-vs-worktree, dirty-worktree-at-HEAD) and three content-identity
+  fixtures (touch-without-change, content-change, content-restore).
+- Harness/detector/prompt/policy/model versions: new crate
+  `crates/task-zero-lab` v0.1.0 (`lab_version` field), no detector/prompt/
+  model versions yet (Tasks 2-5 unstarted). `gix` local path dependency
+  (`~/Projects/gitoxide/gix`), with the `status` feature added only to this
+  crate's own `gix` dependency (needed for `Repository::is_dirty()`) rather
+  than to the workspace root or `daftprompt-indexer`'s `gix` dependency.
+- Harness change: added `crates/task-zero-lab` (workspace member) with
+  `src/git_snapshot.rs` (Git revision resolution, parent/tree/blob identity,
+  first-parent changed-file evidence with rename/copy detection at Git's
+  default 50% similarity threshold, `worktree_differs_from_revision`),
+  `src/content_identity.rs` (xxh3 non-Git content identity via
+  `daftprompt_indexer::db::content_hash`, separate from mtime/observation
+  time), `src/index_coverage.rs` (strictly read-only inspection of the
+  existing per-repo indexer SQLite DB — `SQLITE_OPEN_READ_ONLY`, no
+  `init_schema`/`Indexer::new` call, no `create_dir_all` side effect), and
+  `src/run.rs` (combines the above into one `RunSnapshot` plus an explicit
+  `DirtyInputPolicy`). CLI at `crates/task-zero-lab/src/main.rs` (binary
+  `task_zero_lab`) exposes `snapshot --repo <path> --rev <rev>
+  [--include-dirty]`, `content --path <file-or-dir>`, and `coverage --repo
+  <path>`, matching (with a couple of additional subcommands) the epic's
+  suggested experimental CLI shape.
+- Observed result and measurements: `cargo check --workspace` and `cargo
+  test --workspace` both pass (162 tests total, 0 failures; 19 in
+  `task-zero-lab`). Manual CLI run of `snapshot --repo . --rev HEAD` against
+  daftprompt's own repository correctly reported two real file-level
+  changes (`epics/014-task-zero-prompt-lab.md` modified,
+  `epics/research/task-zero-lab/manifest.md` added) after a bug was found
+  and fixed: `gix_diff::tree_with_rewrites` also emits directory (tree-mode)
+  entries as pseudo-changes to support relation reconstruction, and an
+  early version of this harness surfaced those directories
+  (`epics`, `epics/research`) as if they were changed files. Fixed by
+  filtering on `entry_mode.is_tree()`, mirroring the blob-only filter
+  `code.rs`'s tree traversal already applies. The same manual run also
+  correctly read the real, already-indexed daftprompt cache DB read-only
+  (80 commits / 453 code items / 205 document items) and reported
+  `worktree_differs_from_revision: true`, since this session's own
+  uncommitted work is not part of the diff against `HEAD`'s first parent.
+- Validated findings: `gix`'s existing revision/tree/diff/status APIs
+  (`rev_parse_single`, `Commit::parent_ids`/`tree`/`tree_id`,
+  `Repository::diff_tree_to_tree` with explicit `Rewrites::default()`,
+  `Repository::is_dirty()`) are sufficient to implement all eight Task 1
+  criteria without inventing custom Git plumbing; reusing
+  `daftprompt_indexer::db`'s `content_hash`, `repo_meta_get`,
+  `existing_identifiers`, and slug-derivation conventions avoided
+  re-deriving the indexer's identity model. A read-only SQLite connection
+  plus a duplicated (but `create_dir_all`-free) copy of the DB-path slug
+  formula is enough to inspect index coverage with zero mutation risk, at
+  the cost of one small, explicitly-commented formula duplication (already
+  precedented by `Indexer::new`'s own custom-cache-dir branch). Rename
+  detection correctly degrades to delete+add below the 50% similarity
+  threshold without any extra logic — this is `gix`'s existing behavior at
+  the default configuration, not something this harness had to build.
+- Rejected or unsupported interpretations: did not attempt to record a
+  index-to-revision staleness verdict (e.g. "index reflects commit X"); the
+  current `repo_meta` schema has no column for the commit an index was
+  built from, so any such claim would be fabricated. The report states this
+  gap explicitly (`staleness_note`) instead. Did not implement full-repo
+  blob enumeration (every blob in the resolved tree) — Design Constraint 2
+  asks for "tree/blob identities" in service of run identity, not a
+  complete object inventory, and full enumeration would duplicate
+  `code.rs`'s existing tree-traversal responsibility for no criterion this
+  task actually requires.
+- Remaining gaps: index coverage cannot yet answer "was this index built
+  from the same commit this snapshot resolved" — closing that would require
+  a production schema change (recording an indexed-at commit SHA in
+  `repo_meta`), which is out of scope for a read-only Task 1 inspection tool
+  and would need its own parent-epic decision before touching
+  `daftprompt-indexer`'s schema. `--include-dirty`'s policy label is not
+  yet consumed by anything (Task 1 has no content-selection stage); it
+  exists so Task 3's packet selection has an explicit, already-tested
+  policy signal to read instead of inventing one under time pressure later.
+  Non-Git fixture inspection has not yet been exercised against the
+  synthetic scenarios `epics/research/task-zero-lab/manifest.md` §6
+  documents as not repository-pinned (ephemeral `guide.md`, ambiguous
+  duplicate headings) — those need Task 2's Markdown-structure extraction,
+  not Task 1's content-identity primitive alone.
+- User decision or pending decision: pending review of this harness and its
+  test coverage before treating `crates/task-zero-lab`'s types as a stable
+  base for Task 2 (graph extraction) to build on.
+- Next iteration: Task 2 — parse Markdown structure (headings, task
+  nesting, checkboxes, acceptance criteria, explicit paths/symbols) from the
+  epic files this Task 1 harness can now pin a revision against, and start
+  wiring the C01-C09 manifest cases into actual harness runs now that a
+  snapshot boundary exists to run them against.
+- Detailed artifacts: `crates/task-zero-lab/` (new crate: `src/git_snapshot.rs`,
+  `src/content_identity.rs`, `src/index_coverage.rs`, `src/run.rs`,
+  `src/main.rs`).

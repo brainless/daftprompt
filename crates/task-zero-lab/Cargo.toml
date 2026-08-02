@@ -1,0 +1,29 @@
+[package]
+name = "task-zero-lab"
+version = "0.1.0"
+edition = "2021"
+description = "Epic 014 Task 1: experimental, read-only snapshot/index-coverage research harness for the Task Zero Prompt Lab. Not part of daftprompt-indexer's production API; see epics/014-task-zero-prompt-lab.md."
+
+[[bin]]
+name = "task_zero_lab"
+path = "src/main.rs"
+
+[dependencies]
+daftprompt-indexer = { path = "../daftprompt-indexer" }
+# The `status` feature (needed for `Repository::is_dirty()`) is enabled only
+# on this experimental crate's own `gix` dependency, not on the workspace
+# root's or `daftprompt-indexer`'s. Neither production crate needs it. This
+# keeps the "research harness, not premature production architecture"
+# boundary (Epic 014 Design Constraint 1) visible in the dependency graph,
+# even though Cargo's feature unification means a `--workspace` build still
+# compiles `gix` with `status` enabled everywhere.
+gix = { path = "../../../gitoxide/gix", default-features = false, features = ["basic", "sha1", "status"] }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3"
