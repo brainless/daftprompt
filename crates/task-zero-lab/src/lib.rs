@@ -39,6 +39,8 @@
 //!   context-packet rendering over a [`graph::GraphExtraction`], with
 //!   explicit coverage/gap reporting and host-validated-only helper
 //!   evidence.
+//! - [`prompt`] (Task 4): deterministic, model-free Markdown handoff
+//!   rendering with provenance, coverage disclosure, and a hard byte budget.
 
 pub mod content_identity;
 pub mod git_snapshot;
@@ -47,4 +49,5 @@ pub mod graph_build;
 pub mod index_coverage;
 pub mod markdown_extract;
 pub mod packet;
+pub mod prompt;
 pub mod run;

@@ -594,25 +594,25 @@ context packet into a detailed Markdown prompt.
 
 #### Acceptance Criteria
 
-- [ ] A bare daftprompt request such as “continue closing the Task 0 blockers”
+- [x] A bare daftprompt request such as “continue closing the Task 0 blockers”
   resolves to the relevant Epics 011–013 criteria and research rather than all
   repository text.
-- [ ] Original intent and negative constraints are copied verbatim into an
+- [x] Original intent and negative constraints are copied verbatim into an
   immutable section before any refinement.
-- [ ] The prompt follows the output contract in Design Constraint 5.
-- [ ] Every repository claim in the prompt has a compact provenance reference;
+- [x] The prompt follows the output contract in Design Constraint 5.
+- [x] Every repository claim in the prompt has a compact provenance reference;
   unsupported suggestions are labelled as suggestions.
-- [ ] The renderer reports stale index/input mismatches and never hides missing
+- [x] The renderer reports stale index/input mismatches and never hides missing
   coverage behind polished prose.
-- [ ] Verification commands come from exact repository instructions or
+- [x] Verification commands come from exact repository instructions or
   configuration, not from language-name guessing.
-- [ ] Prompt length obeys a configured byte/token estimate budget and records
+- [x] Prompt length obeys a configured byte/token estimate budget and records
   omitted lower-ranked context.
-- [ ] Identical request, graph, packet, and template versions produce identical
+- [x] Identical request, graph, packet, and template versions produce identical
   prompt text.
-- [ ] Golden fixtures cover implementation, diagnosis, review, research,
+- [x] Golden fixtures cover implementation, diagnosis, review, research,
   ambiguity, and no-mutation requests.
-- [ ] Generated prompts are exportable for manual handoff; automatic coding-
+- [x] Generated prompts are exportable for manual handoff; automatic coding-
   agent dispatch is absent.
 
 ### Task 5: Add stateless helper refinement behind a closed interface
@@ -1199,6 +1199,81 @@ delete superseded notes; add a later note that revises or rejects them.
   contract, with golden fixtures across implementation, diagnosis, review,
   research, ambiguity, and no-mutation request types.
 - Detailed artifacts: `crates/task-zero-lab/src/packet.rs`.
+
+### 2026-08-03 — Task 4 deterministic coding-agent prompt renderer
+
+- Parent criterion/question: Epic 014 Task 4, all ten bullets — can the
+  Task 3 packet become a bounded, provenance-labelled Markdown handoff with
+  immutable human intent and honest gaps, entirely without a model?
+- Repository/revision/request: daftprompt at `HEAD`; manual smoke replay used
+  `--epics 011,012,013 --request "continue closing the Task 0 blockers"`.
+  That explicit cross-epic blocker phrasing selects Task 0 in each caller-
+  scoped epic; it does not broaden retrieval to every repository document.
+- Harness/template/model versions: `task-zero-lab` v0.1.0,
+  `task-zero-baseline-v1`, no model. Added `src/prompt.rs`, exact command
+  carriage in `PacketItem`, six sanitized golden request-class fixtures, and
+  the read-only/offline `prompt` CLI with optional explicit manual export.
+- Observed result: the real replay resolved Epic 011–013 Task 0 evidence and
+  produced a deterministic prompt within the configured 24,000-byte budget.
+  Lower-ranked context that did not fit was named under omissions. Index
+  availability remained accompanied by the existing inability to prove its
+  commit freshness. Verification commands were rendered only when Task 2 had
+  extracted the exact command into packet evidence; absent that evidence the
+  prompt says not to guess from the language.
+- Fixture coverage: implementation, diagnosis, review, research, ambiguity,
+  and no-mutation inputs are stored in
+  `crates/task-zero-lab/fixtures/prompts/cases.json`; tests cover byte-stable
+  replay, the twelve-part output contract, verbatim intent/constraints,
+  provenance labels, candidate/suggestion separation, stale-index warnings,
+  hard budget/error behavior, and command non-invention.
+- Boundaries and rejected alternatives: no credentials, network, helper, or
+  automatic coding-agent dispatch exists. `--output` is an explicit manual
+  file export only. The renderer does not re-read the repository to recover
+  commands or enrich prose, because doing so could mix snapshots and would
+  bypass packet provenance. A too-small budget errors rather than truncating
+  immutable intent or mandatory coverage disclosure.
+- Design Constraint 7 result: this experiment measures the prompt artifact
+  only. It supplies no evidence that a downstream coding agent would produce
+  a correct or safe task outcome; those isolated repeated runs remain Task 6.
+- Remaining gaps: golden fixtures validate the deterministic prompt contract,
+  not downstream quality. The current packet has no pinned index-commit
+  watermark and no semantic retrieval channel, both disclosed in the prompt.
+- Verification: `cargo check --workspace` and `cargo test --workspace` pass
+  (209 tests total: 11 app, 132 indexer, 66 lab; 0 failures). Warnings are
+  unchanged and originate in local path dependencies.
+
+### 2026-08-03 — Task 4 prompt-admission review correction
+
+- Review finding: the first real 24 KB CLI handoff exposed two defects that
+  the synthetic fixtures missed. Task 2's deliberately broad fenced-line
+  extraction had carried diagram fragments such as `-> helper request
+  refinement`, option-only lines such as `--changes...`, and prose such as
+  `pytest from pyproject.toml` into `verification_commands`; the renderer
+  incorrectly presented them as executable verification. Established packet
+  order also admitted Epic 011's large Task 0 subtree before Epic 012 or 013,
+  so deterministic omissions were honest but the handoff was not usefully
+  cross-epic.
+- Correction: prompt verification now applies a conservative executable-shape
+  filter after provenance selection. It rejects arrows, option-only lines,
+  multiline text, and common prose connectors, and admits only an explicit
+  executable allowlist or repository-local `./...` command. Rejected lines
+  remain packet evidence; they are merely ineligible for the verification
+  section. Established prompt admission is now deterministic round-robin over
+  epic/source buckets, with each bucket prioritizing Task 0, its criteria and
+  gaps, selected research, then shared constraints and other context.
+- Evidence: regressions cover the three observed command false-positive
+  shapes plus a real `cargo check --workspace` survivor, and a representative
+  oversized Epic 011 packet proves that Epic 011, 012, and 013 Task 0 evidence
+  all remains visible while lower-ranked omissions are still recorded. The
+  real CLI replay now visibly includes all three Task 0 nodes and emits only
+  `cargo check` / `cargo check --workspace` from the selected evidence.
+- Scope and remaining limitation: executable-shape filtering is intentionally
+  conservative and may omit an unusual but valid project command; omission is
+  safer than presenting prose as an exact verification instruction. This
+  remains prompt-quality evidence only, not a downstream Task 6 outcome.
+- Verification after correction: `cargo check --workspace` and `cargo test
+  --workspace` pass (211 tests total: 11 app, 132 indexer, 68 lab; 0
+  failures). Existing warnings remain confined to local path dependencies.
 
 ### 2026-08-03 — Task 3 budget-enforcement review correction
 

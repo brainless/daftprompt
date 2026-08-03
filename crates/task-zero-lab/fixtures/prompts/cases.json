@@ -1,0 +1,44 @@
+[
+  {
+    "name": "implementation",
+    "original": "Implement the selected Task 0 criterion.",
+    "read_only": false,
+    "constraints": [],
+    "expected_fragments": ["Implement the selected Task 0 criterion.", "Repository changes are authorized only when"]
+  },
+  {
+    "name": "diagnosis",
+    "original": "Diagnose why Task 0 remains blocked; do not edit.",
+    "read_only": true,
+    "constraints": ["do not edit"],
+    "expected_fragments": ["Diagnose why Task 0 remains blocked; do not edit.", "Read-only: do not modify"]
+  },
+  {
+    "name": "review",
+    "original": "Review Task 0 evidence only; do not modify files.",
+    "read_only": true,
+    "constraints": ["do not modify files"],
+    "expected_fragments": ["Review Task 0 evidence only", "Candidate context (not established)"]
+  },
+  {
+    "name": "research",
+    "original": "Research the unresolved Task 0 assumptions offline.",
+    "read_only": true,
+    "constraints": ["offline"],
+    "expected_fragments": ["Research the unresolved Task 0 assumptions offline.", "No model, credentials, network"]
+  },
+  {
+    "name": "ambiguity",
+    "original": "Help with Task 0; ask before choosing product behavior.",
+    "read_only": false,
+    "constraints": ["ask before choosing product behavior"],
+    "expected_fragments": ["ask before choosing product behavior", "Stop and ask the human"]
+  },
+  {
+    "name": "no_mutation",
+    "original": "Inspect Task 0. Do not mutate anything.",
+    "read_only": true,
+    "constraints": ["Do not mutate anything."],
+    "expected_fragments": ["Inspect Task 0. Do not mutate anything.", "Read-only: do not modify"]
+  }
+]

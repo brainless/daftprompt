@@ -322,10 +322,9 @@ pub fn find_exact_seeds(graph: &GraphExtraction, request: &str) -> Vec<SeedHit> 
         push_exact_seed(graph, format!("epic:{epic_num:03}"), caps[0].to_string(), &mut hits, &mut seen);
     }
 
-    // Bare "Task N" is only unambiguous when the loaded graph carries exactly
-    // one epic; with more than one loaded epic this pattern is deliberately
-    // left to the lexical channel rather than guessing which epic it belongs
-    // to.
+    // Bare "Task N" is normally unambiguous only with one loaded epic. Task
+    // 4's explicit cross-epic proving request, "Task 0 blockers", denotes
+    // Task 0 in every caller-selected epic without widening that epic scope.
     let epic_numbers: BTreeSet<u32> = graph
         .nodes
         .iter()
@@ -333,11 +332,15 @@ pub fn find_exact_seeds(graph: &GraphExtraction, request: &str) -> Vec<SeedHit> 
         .filter_map(|n| n.extra.get("epic_number").and_then(|v| v.as_u64()))
         .map(|v| v as u32)
         .collect();
-    if epic_numbers.len() == 1 {
-        let only_epic = *epic_numbers.iter().next().unwrap();
-        for caps in task_only_ref_regex().captures_iter(request) {
-            let task_locator = format!("epic:{only_epic:03}/task:{}", &caps[1]);
-            push_exact_seed(graph, task_locator, caps[0].to_string(), &mut hits, &mut seen);
+    let cross_epic_blockers = request.to_ascii_lowercase().contains("task 0 blocker");
+    let multiple_epics = epic_numbers.len() > 1;
+    if epic_numbers.len() == 1 || cross_epic_blockers {
+        for epic in epic_numbers {
+            for caps in task_only_ref_regex().captures_iter(request) {
+                if multiple_epics && &caps[1] != "0" { continue; }
+                let task_locator = format!("epic:{epic:03}/task:{}", &caps[1]);
+                push_exact_seed(graph, task_locator, caps[0].to_string(), &mut hits, &mut seen);
+            }
         }
     }
 
@@ -507,6 +510,9 @@ pub struct PacketItem {
     pub checked: Option<bool>,
     pub category: Option<SourceCategory>,
     pub excerpt: String,
+    /// Exact commands extracted from this item's repository source by Task 2.
+    #[serde(default)]
+    pub verification_commands: Vec<String>,
     pub found_via: Vec<FoundVia>,
     /// Other locators merged into this item because they describe the same
     /// `source_path` (Task 3 acceptance criterion: "Duplicate resources ...
@@ -566,6 +572,8 @@ fn build_items(graph: &GraphExtraction, locator_map: BTreeMap<String, Vec<FoundV
             checked: node.checked,
             category: categorize(node),
             excerpt,
+            verification_commands: node.extra.get("commands").and_then(|v| v.as_array()).into_iter().flatten()
+                .filter_map(|v| v.get("text").and_then(|v| v.as_str())).map(str::to_string).collect(),
             found_via,
             merged_from: Vec::new(),
         });
@@ -1042,6 +1050,7 @@ pub fn apply_helper_dispositions(
                     checked: node.and_then(|n| n.checked),
                     category: node.and_then(categorize),
                     excerpt,
+                    verification_commands: Vec::new(),
                     found_via: vec![FoundVia {
                         channel: SeedChannel::HostValidatedHelperProposal,
                         query_fragment: format!("{:?}: {}", disposition.classification, disposition.note),
@@ -1329,6 +1338,7 @@ mod tests {
                 checked: None,
                 category: Some(SourceCategory::EpicsAndResearch),
                 excerpt: "Epic 900".to_string(),
+                verification_commands: Vec::new(),
                 found_via: vec![FoundVia {
                     channel: SeedChannel::ExactReference,
                     query_fragment: "Epic 900".to_string(),
@@ -1345,6 +1355,7 @@ mod tests {
                 checked: None,
                 category: Some(SourceCategory::Documents),
                 excerpt: "epics/900-sample.md".to_string(),
+                verification_commands: Vec::new(),
                 found_via: vec![FoundVia {
                     channel: SeedChannel::LexicalKeyword,
                     query_fragment: "sample".to_string(),
@@ -1394,6 +1405,7 @@ mod tests {
             checked: None,
             category: Some(SourceCategory::EpicsAndResearch),
             excerpt: "Task 1".to_string(),
+            verification_commands: Vec::new(),
             found_via: Vec::new(),
             merged_from: Vec::new(),
         };
@@ -1406,6 +1418,7 @@ mod tests {
             checked: Some(false),
             category: Some(SourceCategory::EpicsAndResearch),
             excerpt: "Criterion 1".to_string(),
+            verification_commands: Vec::new(),
             found_via: Vec::new(),
             merged_from: Vec::new(),
         };

@@ -13,6 +13,8 @@
 //! cargo run --bin task_zero_lab -- graph --repo . --rev HEAD --epics 011,012,013
 //! cargo run --bin task_zero_lab -- packet --repo . --rev HEAD --epics 014 \
 //!   --request "continue closing the Task 0 blockers"
+//! cargo run --bin task_zero_lab -- prompt --repo . --rev HEAD --epics 011,012,013 \
+//!   --request "continue closing the Task 0 blockers" --output /tmp/task-zero.md
 //! ```
 
 use std::path::PathBuf;
@@ -98,6 +100,19 @@ enum Command {
         #[arg(long, default_value_t = task_zero_lab::packet::PacketBudget::default().max_total_bytes)]
         max_total_bytes: usize,
     },
+    /// Render a deterministic Markdown prompt for manual handoff. This never
+    /// dispatches it and writes only when `--output` is explicitly supplied.
+    Prompt {
+        #[arg(long)] repo: PathBuf,
+        #[arg(long, default_value = "HEAD")] rev: String,
+        #[arg(long)] epics: String,
+        #[arg(long)] request: String,
+        #[arg(long)] objective: Option<String>,
+        #[arg(long = "constraint")] negative_constraints: Vec<String>,
+        #[arg(long)] include_dirty: bool,
+        #[arg(long, default_value_t = task_zero_lab::prompt::PromptBudget::default().max_bytes)] max_prompt_bytes: usize,
+        #[arg(long)] output: Option<PathBuf>,
+    },
 }
 
 /// Shared `--epics` parsing for `Graph` and `Packet`.
@@ -164,6 +179,31 @@ fn main() -> anyhow::Result<()> {
             };
             let packet = task_zero_lab::packet::select_packet(&extraction, &request, budget)?;
             println!("{}", packet.to_normalized_json()?);
+        }
+        Command::Prompt { repo, rev, epics, request, objective, negative_constraints, include_dirty, max_prompt_bytes, output } => {
+            let epic_numbers = parse_epic_numbers(&epics)?;
+            let extraction = task_zero_lab::graph_build::build_graph(&repo, &rev, &epic_numbers, include_dirty)?;
+            let mut packet_budget = task_zero_lab::packet::PacketBudget::default();
+            packet_budget.max_items = 200;
+            packet_budget.max_total_bytes = 100_000;
+            let packet = task_zero_lab::packet::select_packet(&extraction, &request, packet_budget)?;
+            let request = task_zero_lab::prompt::PromptRequest {
+                original: request,
+                clarified_objective: objective,
+                negative_constraints,
+                mutation_boundary: task_zero_lab::prompt::MutationBoundary::RepositoryChangesOnlyWhenExplicitlyRequested,
+            };
+            let rendered = task_zero_lab::prompt::render_prompt(&request, &packet, task_zero_lab::prompt::PromptBudget {
+                max_bytes: max_prompt_bytes,
+                bytes_per_token_estimate: 4,
+            })?;
+            if let Some(path) = output {
+                std::fs::write(&path, &rendered.text)
+                    .map_err(|e| anyhow::anyhow!("failed to export prompt to {}: {}", path.display(), e))?;
+                eprintln!("exported manual-handoff prompt to {} (no dispatch performed)", path.display());
+            } else {
+                print!("{}", rendered.text);
+            }
         }
     }
     Ok(())
