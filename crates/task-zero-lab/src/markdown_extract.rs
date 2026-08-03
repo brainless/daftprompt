@@ -131,10 +131,12 @@ fn checkbox_line_regex() -> &'static Regex {
 
 /// Parse a top-level checkbox list. `body_start_line` is the 1-based line
 /// number of `body_text`'s first line, so returned spans stay in the
-/// original document's coordinates. Continuation lines (any non-blank line
-/// that doesn't start a new `- [`) are appended to the previous item's text.
+/// original document's coordinates. Indented non-blank continuation lines
+/// are appended to the previous item's text; unindented content ends the
+/// continuation region so trailing prose/fences cannot leak into a criterion.
 fn parse_checkbox_list(body_text: &str, body_start_line: usize) -> Vec<ChecklistItem> {
     let mut items: Vec<ChecklistItem> = Vec::new();
+    let mut accepting_continuation = false;
     for (offset, line) in body_text.lines().enumerate() {
         let line_no = body_start_line + offset;
         if let Some(caps) = checkbox_line_regex().captures(line) {
@@ -145,13 +147,22 @@ fn parse_checkbox_list(body_text: &str, body_start_line: usize) -> Vec<Checklist
                 start_line: line_no,
                 end_line: line_no,
             });
-        } else if let Some(last) = items.last_mut() {
+            accepting_continuation = true;
+        } else if line.trim().is_empty() {
+            // A blank line is harmless, but it is not part of the criterion
+            // text or source span. A subsequent continuation must still be
+            // indented like Markdown content belonging to the list item.
+        } else if accepting_continuation && line.starts_with([' ', '\t']) {
+            let Some(last) = items.last_mut() else { continue };
             let trimmed = line.trim();
-            if !trimmed.is_empty() {
-                last.text.push(' ');
-                last.text.push_str(trimmed);
-                last.end_line = line_no;
-            }
+            last.text.push(' ');
+            last.text.push_str(trimmed);
+            last.end_line = line_no;
+        } else {
+            // Unindented prose, a fence, or another top-level construct ends
+            // the checklist item's continuation region. Do not silently turn
+            // trailing section prose into acceptance-criterion or gap text.
+            accepting_continuation = false;
         }
     }
     items
@@ -764,6 +775,21 @@ cargo test --workspace
     }
 
     #[test]
+    fn unindented_content_after_checklist_is_not_absorbed_into_last_criterion() {
+        let text = "# Epic 999: Sample\n\n## Tasks\n\n### Task 1: Do it\n\n#### Acceptance Criteria\n\n- [ ] Actual criterion.\n  Indented detail belongs to it.\n\nTrailing prose does not belong to the checklist.\n\n```bash\ncargo test --workspace\n```\n";
+        let extraction = extract_epic(&doc(text));
+        let criterion = extraction
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::AcceptanceCriterion)
+            .unwrap();
+        assert!(criterion.label.contains("Indented detail"));
+        assert!(!criterion.label.contains("Trailing prose"));
+        assert!(!criterion.label.contains("cargo test"));
+        assert_eq!(criterion.locator.line_span, Some((9, 10)));
+    }
+
+    #[test]
     fn unchecked_criterion_produces_unresolved_gap_without_implying_cause() {
         let extraction = extract_epic(&doc(SAMPLE_EPIC));
         let gap = extraction
@@ -823,14 +849,14 @@ cargo test --workspace
     }
 
     #[test]
-    fn fenced_bash_commands_are_attached_to_enclosing_criterion_with_source_span() {
+    fn fenced_bash_commands_after_checklist_attach_to_enclosing_task() {
         let extraction = extract_epic(&doc(SAMPLE_EPIC));
-        let criterion = extraction
+        let task = extraction
             .nodes
             .iter()
-            .find(|n| n.locator.logical_id == "epic:999/task:1/criterion:2")
+            .find(|n| n.locator.logical_id == "epic:999/task:1")
             .unwrap();
-        let commands = criterion.extra.get("commands").expect("expected commands attached to the enclosing node");
+        let commands = task.extra.get("commands").expect("expected commands attached to the enclosing node");
         assert_eq!(commands[0]["text"], "cargo test --workspace");
     }
 

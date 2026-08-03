@@ -16,7 +16,6 @@
 //! `read_from_pinned_revision: false` in [`graph::ParsedDocument`] rather
 //! than silently blended in.
 
-use std::collections::HashSet;
 use std::path::Path;
 
 use serde_json::json;
@@ -27,6 +26,48 @@ use crate::graph::{
 };
 use crate::markdown_extract::{self, EpicDoc};
 use crate::{content_identity, git_snapshot, index_coverage, run};
+
+fn matching_index_identities(
+    kind: NodeKind,
+    reference: &str,
+    code_identifiers: &[String],
+    document_identifiers: &[String],
+) -> Vec<serde_json::Value> {
+    let mut matches = Vec::new();
+    match kind {
+        NodeKind::FileOrSection => {
+            let chunk_prefix = format!("{}::", reference);
+            for identifier in document_identifiers {
+                if identifier == reference || identifier.starts_with(&chunk_prefix) {
+                    matches.push(json!({ "source_type": "document", "identifier": identifier }));
+                }
+            }
+            // A referenced source file can own many indexed symbols. Retain
+            // each full canonical identifier rather than replacing it with
+            // the non-canonical bare file path.
+            for identifier in code_identifiers {
+                if identifier.starts_with(&chunk_prefix) {
+                    matches.push(json!({ "source_type": "code", "identifier": identifier }));
+                }
+            }
+        }
+        NodeKind::CodeSymbol => {
+            let suffix = format!("::{}", reference.trim_end_matches("()"));
+            for identifier in code_identifiers {
+                if identifier == reference || identifier.ends_with(&suffix) {
+                    matches.push(json!({ "source_type": "code", "identifier": identifier }));
+                }
+            }
+        }
+        _ => {}
+    }
+    matches.sort_by(|a, b| {
+        (a["source_type"].as_str(), a["identifier"].as_str())
+            .cmp(&(b["source_type"].as_str(), b["identifier"].as_str()))
+    });
+    matches.dedup();
+    matches
+}
 
 /// One resolved document: its text, the exact version it was read at, and
 /// whether that version came from the pinned revision or a disclosed dirty
@@ -299,9 +340,6 @@ pub fn build_graph(repo: &Path, rev: &str, epic_numbers: &[u32], include_dirty: 
         let code_identifiers = index_coverage::read_identifiers(repo, "code")?;
         let document_identifiers = index_coverage::read_identifiers(repo, "document")?;
         index_identifiers_considered = code_identifiers.len() + document_identifiers.len();
-        let code_set: HashSet<&str> = code_identifiers.iter().map(String::as_str).collect();
-        let document_set: HashSet<&str> = document_identifiers.iter().map(String::as_str).collect();
-
         for node in nodes.iter_mut() {
             let candidate = match node.kind {
                 NodeKind::FileOrSection => node.extra.get("referenced_path").and_then(|v| v.as_str()),
@@ -309,19 +347,15 @@ pub fn build_graph(repo: &Path, rev: &str, epic_numbers: &[u32], include_dirty: 
                 _ => None,
             };
             let Some(candidate) = candidate.map(str::to_string) else { continue };
-            let indexed_as = if document_set.contains(candidate.as_str()) {
-                Some("document")
-            } else if code_set.contains(candidate.as_str()) {
-                Some("code")
-            } else {
-                None
-            };
-            if let Some(source_type) = indexed_as {
+            let identities = matching_index_identities(
+                node.kind,
+                &candidate,
+                &code_identifiers,
+                &document_identifiers,
+            );
+            if !identities.is_empty() {
                 if let Some(obj) = node.extra.as_object_mut() {
-                    obj.insert(
-                        "indexed_identity".to_string(),
-                        json!({ "source_type": source_type, "identifier": candidate }),
-                    );
+                    obj.insert("indexed_identities".to_string(), json!(identities));
                 }
             }
         }
@@ -420,6 +454,49 @@ mod tests {
             .iter()
             .any(|e| e.relation == RelationKind::Changes && e.to == "file:epics/900-sample.md"));
         assert_eq!(extraction.coverage.requested_epics_unavailable, Vec::<u32>::new());
+    }
+
+    #[test]
+    fn index_identity_matching_retains_canonical_code_and_document_ids() {
+        let code = vec![
+            "src/widget.rs::Widget::render".to_string(),
+            "src/widget.rs::__comments__".to_string(),
+            "src/other.rs::Widget::render".to_string(),
+        ];
+        let documents = vec![
+            "README.md".to_string(),
+            "epics/014-task-zero-prompt-lab.md::0".to_string(),
+            "epics/014-task-zero-prompt-lab.md::1".to_string(),
+        ];
+
+        let file_matches = matching_index_identities(
+            NodeKind::FileOrSection,
+            "epics/014-task-zero-prompt-lab.md",
+            &code,
+            &documents,
+        );
+        assert_eq!(file_matches.len(), 2);
+        assert_eq!(file_matches[0]["identifier"], "epics/014-task-zero-prompt-lab.md::0");
+
+        let code_file_matches = matching_index_identities(
+            NodeKind::FileOrSection,
+            "src/widget.rs",
+            &code,
+            &documents,
+        );
+        assert_eq!(code_file_matches.len(), 2);
+        assert!(code_file_matches.iter().all(|m| m["source_type"] == "code"));
+
+        let symbol_matches = matching_index_identities(
+            NodeKind::CodeSymbol,
+            "Widget::render",
+            &code,
+            &documents,
+        );
+        assert_eq!(symbol_matches.len(), 2);
+        assert!(symbol_matches
+            .iter()
+            .all(|m| m["identifier"].as_str().unwrap().ends_with("::Widget::render")));
     }
 
     #[test]

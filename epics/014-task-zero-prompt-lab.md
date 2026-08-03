@@ -485,7 +485,9 @@ experimental nodes, edges, candidates, provenance records, coverage, and gaps.
   identity and do not duplicate indexed text as graph truth.
   `index_coverage::read_identifiers` (read-only, reuses
   `daftprompt_indexer::db::existing_identifiers`) tags matching nodes with
-  `{source_type, identifier}` only; no indexed text is copied into the graph.
+  their complete canonical `{source_type, identifier}` pairs (including all
+  matching document chunks or file-owned code symbols); no indexed text is
+  copied into the graph.
 - [x] Git commit/file/version facts come from revision-pinned Git evidence.
   `Commit`/`RepositorySnapshot` nodes and `changes` edges come from Task 1's
   `GitSnapshot`; document content is read via the new
@@ -505,8 +507,8 @@ experimental nodes, edges, candidates, provenance records, coverage, and gaps.
 - [x] Unknown relation/detector values survive fixture loading as diagnostics.
   Custom `Deserialize` impls on `RelationKind`/`DetectorId`/`EvidenceClass`
   fall back to an `Unknown(String)` variant instead of erroring;
-  `GraphExtraction::collect_unknown_value_diagnostics` reports each
-  occurrence. Covered by unit tests in `graph.rs`.
+  `GraphExtraction::from_json` preserves them and automatically records each
+  occurrence in `diagnostics`. Covered by unit tests in `graph.rs`.
 - [x] Repeated extraction from identical inputs produces byte-stable normalized
   JSON apart from explicitly excluded run timing fields.
   `GraphExtraction` carries no timing field; `normalize()`/
@@ -1056,3 +1058,34 @@ delete superseded notes; add a later note that revises or rejects them.
   explicit coverage and gaps, using this task's `GraphExtraction` as input.
 - Detailed artifacts: `crates/task-zero-lab/src/graph.rs`,
   `src/markdown_extract.rs`, `src/graph_build.rs`.
+
+### 2026-08-03 — Task 2 review corrections
+
+- Parent criterion/question: review follow-up for Task 2's canonical index
+  identity reuse, unknown-value fixture diagnostics, and exact checklist
+  boundaries.
+- Repository, revision, fixture, and request: daftprompt at `f9a7f9d` plus
+  the review working tree; real `--epics 014` extraction and synthetic unit
+  fixtures; no human-request fixture because this remains graph extraction.
+- Harness versions and change: lab v0.1.0; canonical index matching now maps
+  document paths to `path`/`path::chunk` identifiers and code paths or
+  qualified symbols to complete `path::namespace::symbol` identifiers;
+  `GraphExtraction::from_json` automatically emits diagnostics for preserved
+  unknown vocabulary; checklist continuation accepts only indented Markdown
+  lines and no longer absorbs trailing prose or fenced commands.
+- Observed result: 47 `task-zero-lab` tests pass and `cargo check
+  --workspace` passes. The real indexed Epic 014 run considered 658 index
+  identifiers and retained 12 canonical identities on 2 referenced nodes,
+  compared with zero retained identities before the correction; it emitted
+  no diagnostics. Dependency warnings are unchanged and originate in local
+  path dependencies.
+- Validated/rejected/remaining: rejected direct equality between a bare
+  Markdown path/symbol and every index identifier as insufficient for
+  chunked documents and file-qualified code symbols. Matching is deliberately
+  deterministic and may return multiple canonical identities rather than
+  selecting one without evidence. Unqualified symbols can legitimately match
+  multiple files; Task 3 must preserve that ambiguity when selecting context.
+- User decision: corrections requested during review; final acceptance of
+  the revised Task 2 base remains pending user review.
+- Next experiment: use the retained canonical identity sets as Task 3 exact
+  seeds and measure whether ambiguity/budget reporting remains honest.

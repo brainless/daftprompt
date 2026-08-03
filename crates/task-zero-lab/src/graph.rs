@@ -450,6 +450,20 @@ pub struct GraphExtraction {
 }
 
 impl GraphExtraction {
+    /// Load a serialized graph fixture and immediately surface any vocabulary
+    /// values this version of the lab does not recognize. Callers should use
+    /// this boundary instead of bare `serde_json::from_str` when reading lab
+    /// fixtures so "unknown but preserved" also means "visible as a
+    /// diagnostic" rather than depending on a second, easy-to-forget call.
+    pub fn from_json(json: &str) -> anyhow::Result<Self> {
+        let mut extraction: Self = serde_json::from_str(json)?;
+        extraction
+            .diagnostics
+            .extend(extraction.collect_unknown_value_diagnostics());
+        extraction.normalize();
+        Ok(extraction)
+    }
+
     /// Scan for `Unknown(..)` relation/detector/evidence-class values across
     /// every edge class and append one diagnostic per occurrence. Task 2
     /// acceptance criterion: "Unknown relation/detector values survive
@@ -609,6 +623,31 @@ mod tests {
         });
         let diags = extraction.collect_unknown_value_diagnostics();
         assert_eq!(diags.len(), 3);
+    }
+
+    #[test]
+    fn fixture_loader_preserves_unknown_values_and_adds_diagnostics() {
+        let mut extraction = empty_extraction();
+        extraction.established_edges.push(Edge {
+            relation: RelationKind::Unknown("future_relation".to_string()),
+            from: "a".to_string(),
+            to: "b".to_string(),
+            provenance: vec![EdgeProvenance {
+                detector: DetectorId::Unknown("future_detector".to_string()),
+                method: "future_method".to_string(),
+                evidence_locator: "fixture:L1".to_string(),
+                source_version: "v2".to_string(),
+                evidence_class: EvidenceClass::Unknown("future_class".to_string()),
+                confidence: OrderedF64(0.5),
+                detail: "future evidence".to_string(),
+            }],
+        });
+
+        let json = serde_json::to_string(&extraction).unwrap();
+        let loaded = GraphExtraction::from_json(&json).unwrap();
+        assert_eq!(loaded.established_edges[0].relation.as_str(), "future_relation");
+        assert_eq!(loaded.diagnostics.len(), 3);
+        assert!(loaded.diagnostics.iter().any(|d| d.message.contains("future_detector")));
     }
 
     #[test]
