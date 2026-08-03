@@ -457,24 +457,63 @@ experimental nodes, edges, candidates, provenance records, coverage, and gaps.
 
 #### Acceptance Criteria
 
-- [ ] Markdown headings, task nesting, checkboxes, acceptance criteria, explicit
+- [x] Markdown headings, task nesting, checkboxes, acceptance criteria, explicit
   dependencies, paths, symbols, commands, and cross-epic references are
   extracted deterministically with source spans.
-- [ ] Epic/task/criterion nodes retain the exact document version and stable
+  `crates/task-zero-lab/src/markdown_extract.rs` parses headings, `Task N:`
+  nesting, checkbox lists (with continuation lines), `## Dependency`
+  sections, backtick paths/symbols, fenced-`bash` commands, and cross-epic
+  references, each carrying a `line_span`/`evidence_locator`.
+- [x] Epic/task/criterion nodes retain the exact document version and stable
   logical locator; line number alone is not treated as stable identity.
-- [ ] Unchecked criteria become explicit unresolved gaps without implying why
+  `NodeLocator::logical_id` (e.g. `epic:014/task:2/criterion:3`) is the
+  identity; `line_span` is a separate, non-identity debugging aid
+  (`graph.rs`).
+- [x] Unchecked criteria become explicit unresolved gaps without implying why
   they remain unchecked.
-- [ ] Project rules from `AGENTS.md`, `DEVELOP.md`, and repository configuration
+  Each unchecked criterion produces a verbatim-text `UnresolvedGap` node and
+  a `criterion --blocked_by--> gap` edge; verified against this file's own
+  72 unchecked criteria (`cargo run -p task-zero-lab -- graph --repo . --rev
+  HEAD --epics 014` reports exactly 72 gaps, matching
+  `grep -c '^\s*- \[ \]'`).
+- [x] Project rules from `AGENTS.md`, `DEVELOP.md`, and repository configuration
   retain source precedence and provenance.
-- [ ] Existing index results reuse their canonical `(source_type, identifier)`
+  `AGENTS.md` (precedence 0), `DEVELOP.md` (1), and `Cargo.toml` as
+  repository configuration (2) each produce a `ProjectInstruction` node with
+  `source_path`/`source_version`.
+- [x] Existing index results reuse their canonical `(source_type, identifier)`
   identity and do not duplicate indexed text as graph truth.
-- [ ] Git commit/file/version facts come from revision-pinned Git evidence.
-- [ ] Established edges, lexical/semantic candidates, helper proposals, and
+  `index_coverage::read_identifiers` (read-only, reuses
+  `daftprompt_indexer::db::existing_identifiers`) tags matching nodes with
+  `{source_type, identifier}` only; no indexed text is copied into the graph.
+- [x] Git commit/file/version facts come from revision-pinned Git evidence.
+  `Commit`/`RepositorySnapshot` nodes and `changes` edges come from Task 1's
+  `GitSnapshot`; document content is read via the new
+  `git_snapshot::read_blob_at_revision` (Git object store, never the
+  worktree) unless `--include-dirty` is explicitly set at `HEAD`, which is
+  labelled `read_from_pinned_revision: false` in `GraphCoverage`.
+- [x] Established edges, lexical/semantic candidates, helper proposals, and
   human assumptions serialize into distinct fields.
-- [ ] Every edge can be explained without rerunning its detector.
-- [ ] Unknown relation/detector values survive fixture loading as diagnostics.
-- [ ] Repeated extraction from identical inputs produces byte-stable normalized
+  `GraphExtraction` has separate `established_edges`/`candidate_edges`/
+  `helper_proposed_edges`/`human_assumption_edges`; Task 2 populates only
+  `established_edges` (structural/exact evidence) — the other three are
+  present but intentionally empty, ready for Tasks 3 and 5.
+- [x] Every edge can be explained without rerunning its detector.
+  Every `Edge` carries `Vec<EdgeProvenance>` (detector, method, evidence
+  locator, source version, evidence class, confidence, detail);
+  `Edge::explain()` composes its description from stored fields only.
+- [x] Unknown relation/detector values survive fixture loading as diagnostics.
+  Custom `Deserialize` impls on `RelationKind`/`DetectorId`/`EvidenceClass`
+  fall back to an `Unknown(String)` variant instead of erroring;
+  `GraphExtraction::collect_unknown_value_diagnostics` reports each
+  occurrence. Covered by unit tests in `graph.rs`.
+- [x] Repeated extraction from identical inputs produces byte-stable normalized
   JSON apart from explicitly excluded run timing fields.
+  `GraphExtraction` carries no timing field; `normalize()`/
+  `to_normalized_json()` sort every collection. Verified by
+  `repeated_extraction_is_byte_stable` (markdown_extract) and
+  `repeated_build_over_identical_inputs_is_byte_stable` (graph_build) against
+  both synthetic and real repository fixtures.
 
 ### Task 3: Implement bounded graph selection and context packets
 
@@ -942,3 +981,78 @@ delete superseded notes; add a later note that revises or rejects them.
 - Detailed artifacts: `crates/task-zero-lab/` (new crate: `src/git_snapshot.rs`,
   `src/content_identity.rs`, `src/index_coverage.rs`, `src/run.rs`,
   `src/main.rs`).
+
+### 2026-08-03 — Task 2 minimal evidence graph extraction
+
+- Parent criterion/question: Epic 014 Task 2, all ten bullets — parse
+  selected project documents and repository/index evidence into the
+  experimental nodes, edges, candidates, provenance records, coverage, and
+  gaps defined by Design Constraint 3.
+- Repository and immutable revision: daftprompt itself at `HEAD`
+  (`61bac23`, then the working tree as this note's own edits land);
+  extraction exercised against this repo's own `epics/011`, `epics/012`,
+  `epics/014`, `AGENTS.md`, and `DEVELOP.md`.
+- Fixture and input request: no human-request fixture — Task 2 is graph
+  extraction, not the request→prompt path. Inputs were the real epic/rule
+  files above plus synthetic temp-repo Markdown fixtures for edge-case
+  coverage (missing epic heading, unrecognized relation/detector/evidence
+  values, dirty-worktree exclusion).
+- Harness/detector/prompt/policy/model versions: `crates/task-zero-lab`
+  still v0.1.0; two new detectors — `markdown_structure`
+  (`markdown_extract.rs`) and `markdown_exact_reference` (backtick paths/
+  symbols, fenced commands, cross-epic references) — plus reuse of Task 1's
+  `git_changed_file` and a new `index_identity_reuse` detector
+  (`index_coverage::read_identifiers`).
+- Harness change: added `src/graph.rs` (node/edge/evidence-class core
+  types, `Unknown(String)` fallback deserialization, `Edge::explain`,
+  `GraphExtraction::normalize`/`to_normalized_json`), `src/markdown_extract.rs`
+  (pure Markdown structure parser), `src/graph_build.rs` (orchestrator
+  wiring Task 1's git/index primitives with the new extractor into one
+  `GraphExtraction`); extended `git_snapshot.rs` with
+  `read_blob_at_revision` and `index_coverage.rs` with `read_identifiers`;
+  wired a `graph --repo . --rev HEAD --epics 011,012,013` CLI subcommand.
+- Observed result and measurements: `cargo check --workspace` and `cargo
+  test --workspace` pass (187 tests total, 0 failures; 44 in
+  `task-zero-lab`, up from 19). Manual CLI run of `graph --repo . --rev
+  HEAD --epics 014` against this file produced 233 nodes, 288 established
+  edges, 0 diagnostics, and exactly 72 unresolved gaps — verified equal to
+  `grep -c '^\s*- \[ \]' epics/014-task-zero-prompt-lab.md`.
+- Validated findings: a deterministic Markdown structure parser plus a
+  regex-based exact-reference scanner is sufficient to satisfy every Task 2
+  criterion without any lexical/semantic retrieval; those channels stay
+  correctly empty (`candidate_edges`) until Task 3. Reusing Task 1's
+  `GitSnapshot`/`index_coverage` primitives as the sole source of Git and
+  index evidence avoided re-deriving revision or identifier logic. The
+  four-way edge-trust split (`established_edges`/`candidate_edges`/
+  `helper_proposed_edges`/`human_assumption_edges`) as separate struct
+  fields, rather than a single tagged list, made "helper output cannot
+  create established relationships" (Design Constraint 3) a type-level fact
+  instead of a convention to remember.
+- Rejected or unsupported interpretations: did not add a dedicated
+  "command" node kind, since Design Constraint 3's eleven-family node list
+  has no slot for it; extracted commands are attached as `extra.commands`
+  on their enclosing node instead. Did not turn arbitrary prose H2 sections
+  (Introduction, Goals, Risks, etc.) into graph nodes, since none of the
+  eleven node kinds fits free prose — their text is still reachable via the
+  whole-document reference scan. Did not build full historic-revision
+  directory listing for `--epics` file discovery (only pinned-revision
+  *content* reads are historic); a truly historic file-existence check was
+  judged out of scope for Task 2 under Design Constraint 1 and is left as a
+  known gap.
+- Remaining gaps: `RelationKind::Mentions` (loose textual cross-epic
+  reference) versus `RelationKind::DependsOn` (only from an explicit
+  `## Dependency` section) is a judgment call worth revisiting once Task 3
+  needs to rank or expand across these edges. No lexical/semantic candidate
+  detector exists yet, so `candidate_edges` is unexercised beyond its
+  emptiness. Historic-revision `--epics` file discovery (see above) remains
+  unimplemented.
+- User decision or pending decision: pending review of the graph extractor
+  and its test coverage before treating `crates/task-zero-lab`'s node/edge
+  vocabulary as a stable base for Task 3 (bounded selection and context
+  packets) to build on.
+- Next iteration: Task 3 — implement bounded graph selection (exact-seed
+  retrieval before fuzzy channels, source-stratified search, relation-kind/
+  depth/byte budgets) and render a machine-readable context packet with
+  explicit coverage and gaps, using this task's `GraphExtraction` as input.
+- Detailed artifacts: `crates/task-zero-lab/src/graph.rs`,
+  `src/markdown_extract.rs`, `src/graph_build.rs`.

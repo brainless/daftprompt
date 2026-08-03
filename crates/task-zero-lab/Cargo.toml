@@ -24,6 +24,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "5"
 rusqlite = { version = "0.31", features = ["bundled"] }
+# Epic 014 Task 2: deterministic Markdown reference scanning
+# (`markdown_extract.rs`) — path/symbol/command/cross-epic-reference
+# classification over backtick spans and fenced code blocks. Already present
+# in the workspace's Cargo.lock as a transitive dependency, so this adds no
+# new supply-chain surface.
+regex = "1"
 
 [dev-dependencies]
 tempfile = "3"

@@ -149,6 +149,45 @@ pub fn resolve_snapshot(repo_path: &Path, rev: &str) -> anyhow::Result<GitSnapsh
     })
 }
 
+/// Epic 014 Task 2: read a file's content straight from the Git object store
+/// at a resolved revision, never from the working tree. This is how graph
+/// extraction (`graph_build.rs`) reads epic/instruction Markdown so an
+/// extraction over a historic revision never silently substitutes current
+/// working-tree text (Design Constraint 2). Returns `Ok(None)` when the path
+/// does not exist in the resolved tree, so callers can distinguish "commit
+/// has no such file" (a normal, expected case for e.g. a newly added epic)
+/// from a hard error.
+pub fn read_blob_at_revision(repo_path: &Path, resolved_commit: &str, rel_path: &str) -> anyhow::Result<Option<(String, Vec<u8>)>> {
+    let repo = gix::discover(repo_path)
+        .map_err(|e| anyhow::anyhow!("failed to discover Git repository at {}: {}", repo_path.display(), e))?;
+    let resolved_id = repo
+        .rev_parse_single(resolved_commit)
+        .map_err(|e| anyhow::anyhow!("failed to resolve revision '{}': {}", resolved_commit, e))?;
+    let commit = resolved_id
+        .object()?
+        .try_into_commit()
+        .map_err(|e| anyhow::anyhow!("resolved revision '{}' is not a commit: {}", resolved_commit, e))?;
+    let tree = commit.tree()?;
+
+    let tree_id_for_errors = commit.tree_id()?;
+    let Some(entry) = tree
+        .lookup_entry_by_path(rel_path)
+        .map_err(|e| anyhow::anyhow!("failed to look up '{}' in tree {}: {}", rel_path, tree_id_for_errors, e))?
+    else {
+        return Ok(None);
+    };
+    if !entry.mode().is_blob() {
+        return Ok(None);
+    }
+    let blob_id = entry.id().to_string();
+    let blob = entry
+        .object()
+        .map_err(|e| anyhow::anyhow!("failed to read blob for '{}' ({}): {}", rel_path, blob_id, e))?
+        .try_into_blob()
+        .map_err(|e| anyhow::anyhow!("object for '{}' ({}) is not a blob: {}", rel_path, blob_id, e))?;
+    Ok(Some((blob_id, blob.data.clone())))
+}
+
 fn diff_against_first_parent(
     repo: &gix::Repository,
     commit: &gix::Commit<'_>,
@@ -486,6 +525,35 @@ mod tests {
         assert!(snap.resolved_is_head);
         assert!(snap.head_is_dirty);
         assert!(snap.worktree_differs_from_revision);
+    }
+
+    #[test]
+    fn read_blob_at_revision_reads_committed_content_not_worktree() {
+        let repo = init_repo();
+        std::fs::write(repo.path().join("guide.md"), "version one\n").unwrap();
+        git(repo.path(), &["add", "."]);
+        git(repo.path(), &["commit", "-q", "-m", "first"]);
+        let first_sha = String::from_utf8(
+            Command::new("git")
+                .current_dir(repo.path())
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+
+        // Change on disk without committing.
+        std::fs::write(repo.path().join("guide.md"), "version two, uncommitted\n").unwrap();
+
+        let (blob_id, data) = read_blob_at_revision(repo.path(), &first_sha, "guide.md").unwrap().unwrap();
+        assert_eq!(String::from_utf8(data).unwrap(), "version one\n");
+        assert!(!blob_id.is_empty());
+
+        let missing = read_blob_at_revision(repo.path(), &first_sha, "does-not-exist.md").unwrap();
+        assert!(missing.is_none());
     }
 
     // ── Real-history manifest fixtures (epics/research/task-zero-lab/manifest.md §6) ──

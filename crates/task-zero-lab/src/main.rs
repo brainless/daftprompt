@@ -10,6 +10,7 @@
 //! cargo run --bin task_zero_lab -- snapshot --repo . --rev HEAD
 //! cargo run --bin task_zero_lab -- coverage --repo .
 //! cargo run --bin task_zero_lab -- content --path some/file.md
+//! cargo run --bin task_zero_lab -- graph --repo . --rev HEAD --epics 011,012,013
 //! ```
 
 use std::path::PathBuf;
@@ -55,6 +56,22 @@ enum Command {
         #[arg(long)]
         repo: PathBuf,
     },
+    /// Extract the Epic 014 Task 2 evidence graph: selected epics'
+    /// Markdown structure, `AGENTS.md`/`DEVELOP.md`/`Cargo.toml` project
+    /// rules, and revision-pinned Git facts.
+    Graph {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long, default_value = "HEAD")]
+        rev: String,
+        /// Comma-separated epic numbers, e.g. `011,012,013` or `11,12,13`.
+        #[arg(long)]
+        epics: String,
+        /// See `Snapshot`'s `--include-dirty`; same disclosed dirty-input
+        /// policy, now actually consumed by document reading.
+        #[arg(long)]
+        include_dirty: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -79,6 +96,24 @@ fn main() -> anyhow::Result<()> {
         Command::Coverage { repo } => {
             let coverage = task_zero_lab::index_coverage::inspect(&repo)?;
             println!("{}", serde_json::to_string_pretty(&coverage)?);
+        }
+        Command::Graph {
+            repo,
+            rev,
+            epics,
+            include_dirty,
+        } => {
+            let epic_numbers: Vec<u32> = epics
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    s.parse::<u32>()
+                        .map_err(|e| anyhow::anyhow!("invalid epic number '{}' in --epics: {}", s, e))
+                })
+                .collect::<anyhow::Result<Vec<u32>>>()?;
+            let extraction = task_zero_lab::graph_build::build_graph(&repo, &rev, &epic_numbers, include_dirty)?;
+            println!("{}", extraction.to_normalized_json()?);
         }
     }
     Ok(())

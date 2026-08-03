@@ -118,6 +118,31 @@ pub fn inspect(repo_path: &Path) -> anyhow::Result<IndexCoverage> {
     })
 }
 
+/// Epic 014 Task 2: read the existing indexer's identifiers for one
+/// `source_type` (`"code"` or `"document"`), read-only, reused so graph
+/// extraction can tag an explicitly-referenced path/symbol as indexed
+/// without duplicating any indexed *text* into the graph (Task 2 acceptance
+/// criterion: "Existing index results reuse their canonical
+/// `(source_type, identifier)` identity and do not duplicate indexed text as
+/// graph truth"). Returns an empty vector (not an error) when no index
+/// exists for the repository, matching [`inspect`]'s own graceful-degradation
+/// behavior.
+pub fn read_identifiers(repo_path: &Path, source_type: &str) -> anyhow::Result<Vec<String>> {
+    let canonical_repo_path = std::fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.to_path_buf());
+    let db_path = db_path_for_repo_readonly(&canonical_repo_path)?;
+    if !db_path.exists() {
+        return Ok(Vec::new());
+    }
+    daftprompt_indexer::db::register_sqlite_vec();
+    let db = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| anyhow::anyhow!("failed to open index database read-only at {}: {}", db_path.display(), e))?;
+    let mut identifiers: Vec<String> = daftprompt_indexer::db::existing_identifiers(&db, source_type)?
+        .into_iter()
+        .collect();
+    identifiers.sort();
+    Ok(identifiers)
+}
+
 /// Mirrors `daftprompt_indexer::db::db_path_for_repo`'s slug algorithm
 /// without its `create_dir_all` side effect, so a read-only coverage check
 /// never creates the cache directory as a side effect of merely being run
@@ -147,6 +172,14 @@ fn db_path_for_repo_readonly(canonical_repo_path: &Path) -> anyhow::Result<PathB
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_identifiers_returns_empty_without_index() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let identifiers = read_identifiers(repo_dir.path(), "code").unwrap();
+        assert!(identifiers.is_empty());
+        assert!(!repo_dir.path().join(".daftprompt-does-not-exist").exists());
+    }
 
     #[test]
     fn missing_index_is_reported_without_creating_anything() {

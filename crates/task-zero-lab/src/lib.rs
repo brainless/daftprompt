@@ -18,15 +18,28 @@
 //! - [`git_snapshot`]: resolves a Git revision to its commit/tree/parent
 //!   identity and honest changed-file evidence (root/merge/rename/deletion/
 //!   modification), plus a conservative "does the worktree represent this
-//!   revision" signal.
+//!   revision" signal. Task 2 extends it with [`git_snapshot::read_blob_at_revision`]
+//!   for revision-pinned document content.
 //! - [`content_identity`]: deterministic xxh3 content identity for non-Git
 //!   fixtures, kept separate from filesystem mtime and observation time.
 //! - [`index_coverage`]: read-only inspection of the existing
 //!   `daftprompt-indexer` SQLite database for a repository, reusing its
-//!   canonical schema and identifiers rather than re-deriving them.
+//!   canonical schema and identifiers rather than re-deriving them. Task 2
+//!   extends it with [`index_coverage::read_identifiers`] for
+//!   `(source_type, identifier)` reuse.
 //! - [`run`]: combines the above into one immutable run-identity record.
+//! - [`graph`] (Task 2): the experimental evidence-graph node/edge/
+//!   provenance/coverage types (Design Constraint 3's minimal vocabulary).
+//! - [`markdown_extract`] (Task 2): pure, Git-agnostic Markdown structure
+//!   extraction (headings, tasks, checkboxes, criteria, dependencies,
+//!   explicit paths/symbols/commands, cross-epic references).
+//! - [`graph_build`] (Task 2): orchestrates snapshot resolution and
+//!   Markdown extraction into one [`graph::GraphExtraction`].
 
 pub mod content_identity;
 pub mod git_snapshot;
+pub mod graph;
+pub mod graph_build;
 pub mod index_coverage;
+pub mod markdown_extract;
 pub mod run;
