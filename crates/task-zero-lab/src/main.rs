@@ -162,7 +162,7 @@ fn main() -> anyhow::Result<()> {
                 max_total_bytes,
                 allowed_relations: task_zero_lab::packet::default_expansion_allowlist(),
             };
-            let packet = task_zero_lab::packet::select_packet(&extraction, &request, budget);
+            let packet = task_zero_lab::packet::select_packet(&extraction, &request, budget)?;
             println!("{}", packet.to_normalized_json()?);
         }
     }

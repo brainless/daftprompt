@@ -540,14 +540,20 @@ a machine-readable evidence packet with explicit coverage and gaps.
 - [x] Expansion uses an allowlist of relation kinds, maximum depth, item count,
   excerpt bytes, and total packet bytes.
   `PacketBudget` (`allowed_relations`, `max_depth`, `max_items`,
-  `max_excerpt_bytes`, `max_total_bytes`) bounds `expand_established` and
-  `build_items`; anything cut is recorded in
-  `PacketCoverage::budget_omissions`.
+  `max_excerpt_bytes`, `max_total_bytes`) bounds `expand_established`,
+  `build_items`, and the final normalized pretty-JSON packet. Budget
+  enforcement is rerun after host-validated helper additions. Exact seeds
+  and retained constraints cannot be silently displaced: an impossible
+  budget returns an error. Anything cut is recorded in
+  `PacketCoverage::budget_omissions`. Covered by focused item, excerpt,
+  serialized-byte, and helper-addition budget tests.
 - [x] Parent/shared epic constraints are retained when selecting an individual
   task.
   `retain_parent_constraints` guarantees a selected `Task`/
   `AcceptanceCriterion`'s enclosing epic's `DesignConstraint` children are
-  included regardless of depth-bounded expansion.
+  included regardless of depth-bounded expansion; if `max_items` cannot hold
+  the exact seeds and required constraints together, selection fails rather
+  than dropping either class.
 - [x] Duplicate resources and overlapping excerpts are deduplicated without
   losing provenance paths.
   `merge_duplicate_resources` merges only generic no-line-span references
@@ -1193,3 +1199,32 @@ delete superseded notes; add a later note that revises or rejects them.
   contract, with golden fixtures across implementation, diagnosis, review,
   research, ambiguity, and no-mutation request types.
 - Detailed artifacts: `crates/task-zero-lab/src/packet.rs`.
+
+### 2026-08-03 — Task 3 budget-enforcement review correction
+
+- Question: does Task 3 actually preserve exact/required context and enforce
+  its declared item, excerpt, and total-packet byte budgets after every
+  evidence path, including helper validation?
+- Repository/revision/input: daftprompt working tree based on `936850d`;
+  focused synthetic graphs exercise tight item budgets, long excerpts,
+  serialized JSON size, and multiple validated helper proposals.
+- Review result: the initial implementation counted only excerpt content for
+  `max_total_bytes`, appended truncation markers outside the excerpt cap,
+  allowed helper candidates to bypass final budgets, and could let locator
+  ordering displace an exact task with a retained constraint.
+- Correction: `select_packet` now returns an error when a budget cannot retain
+  all exact seeds and required parent constraints; established expansion has
+  its own non-required seed channel; truncation markers fit inside the excerpt
+  cap; and one final budget pass bounds item count and the byte length of the
+  normalized pretty-JSON packet. `apply_helper_dispositions` reruns that same
+  enforcement and returns an error if the irreducible packet envelope cannot
+  fit.
+- Evidence: added
+  `excerpt_marker_is_included_inside_the_excerpt_budget`,
+  `final_pretty_json_respects_total_packet_bytes`,
+  `impossible_item_budget_errors_instead_of_dropping_exact_and_required_context`,
+  and `helper_validated_candidates_cannot_bypass_item_budget`.
+- Interpretation: the earlier claim that `build_items` alone bounded the
+  complete packet is rejected and replaced by final serialized-packet
+  enforcement. The broader pending decisions and cross-repository gaps in the
+  preceding Task 3 note remain unchanged.

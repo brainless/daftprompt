@@ -225,6 +225,8 @@ fn node_text(node: &Node) -> String {
 pub enum SeedChannel {
     /// Exact epic/task/criterion/path/symbol reference in the request text.
     ExactReference,
+    /// Reached from an exact seed by traversing established graph edges.
+    EstablishedExpansion,
     /// Substring/keyword match over already-extracted node text. This
     /// crate's deliberately simple stand-in for "fuzzy channels" (module
     /// docs: real lexical/semantic retrieval is a stated, deferred gap).
@@ -441,7 +443,7 @@ fn expand_established(
             selected.insert(
                 next.clone(),
                 vec![FoundVia {
-                    channel: SeedChannel::ExactReference,
+                    channel: SeedChannel::EstablishedExpansion,
                     query_fragment: locator.clone(),
                     relation_path: relation_path.clone(),
                 }],
@@ -544,9 +546,11 @@ fn build_items(graph: &GraphExtraction, locator_map: BTreeMap<String, Vec<FoundV
         }
         let mut excerpt = excerpt_for(node);
         if excerpt.len() > budget.max_excerpt_bytes {
-            let cut = byte_boundary(&excerpt, budget.max_excerpt_bytes);
+            const MARKER: &str = "… [truncated_by_packet_excerpt_budget]";
+            let content_budget = budget.max_excerpt_bytes.saturating_sub(MARKER.len());
+            let cut = byte_boundary(&excerpt, content_budget);
             excerpt.truncate(cut);
-            excerpt.push_str("… [truncated_by_packet_excerpt_budget]");
+            excerpt.push_str(&MARKER[..byte_boundary(MARKER, budget.max_excerpt_bytes - excerpt.len())]);
         }
         if total_bytes + excerpt.len() > budget.max_total_bytes {
             omissions.push(format!("{locator}: omitted, max_total_bytes ({}) reached", budget.max_total_bytes));
@@ -738,9 +742,94 @@ impl Packet {
     }
 }
 
+fn is_required_item(item: &PacketItem) -> bool {
+    item.found_via.iter().any(|via| {
+        matches!(
+            via.channel,
+            SeedChannel::ExactReference | SeedChannel::ParentConstraintRetention
+        )
+    })
+}
+
+fn serialized_packet_bytes(packet: &Packet) -> anyhow::Result<usize> {
+    let mut normalized = packet.clone();
+    normalized.normalize();
+    Ok(serde_json::to_string_pretty(&normalized)?.len())
+}
+
+const FINAL_BUDGET_OMISSION_SUFFIX: &str = "lower-priority item(s) omitted to satisfy final packet budgets";
+
+fn record_final_budget_omission(packet: &mut Packet, omitted: usize) {
+    packet
+        .coverage
+        .budget_omissions
+        .retain(|entry| !entry.ends_with(FINAL_BUDGET_OMISSION_SUFFIX));
+    if omitted > 0 {
+        packet
+            .coverage
+            .budget_omissions
+            .push(format!("{omitted} {FINAL_BUDGET_OMISSION_SUFFIX}"));
+    }
+    packet.normalize();
+}
+
+/// Enforce the declared item and serialized-packet byte caps after every
+/// operation that can add evidence. Exact seeds and retained parent
+/// constraints are mandatory; an impossibly small budget is reported as an
+/// error instead of silently discarding them or emitting an oversized packet.
+fn enforce_packet_budget(packet: &mut Packet) -> anyhow::Result<()> {
+    packet.normalize();
+    let required = packet.established.iter().filter(|item| is_required_item(item)).count();
+    anyhow::ensure!(
+        required <= packet.budget.max_items,
+        "max_items ({}) is too small for {required} exact/required context items",
+        packet.budget.max_items
+    );
+
+    let mut omitted = 0usize;
+    while packet.established.len() + packet.candidates.len() > packet.budget.max_items {
+        if packet.candidates.pop().is_some() {
+            omitted += 1;
+            continue;
+        }
+        let Some(index) = packet.established.iter().rposition(|item| !is_required_item(item)) else {
+            anyhow::bail!("max_items cannot be satisfied without dropping exact/required context");
+        };
+        packet.established.remove(index);
+        omitted += 1;
+    }
+    record_final_budget_omission(packet, omitted);
+
+    while serialized_packet_bytes(packet)? > packet.budget.max_total_bytes {
+        if packet.candidates.pop().is_some() {
+            omitted += 1;
+            record_final_budget_omission(packet, omitted);
+            continue;
+        }
+        if let Some(index) = packet.established.iter().rposition(|item| !is_required_item(item)) {
+            packet.established.remove(index);
+            omitted += 1;
+            record_final_budget_omission(packet, omitted);
+            continue;
+        }
+        // Existing per-item omission strings may themselves dominate a tight
+        // budget. Preserve the fact of omission in one bounded summary.
+        if packet.coverage.budget_omissions.len() > 1 {
+            let count = packet.coverage.budget_omissions.len();
+            packet.coverage.budget_omissions = vec![format!("{count} earlier budget omissions (details compacted)")];
+            continue;
+        }
+        anyhow::bail!(
+            "max_total_bytes ({}) is too small for the packet envelope and exact/required context",
+            packet.budget.max_total_bytes
+        );
+    }
+    Ok(())
+}
+
 /// Select a bounded, source-stratified context packet for `request` over
 /// `graph`. See the module docs for the full pipeline.
-pub fn select_packet(graph: &GraphExtraction, request: &str, budget: PacketBudget) -> Packet {
+pub fn select_packet(graph: &GraphExtraction, request: &str, budget: PacketBudget) -> anyhow::Result<Packet> {
     // 1. Exact seeding (always first).
     let exact_seeds = find_exact_seeds(graph, request);
     let mut established_locators: BTreeMap<String, Vec<FoundVia>> = BTreeMap::new();
@@ -761,6 +850,22 @@ pub fn select_packet(graph: &GraphExtraction, request: &str, budget: PacketBudge
 
     // 3. Parent/shared epic constraint retention.
     retain_parent_constraints(graph, &mut established_locators);
+    let required_context_items = established_locators
+        .values()
+        .filter(|paths| {
+            paths.iter().any(|via| {
+                matches!(
+                    via.channel,
+                    SeedChannel::ExactReference | SeedChannel::ParentConstraintRetention
+                )
+            })
+        })
+        .count();
+    anyhow::ensure!(
+        required_context_items <= budget.max_items,
+        "max_items ({}) is too small for {required_context_items} exact/required context items",
+        budget.max_items
+    );
 
     // 4. Source-stratified lexical fallback, excluding anything already
     //    established so a fuzzy hit never displaces an exact/structural one.
@@ -856,7 +961,8 @@ pub fn select_packet(graph: &GraphExtraction, request: &str, budget: PacketBudge
         coverage,
     };
     packet.normalize();
-    packet
+    enforce_packet_budget(&mut packet)?;
+    Ok(packet)
 }
 
 // ── Helper disposition (host-validated only) ────────────────────────────
@@ -890,7 +996,12 @@ pub struct HelperDisposition {
 /// evidence. A locator without a matching disposition, or a disposition
 /// whose locator does not match any `helper_proposed_edges` entry, is
 /// ignored.
-pub fn apply_helper_dispositions(graph: &GraphExtraction, packet: &mut Packet, dispositions: &[HelperDisposition]) {
+pub fn apply_helper_dispositions(
+    graph: &GraphExtraction,
+    packet: &mut Packet,
+    dispositions: &[HelperDisposition],
+) -> anyhow::Result<()> {
+    let mut updated = packet.clone();
     for disposition in dispositions {
         let matched = graph
             .helper_proposed_edges
@@ -901,8 +1012,8 @@ pub fn apply_helper_dispositions(graph: &GraphExtraction, packet: &mut Packet, d
         }
         match disposition.classification {
             HelperClassification::ObservationValidated | HelperClassification::ObservationValidatedNarrower => {
-                let already_present = packet.established.iter().any(|i| i.locator == disposition.locator)
-                    || packet.candidates.iter().any(|i| i.locator == disposition.locator);
+                let already_present = updated.established.iter().any(|i| i.locator == disposition.locator)
+                    || updated.candidates.iter().any(|i| i.locator == disposition.locator);
                 if already_present {
                     continue; // already present via a deterministic channel; do not duplicate or re-trust
                 }
@@ -911,16 +1022,18 @@ pub fn apply_helper_dispositions(graph: &GraphExtraction, packet: &mut Packet, d
                     Some(n) => excerpt_for(n),
                     None => disposition.note.clone(),
                 };
-                let excerpt = if excerpt.len() > packet.budget.max_excerpt_bytes {
+                let excerpt = if excerpt.len() > updated.budget.max_excerpt_bytes {
                     let mut e = excerpt;
-                    let cut = byte_boundary(&e, packet.budget.max_excerpt_bytes);
+                    const MARKER: &str = "… [truncated_by_packet_excerpt_budget]";
+                    let content_budget = updated.budget.max_excerpt_bytes.saturating_sub(MARKER.len());
+                    let cut = byte_boundary(&e, content_budget);
                     e.truncate(cut);
-                    e.push_str("… [truncated_by_packet_excerpt_budget]");
+                    e.push_str(&MARKER[..byte_boundary(MARKER, updated.budget.max_excerpt_bytes - e.len())]);
                     e
                 } else {
                     excerpt
                 };
-                packet.candidates.push(PacketItem {
+                updated.candidates.push(PacketItem {
                     locator: disposition.locator.clone(),
                     kind: node.map(|n| n.kind).unwrap_or(NodeKind::FileOrSection),
                     label: node.map(|n| n.label.clone()).unwrap_or_else(|| disposition.locator.clone()),
@@ -938,15 +1051,18 @@ pub fn apply_helper_dispositions(graph: &GraphExtraction, packet: &mut Packet, d
                 });
             }
             HelperClassification::InterpretationRejected => {
-                packet.rejected_helper_interpretations.push(RejectedHelperInterpretation {
+                updated.rejected_helper_interpretations.push(RejectedHelperInterpretation {
                     locator: disposition.locator.clone(),
                     note: disposition.note.clone(),
                 });
             }
         }
     }
-    packet.candidates = merge_duplicate_resources(graph, std::mem::take(&mut packet.candidates));
-    packet.normalize();
+    updated.candidates = merge_duplicate_resources(graph, std::mem::take(&mut updated.candidates));
+    updated.normalize();
+    enforce_packet_budget(&mut updated)?;
+    *packet = updated;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1076,7 +1192,7 @@ mod tests {
         let seeds = find_exact_seeds(&graph, "Please continue Epic 014 Task 3 work.");
         assert!(seeds.iter().any(|s| s.locator == "epic:014/task:3" && s.channel == SeedChannel::ExactReference));
 
-        let packet = select_packet(&graph, "Please continue Epic 014 Task 3 work.", PacketBudget::default());
+        let packet = select_packet(&graph, "Please continue Epic 014 Task 3 work.", PacketBudget::default()).unwrap();
         let first_exact_index = packet.seeds.iter().position(|s| s.channel == SeedChannel::ExactReference);
         let first_lexical_index = packet.seeds.iter().position(|s| s.channel == SeedChannel::LexicalKeyword);
         if let (Some(exact_idx), Some(lexical_idx)) = (first_exact_index, first_lexical_index) {
@@ -1307,7 +1423,7 @@ mod tests {
         let mut graph = base_graph();
         graph.nodes.push(node("epic:900", NodeKind::Epic, "recertification workflow epic"));
 
-        let packet = select_packet(&graph, "investigate the recertification workflow", PacketBudget::default());
+        let packet = select_packet(&graph, "investigate the recertification workflow", PacketBudget::default()).unwrap();
         assert!(packet.candidates.iter().any(|i| i.locator == "epic:900"));
         assert!(!packet.established.iter().any(|i| i.locator == "epic:900"));
     }
@@ -1327,7 +1443,7 @@ mod tests {
 
         let mut tight_budget = PacketBudget::default();
         tight_budget.max_items = 1;
-        let packet = select_packet(&graph, "Epic 900 Task 1", tight_budget);
+        let packet = select_packet(&graph, "`epic:900/task:1`", tight_budget).unwrap();
 
         assert_eq!(packet.coverage.lab_version, "9.9.9");
         assert_eq!(packet.coverage.graph_resolved_commit, "cafef00d");
@@ -1339,6 +1455,88 @@ mod tests {
         assert!(!packet.coverage.budget_omissions.is_empty(), "max_items=1 with two connected nodes must omit one");
     }
 
+    #[test]
+    fn excerpt_marker_is_included_inside_the_excerpt_budget() {
+        let mut graph = base_graph();
+        graph.nodes.push(node("doc:long", NodeKind::FileOrSection, &"x".repeat(200)));
+        let mut locators = BTreeMap::new();
+        locators.insert("doc:long".to_string(), Vec::new());
+        let mut budget = PacketBudget::default();
+        budget.max_excerpt_bytes = 32;
+
+        let (items, _) = build_items(&graph, locators, &budget);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].excerpt.len() <= budget.max_excerpt_bytes);
+    }
+
+    #[test]
+    fn final_pretty_json_respects_total_packet_bytes() {
+        let mut graph = base_graph();
+        for number in 0..10 {
+            graph.nodes.push(node(
+                &format!("doc:{number}"),
+                NodeKind::FileOrSection,
+                &format!("widget evidence {number} {}", "x".repeat(300)),
+            ));
+        }
+        let roomy = select_packet(&graph, "widget evidence", PacketBudget::default()).unwrap();
+        let roomy_len = roomy.to_normalized_json().unwrap().len();
+        let mut budget = PacketBudget::default();
+        budget.max_total_bytes = roomy_len - 500;
+
+        let packet = select_packet(&graph, "widget evidence", budget.clone()).unwrap();
+        assert!(packet.to_normalized_json().unwrap().len() <= budget.max_total_bytes);
+        assert!(!packet.coverage.budget_omissions.is_empty());
+    }
+
+    #[test]
+    fn impossible_item_budget_errors_instead_of_dropping_exact_and_required_context() {
+        let mut graph = base_graph();
+        graph.nodes.push(node("epic:900", NodeKind::Epic, "widget epic"));
+        graph.nodes.push(node("epic:900/task:1", NodeKind::Task, "widget task"));
+        graph.nodes.push(node("epic:900/constraint:1", NodeKind::DesignConstraint, "shared safety constraint"));
+        graph.established_edges.push(edge(RelationKind::Contains, "epic:900", "epic:900/task:1"));
+        graph.established_edges.push(edge(RelationKind::Contains, "epic:900", "epic:900/constraint:1"));
+        let mut budget = PacketBudget::default();
+        budget.max_items = 2;
+
+        let error = select_packet(&graph, "Epic 900 Task 1", budget).unwrap_err();
+        assert!(error.to_string().contains("exact/required context"));
+    }
+
+    #[test]
+    fn helper_validated_candidates_cannot_bypass_item_budget() {
+        let mut graph = base_graph();
+        graph.nodes.push(node("epic:900", NodeKind::Epic, "widget epic"));
+        graph.helper_proposed_edges.push(helper_edge("epic:900", "helper:a", "first helper observation"));
+        graph.helper_proposed_edges.push(helper_edge("epic:900", "helper:b", "second helper observation"));
+        let mut budget = PacketBudget::default();
+        budget.max_items = 1;
+        let mut packet = select_packet(&graph, "`epic:900`", budget).unwrap();
+
+        apply_helper_dispositions(
+            &graph,
+            &mut packet,
+            &[
+                HelperDisposition {
+                    locator: "helper:a".to_string(),
+                    classification: HelperClassification::ObservationValidated,
+                    note: "validated a".to_string(),
+                },
+                HelperDisposition {
+                    locator: "helper:b".to_string(),
+                    classification: HelperClassification::ObservationValidated,
+                    note: "validated b".to_string(),
+                },
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(packet.established.len(), 1);
+        assert!(packet.candidates.is_empty());
+        assert!(packet.established.iter().any(|item| item.locator == "epic:900"));
+    }
+
     // ── Determinism ──────────────────────────────────────────────────────
 
     #[test]
@@ -1348,8 +1546,8 @@ mod tests {
         graph.nodes.push(node("epic:900/task:1", NodeKind::Task, "widget task"));
         graph.established_edges.push(edge(RelationKind::Contains, "epic:900", "epic:900/task:1"));
 
-        let p1 = select_packet(&graph, "Epic 900 Task 1: fix the widget", PacketBudget::default());
-        let p2 = select_packet(&graph, "Epic 900 Task 1: fix the widget", PacketBudget::default());
+        let p1 = select_packet(&graph, "Epic 900 Task 1: fix the widget", PacketBudget::default()).unwrap();
+        let p2 = select_packet(&graph, "Epic 900 Task 1: fix the widget", PacketBudget::default()).unwrap();
         assert_eq!(p1.to_normalized_json().unwrap(), p2.to_normalized_json().unwrap());
     }
 
@@ -1451,7 +1649,8 @@ mod tests {
             &graph,
             "Export doesn't work right on the filtered queue, can you look into LOG-019?",
             PacketBudget::default(),
-        );
+        )
+        .unwrap();
 
         // select_packet alone must never promote a helper proposal into
         // evidence, established or candidate.
@@ -1507,7 +1706,7 @@ mod tests {
                 note: "no history tool was called; UI history attribution is unsupported - rejected".to_string(),
             },
         ];
-        apply_helper_dispositions(&graph, &mut packet, &dispositions);
+        apply_helper_dispositions(&graph, &mut packet, &dispositions).unwrap();
 
         for validated in ["expansion:unit_table_and_actions", "test:UT-153"] {
             assert!(
