@@ -524,25 +524,62 @@ a machine-readable evidence packet with explicit coverage and gaps.
 
 #### Acceptance Criteria
 
-- [ ] Exact epic/task/criterion/path/symbol references seed retrieval before
+- [x] Exact epic/task/criterion/path/symbol references seed retrieval before
   fuzzy channels.
-- [ ] Search is source-stratified across instructions, epics/research,
+  `crates/task-zero-lab/src/packet.rs::find_exact_seeds` matches epic/task
+  references and backtick paths/symbols against node locators and always
+  runs before `find_lexical_seeds`; `select_packet` only feeds lexical hits
+  not already established. Covered by
+  `exact_epic_and_task_reference_is_seeded_before_lexical_channel`.
+- [x] Search is source-stratified across instructions, epics/research,
   documents, code, and commits where available.
-- [ ] Expansion uses an allowlist of relation kinds, maximum depth, item count,
+  `SourceCategory` (`Instructions`/`EpicsAndResearch`/`Documents`/`Code`/
+  `Commits`) with a per-category cap (`LEXICAL_SEEDS_PER_CATEGORY`) in
+  `find_lexical_seeds`; unavailable categories are reported honestly in
+  `PacketCoverage::unavailable_sources` rather than assumed present.
+- [x] Expansion uses an allowlist of relation kinds, maximum depth, item count,
   excerpt bytes, and total packet bytes.
-- [ ] Parent/shared epic constraints are retained when selecting an individual
+  `PacketBudget` (`allowed_relations`, `max_depth`, `max_items`,
+  `max_excerpt_bytes`, `max_total_bytes`) bounds `expand_established` and
+  `build_items`; anything cut is recorded in
+  `PacketCoverage::budget_omissions`.
+- [x] Parent/shared epic constraints are retained when selecting an individual
   task.
-- [ ] Duplicate resources and overlapping excerpts are deduplicated without
+  `retain_parent_constraints` guarantees a selected `Task`/
+  `AcceptanceCriterion`'s enclosing epic's `DesignConstraint` children are
+  included regardless of depth-bounded expansion.
+- [x] Duplicate resources and overlapping excerpts are deduplicated without
   losing provenance paths.
-- [ ] Established evidence and candidates remain separate in the packet.
-- [ ] Coverage reports queried sources, unavailable sources, detector/index
+  `merge_duplicate_resources` merges only generic no-line-span references
+  into a richer node sharing the same `source_path`, keeping every
+  contributing locator in `merged_from` and every `found_via` reason;
+  distinct line-spanned nodes in the same file are deliberately not
+  collapsed.
+- [x] Established evidence and candidates remain separate in the packet.
+  `Packet` keeps `established`/`candidates` as distinct fields; lexical-only
+  hits never enter `established`.
+- [x] Coverage reports queried sources, unavailable sources, detector/index
   versions, budget omissions, and remaining gaps.
-- [ ] A helper's proposed gap disposition cannot remove a deterministic host
+  `PacketCoverage` (`queried_sources`, `unavailable_sources`, `lab_version`,
+  `graph_resolved_commit`, `index_available`,
+  `index_identifiers_considered`, `budget_omissions`, `remaining_gaps`).
+- [x] A helper's proposed gap disposition cannot remove a deterministic host
   gap.
-- [ ] Repeated identical queries over an identical graph produce an identical
+  `apply_helper_gap_dispositions` only appends informational
+  `HelperGapNote`s (`host_gap_retained_regardless: true`); no code path
+  touches `PacketCoverage::remaining_gaps` removal.
+- [x] Repeated identical queries over an identical graph produce an identical
   normalized packet.
-- [ ] The LOG-019 fixture reproduces the known distinction between useful
+  `Packet::normalize`/`to_normalized_json` sort every collection. Covered by
+  `repeated_identical_queries_over_an_identical_graph_produce_an_identical_packet`.
+- [x] The LOG-019 fixture reproduces the known distinction between useful
   observations and rejected requirement/test/history interpretations.
+  `log019_fixture_graph` plus
+  `log019_fixture_distinguishes_validated_observations_from_rejected_interpretations`
+  reproduce the six-way validated/rejected classification from
+  `epics/research/011-provenance-thought-experiments.md`'s real Keystone
+  LOG-019 replay, via `apply_helper_dispositions`'s host-validated-only path
+  (no private Keystone content reproduced).
 
 ### Task 4: Generate deterministic coding-agent prompts
 
@@ -1089,3 +1126,70 @@ delete superseded notes; add a later note that revises or rejects them.
   the revised Task 2 base remains pending user review.
 - Next experiment: use the retained canonical identity sets as Task 3 exact
   seeds and measure whether ambiguity/budget reporting remains honest.
+
+### 2026-08-03 — Task 3 bounded graph selection and context packets
+
+- Parent criterion/question: Epic 014 Task 3, all ten bullets — given a
+  request and Task 2's `GraphExtraction`, select a small relevant subgraph
+  and render a machine-readable evidence packet with explicit coverage and
+  gaps.
+- Repository and immutable revision: daftprompt itself at `HEAD`
+  (`ab31a4c`); exercised against this repo's own `epics/014` graph via the
+  new `packet` CLI subcommand plus synthetic fixture graphs for unit tests.
+- Fixture and input request: no human-request fixture beyond manual CLI
+  smoke tests (e.g. "continue closing the Task 0 blockers" against
+  `--epics 014`); Task 3 is selection/packet infrastructure, not the
+  prompt-rendering path (Task 4).
+- Harness/detector/prompt/policy/model versions: `crates/task-zero-lab`
+  still v0.1.0; new `src/packet.rs` module (`select_packet`,
+  `find_exact_seeds`, `find_lexical_seeds`, `expand_established`,
+  `retain_parent_constraints`, `merge_duplicate_resources`,
+  `apply_helper_dispositions`, `apply_helper_gap_dispositions`); no new
+  detector — built entirely on Task 2's existing `established_edges` and
+  node vocabulary.
+- Harness change: added `src/packet.rs` (~1000 lines incl. tests) and a
+  `packet --repo <path> --rev <rev> --epics <n,...> --request <text>
+  [--max-depth/--max-items/--max-excerpt-bytes/--max-total-bytes]` CLI
+  subcommand in `src/main.rs`, mirroring the existing `graph` subcommand's
+  shape; factored a shared `parse_epic_numbers` helper out of both.
+- Observed result and measurements: `cargo check --workspace` and `cargo
+  test --workspace` pass (201 tests total, 0 failures; 58 in
+  `task-zero-lab`, up from 47). Manual `packet --repo . --rev HEAD --epics
+  014 --request "continue closing the Task 0 blockers"` correctly seeds
+  `epic:014/task:0` exactly, retains its parent epic's design constraints,
+  and reports index/lab-version coverage; output verified to be valid
+  normalized JSON.
+- Validated findings: exact-reference seeding plus bounded breadth-first
+  traversal over `established_edges` (relation allowlist, depth, item-count)
+  is sufficient to build a small, source-stratified, budget-bounded packet
+  from Task 2's output without any new retrieval infrastructure. A simple
+  case-insensitive keyword-substring scan, run independently per
+  `SourceCategory` with its own small cap, is an honest (not overclaimed)
+  stand-in for "fuzzy channels" given that Task 2 built no
+  lexical/semantic `candidate_edges` detector. Merging duplicate resources
+  by `source_path` only when the duplicate carries no recorded `line_span`
+  (versus always merging same-path nodes) was necessary to avoid collapsing
+  a task and its own nested acceptance criteria into one item.
+- Rejected or unsupported interpretations: did not implement real
+  lexical/semantic retrieval (FTS5/sqlite-vec/embedding-based) under the
+  "fuzzy channel" criterion — Task 2 produced no such detector to draw on,
+  and building one was judged out of Task 3's scope; the module docs record
+  this as a deferred capability rather than quietly substituting keyword
+  matching for it. Did not implement real Git-blob content excerpting for
+  nodes with no recorded line span (e.g. a bare unresolved file/symbol
+  reference); such an excerpt is currently just the reference's own label
+  string, not a windowed read of file content.
+- Remaining gaps: no real lexical/semantic candidate-evidence channel exists
+  yet for Task 3 to select over — closing this requires either a Task 2
+  detector addition or explicit acceptance that keyword matching is the
+  lab's permanent "fuzzy channel". No excerpt windowing from real file
+  content for reference-only nodes. Packet selection has not yet been
+  exercised against the C01–C09 manifest cases as actual harness runs.
+- User decision or pending decision: pending review of `src/packet.rs` and
+  its test coverage before treating this packet shape as the input Task 4's
+  prompt renderer builds on.
+- Next iteration: Task 4 — build the model-free baseline Markdown prompt
+  renderer that converts a `Packet` into the Design Constraint 5 output
+  contract, with golden fixtures across implementation, diagnosis, review,
+  research, ambiguity, and no-mutation request types.
+- Detailed artifacts: `crates/task-zero-lab/src/packet.rs`.

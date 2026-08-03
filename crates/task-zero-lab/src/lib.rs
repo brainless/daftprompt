@@ -35,6 +35,10 @@
 //!   explicit paths/symbols/commands, cross-epic references).
 //! - [`graph_build`] (Task 2): orchestrates snapshot resolution and
 //!   Markdown extraction into one [`graph::GraphExtraction`].
+//! - [`packet`] (Task 3): bounded, source-stratified graph selection and
+//!   context-packet rendering over a [`graph::GraphExtraction`], with
+//!   explicit coverage/gap reporting and host-validated-only helper
+//!   evidence.
 
 pub mod content_identity;
 pub mod git_snapshot;
@@ -42,4 +46,5 @@ pub mod graph;
 pub mod graph_build;
 pub mod index_coverage;
 pub mod markdown_extract;
+pub mod packet;
 pub mod run;

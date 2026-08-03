@@ -11,6 +11,8 @@
 //! cargo run --bin task_zero_lab -- coverage --repo .
 //! cargo run --bin task_zero_lab -- content --path some/file.md
 //! cargo run --bin task_zero_lab -- graph --repo . --rev HEAD --epics 011,012,013
+//! cargo run --bin task_zero_lab -- packet --repo . --rev HEAD --epics 014 \
+//!   --request "continue closing the Task 0 blockers"
 //! ```
 
 use std::path::PathBuf;
@@ -72,6 +74,39 @@ enum Command {
         #[arg(long)]
         include_dirty: bool,
     },
+    /// Select a bounded, source-stratified context packet for `--request`
+    /// over the Epic 014 Task 2 evidence graph (Epic 014 Task 3).
+    Packet {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long, default_value = "HEAD")]
+        rev: String,
+        /// Comma-separated epic numbers, e.g. `011,012,013` or `11,12,13`.
+        #[arg(long)]
+        epics: String,
+        #[arg(long)]
+        request: String,
+        /// See `Snapshot`'s `--include-dirty`.
+        #[arg(long)]
+        include_dirty: bool,
+        #[arg(long, default_value_t = task_zero_lab::packet::PacketBudget::default().max_depth)]
+        max_depth: usize,
+        #[arg(long, default_value_t = task_zero_lab::packet::PacketBudget::default().max_items)]
+        max_items: usize,
+        #[arg(long, default_value_t = task_zero_lab::packet::PacketBudget::default().max_excerpt_bytes)]
+        max_excerpt_bytes: usize,
+        #[arg(long, default_value_t = task_zero_lab::packet::PacketBudget::default().max_total_bytes)]
+        max_total_bytes: usize,
+    },
+}
+
+/// Shared `--epics` parsing for `Graph` and `Packet`.
+fn parse_epic_numbers(spec: &str) -> anyhow::Result<Vec<u32>> {
+    spec.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse::<u32>().map_err(|e| anyhow::anyhow!("invalid epic number '{}' in --epics: {}", s, e)))
+        .collect()
 }
 
 fn main() -> anyhow::Result<()> {
@@ -103,17 +138,32 @@ fn main() -> anyhow::Result<()> {
             epics,
             include_dirty,
         } => {
-            let epic_numbers: Vec<u32> = epics
-                .split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(|s| {
-                    s.parse::<u32>()
-                        .map_err(|e| anyhow::anyhow!("invalid epic number '{}' in --epics: {}", s, e))
-                })
-                .collect::<anyhow::Result<Vec<u32>>>()?;
+            let epic_numbers = parse_epic_numbers(&epics)?;
             let extraction = task_zero_lab::graph_build::build_graph(&repo, &rev, &epic_numbers, include_dirty)?;
             println!("{}", extraction.to_normalized_json()?);
+        }
+        Command::Packet {
+            repo,
+            rev,
+            epics,
+            request,
+            include_dirty,
+            max_depth,
+            max_items,
+            max_excerpt_bytes,
+            max_total_bytes,
+        } => {
+            let epic_numbers = parse_epic_numbers(&epics)?;
+            let extraction = task_zero_lab::graph_build::build_graph(&repo, &rev, &epic_numbers, include_dirty)?;
+            let budget = task_zero_lab::packet::PacketBudget {
+                max_depth,
+                max_items,
+                max_excerpt_bytes,
+                max_total_bytes,
+                allowed_relations: task_zero_lab::packet::default_expansion_allowlist(),
+            };
+            let packet = task_zero_lab::packet::select_packet(&extraction, &request, budget);
+            println!("{}", packet.to_normalized_json()?);
         }
     }
     Ok(())
