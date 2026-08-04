@@ -1275,6 +1275,22 @@ delete superseded notes; add a later note that revises or rejects them.
   --workspace` pass (211 tests total: 11 app, 132 indexer, 68 lab; 0
   failures). Existing warnings remain confined to local path dependencies.
 
+### 2026-08-04 — Task 4 verification evidence-boundary correction
+
+- Review finding: the prompt renderer collected executable-looking commands
+  from both established and candidate packet items. Although candidates were
+  labelled honestly in their own section, the verification section promoted
+  their commands as exact project-derived guidance before their relevance had
+  been established.
+- Correction: project-derived verification now consumes only established
+  packet evidence. Candidate commands remain visible only as candidate context
+  and cannot become authoritative verification instructions until selection
+  establishes them. A regression covers a candidate-only `cargo test
+  --workspace` command and requires the renderer to report that no exact
+  verification command survived.
+- Verification: `cargo check --workspace` and `cargo test --workspace` pass.
+  Existing warnings remain confined to local path dependencies.
+
 ### 2026-08-03 — Task 3 budget-enforcement review correction
 
 - Question: does Task 3 actually preserve exact/required context and enforce

@@ -271,7 +271,10 @@ pub fn render_prompt(request: &PromptRequest, packet: &Packet, budget: PromptBud
     push_section(&mut out, "Required artifacts and output contract", "Return a focused result that maps work to the requested criteria, reports files changed, lists verification performed and failures, and separates completed work from remaining gaps. Prompt quality is not task-outcome evidence; downstream correctness must be assessed independently.");
 
     let mut commands = BTreeSet::new();
-    for item in packet.established.iter().chain(packet.candidates.iter()) {
+    // Candidate items are deliberately not established repository evidence.
+    // Even an executable-looking command from a candidate must remain in the
+    // candidate section until its relevance is verified at the pinned revision.
+    for item in &packet.established {
         for command in &item.verification_commands {
             if is_executable_verification_command(command) {
                 commands.insert((command, item));
@@ -435,6 +438,26 @@ mod tests {
         let rendered = render_prompt(&request(MutationBoundary::ReadOnly), &p, PromptBudget::default()).unwrap();
         assert!(rendered.text.contains("Do not guess from the language"));
         assert!(!rendered.text.contains("`cargo test --workspace`"));
+    }
+
+    #[test]
+    fn candidate_commands_never_become_authoritative_verification() {
+        let mut p = packet();
+        p.established[0].verification_commands.clear();
+        p.candidates[0].verification_commands = vec!["cargo test --workspace".into()];
+
+        let rendered = render_prompt(&request(MutationBoundary::ReadOnly), &p, PromptBudget::default()).unwrap();
+        let verification = rendered
+            .text
+            .split("## Project-derived verification")
+            .nth(1)
+            .unwrap()
+            .split("## Omissions")
+            .next()
+            .unwrap();
+
+        assert!(verification.contains("No exact verification command survived in packet evidence"));
+        assert!(!verification.contains("`cargo test --workspace`"));
     }
 
     #[test]
