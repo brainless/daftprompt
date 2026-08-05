@@ -1,0 +1,9 @@
+{
+  "id": "surface-unstated-assumption",
+  "version": "1",
+  "source": "task-zero-lab, originally authored for Epic 014 Task 5",
+  "intent_tags": ["clarify", "ambiguity"],
+  "transformation": "Ask the model to name one unstated assumption and check it against the immutable request before proceeding, instead of silently resolving ambiguity.",
+  "content_hash": "75221b42d8a9f04d",
+  "body": "Before proceeding, name one assumption this request leaves unstated, then continue only after checking it against the immutable request text."
+}

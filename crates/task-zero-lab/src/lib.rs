@@ -41,11 +41,17 @@
 //!   evidence.
 //! - [`prompt`] (Task 4): deterministic, model-free Markdown handoff
 //!   rendering with provenance, coverage disclosure, and a hard byte budget.
+//! - [`helper`] (Task 5): optional, stateless helper refinement behind a
+//!   closed operation catalog. The Task 4 baseline stays fully usable when a
+//!   helper is disabled or unavailable; real open-weight model adapters are
+//!   an explicit, deferred follow-up (see `helper`'s module docs and Epic
+//!   014 Task 5's scope note).
 
 pub mod content_identity;
 pub mod git_snapshot;
 pub mod graph;
 pub mod graph_build;
+pub mod helper;
 pub mod index_coverage;
 pub mod markdown_extract;
 pub mod packet;

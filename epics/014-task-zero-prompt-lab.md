@@ -621,29 +621,100 @@ Evaluate whether selected small/tiny helpers improve the deterministic prompt.
 Each helper decision is a fresh host-reconstructed request and may only request
 typed, bounded, read-only lab operations.
 
+**Scope note (this implementation pass):** Task 5 was split into two parts.
+This pass builds and verifies the complete closed-interface infrastructure —
+the operation catalog, bounded/recorded stateless round loop, submission
+schema, prompt-pattern library, and a deterministic, offline, credential-free
+`ScriptedHelperModel` (`crates/task-zero-lab/src/helper.rs`) — entirely
+without real model access. It deliberately **defers** wiring real open-weight
+model adapters (Groq/Ollama/llama.cpp via the local `~/Projects/llm-sdk`
+crate): that needs live credentials or a locally running model this
+environment cannot provision. `HelperModel` (`helper.rs`) is the extension
+point a future adapter implements — plugging in, e.g., a `GroqHelperModel` —
+without touching this module's orchestration loop (`refine_prompt`). The two
+criteria below that name real open-weight helpers stay unchecked until that
+follow-up lands.
+
 #### Acceptance Criteria
 
-- [ ] The deterministic baseline remains fully usable when helper execution is
-  disabled or unavailable.
-- [ ] The initial catalog contains only named graph/search/explain/coverage
+- [x] The deterministic baseline remains fully usable when helper execution is
+  disabled or unavailable. `helper::refine_prompt(.., model: None, ..)`
+  returns `StopReason::Disabled` and calls `prompt::render_prompt` completely
+  unmodified; `baseline_identical_when_helper_disabled` asserts byte equality,
+  and the CLI-level `tests/cli_helper.rs::cli_helper_disabled_matches_cli_prompt`
+  confirms the same over this repository's own real Epic 014 graph (the
+  `helper` subcommand with no `--scripted-fixture` byte-matches `prompt`).
+- [x] The initial catalog contains only named graph/search/explain/coverage
   operations with validated repository/revision scope; no arbitrary path,
   shell, URL, network, or write tool is exposed.
-- [ ] Helper output conforms to a schema that separates refinements,
+  `helper::HelperOperation` is a closed enum (`SearchGraph`, `GetNode`,
+  `ExplainEdge`, `GetCoverage`) with no filesystem-path/shell/URL/network
+  field anywhere; `HelperToolExecutor::execute` only matches these variants.
+  `closed_catalog_has_no_out_of_band_variant` covers both the compile-time
+  exhaustiveness and an out-of-catalog scripted step surfacing as
+  `Malformed`, never executed.
+- [x] Helper output conforms to a schema that separates refinements,
   clarifications, selected evidence, candidate claims, and proposed gaps.
-- [ ] Human intent, negative constraints, and deterministic gaps cannot be
-  overwritten by model output.
-- [ ] Each round reconstructs one self-contained prompt from host state rather
-  than appending an unbounded transcript.
-- [ ] Calls, rounds, tokens, result bytes, elapsed time, duplicate requests, and
-  validated marginal yield are bounded and recorded.
-- [ ] Prompt-pattern exemplars are trust-labelled, versioned reference material
+  `helper::HelperSubmission` has exactly these five fields (reusing Task 3's
+  `HelperDisposition`/`HelperGapDisposition` for the last two); covered by
+  `submission_schema_round_trips_all_five_fields`.
+- [x] Human intent, negative constraints, and deterministic gaps cannot be
+  overwritten by model output. `apply_submission` never receives
+  `PromptRequest` at all (it only touches `Packet`), so there is no code path
+  from a submission to `original`/`negative_constraints`; helper suggestions
+  land only as clearly labelled "Helper-proposed ... (unverified)" candidates.
+  `proposed_gap_dispositions` is applied only through Task 3's existing
+  `apply_helper_gap_dispositions`, which never removes a host gap. Covered by
+  `original_request_and_negative_constraints_never_mutated` and
+  `gap_disposition_cannot_remove_host_gap`.
+- [x] Each round reconstructs one self-contained prompt from host state rather
+  than appending an unbounded transcript. `helper::build_round_prompt`
+  rebuilds the entire round text from structured `validated_calls` state
+  every time (never an appended raw transcript); covered by
+  `round_prompt_reconstruction_is_deterministic_and_not_appended_transcript`.
+- [x] Calls, rounds, tokens, result bytes, elapsed time, duplicate requests, and
+  validated marginal yield are bounded and recorded. `HelperPolicy`
+  (`max_rounds`, `max_calls`, `max_result_bytes`, `max_total_bytes`,
+  `min_marginal_yield`, `malformed_retry_budget`) bounds `refine_prompt`'s
+  loop; `HelperRunReport`/`CallRecord` record every field including
+  `duplicate_calls`. (Token/elapsed-time fields are recorded when an adapter
+  reports them; `ScriptedHelperModel` performs no inference, so it reports
+  none — real adapters will populate these.) Covered by
+  `rounds_calls_bytes_duplicates_are_bounded_and_recorded`,
+  `max_result_bytes_truncates_with_marker`, and `over_calling_stops_at_max_calls`.
+- [x] Prompt-pattern exemplars are trust-labelled, versioned reference material
   and cannot supply repository facts or expand capabilities.
+  `helper::PromptPattern` (id/version/source/intent_tags/content_hash/body)
+  loaded by `load_prompt_patterns`, which recomputes each file's xxh3
+  `content_hash` (reusing `daftprompt_indexer::db::content_hash`) and flags a
+  diagnostic — never silent trust — on mismatch; embedded in every round
+  prompt under an explicit "reference only, not repository facts" heading.
+  Since a `HelperOperation` can only ever come from `HelperModel::decide`'s
+  typed return value, no exemplar or tool-result text can grant a capability.
+  Covered by `prompt_pattern_exemplars_are_labeled_and_hash_verified` (a
+  tampered fixture loads with a diagnostic, not silent trust) and
+  `injected_instruction_in_candidate_text_stays_inert`.
 - [ ] At least three open-weight helpers are supported in experiments,
   including at least two below 10B parameters and one sub-20B tier model.
+  Deferred — see the Task 5 scope note above. `HelperModel` is the extension
+  point; needs `llm-sdk` Groq/Ollama/llama.cpp adapters implementing it.
 - [ ] Model/provider code uses the local `~/Projects/llm-sdk` source boundary;
   recorded replay fixtures require no credentials or network access.
-- [ ] Malformed output, prompt injection, early stop, over-calling, and false
+  Deferred alongside the criterion above — no live-model adapter exists yet
+  to record replay fixtures from. `ScriptedHelperModel` independently
+  satisfies "credential-free, no network" for the orchestration mechanism
+  itself (`crates/task-zero-lab/fixtures/helper/search-then-submit.json`),
+  but not the `llm-sdk` requirement.
+- [x] Malformed output, prompt injection, early stop, over-calling, and false
   completion preserve the deterministic baseline and produce diagnostics.
+  Covered by `malformed_output_falls_back_to_baseline_with_diagnostics`
+  (malformed/invalid-schema submissions fall back to the byte-identical
+  baseline with recorded diagnostics),
+  `injected_instruction_in_candidate_text_stays_inert` (an embedded
+  "ignore previous instructions" claim changes no policy value and invokes
+  no tool), and `premature_stop_preserves_baseline` /
+  `over_calling_stops_at_max_calls` (an empty script and an over-long script
+  both stop cleanly within policy bounds).
 
 ### Task 6: Add replay, baselines, ablations, and prompt assessment
 

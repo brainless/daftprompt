@@ -1,0 +1,23 @@
+[
+  {
+    "step": "tool_call",
+    "value": { "op": "get_coverage" }
+  },
+  {
+    "step": "tool_call",
+    "value": { "op": "search_graph", "query": "helper" }
+  },
+  {
+    "step": "submit",
+    "value": {
+      "clarified_objective_suggestion": "Close Epic 014 Task 5's remaining acceptance criteria using the closed helper interface.",
+      "clarifications": [
+        "Two Task 5 criteria (real open-weight adapters, llm-sdk boundary) are explicitly deferred; see the epic's Task 5 scope note."
+      ],
+      "selected_evidence": [],
+      "candidate_claims": [],
+      "proposed_gap_dispositions": [],
+      "stop_reason": "coverage and search results reviewed; no further evidence needed for this scripted demonstration"
+    }
+  }
+]

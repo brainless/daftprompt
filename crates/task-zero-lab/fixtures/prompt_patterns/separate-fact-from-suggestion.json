@@ -1,0 +1,9 @@
+{
+  "id": "separate-fact-from-suggestion",
+  "version": "1",
+  "source": "task-zero-lab, originally authored for Epic 014 Task 5",
+  "intent_tags": ["provenance", "candidate-vs-established"],
+  "transformation": "Ask the model to label a claim as established evidence or unverified candidate before describing its implications, matching Design Constraint 3's established/candidate separation.",
+  "content_hash": "e2f9089d35f14c61",
+  "body": "When presenting a repository claim, state whether it is established evidence or an unverified candidate before describing what it implies."
+}

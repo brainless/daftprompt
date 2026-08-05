@@ -15,6 +15,12 @@
 //!   --request "continue closing the Task 0 blockers"
 //! cargo run --bin task_zero_lab -- prompt --repo . --rev HEAD --epics 011,012,013 \
 //!   --request "continue closing the Task 0 blockers" --output /tmp/task-zero.md
+//! cargo run --bin task_zero_lab -- helper --repo . --rev HEAD --epics 014 \
+//!   --request "continue closing the Task 0 blockers"
+//! cargo run --bin task_zero_lab -- helper --repo . --rev HEAD --epics 014 \
+//!   --request "continue closing the Task 0 blockers" \
+//!   --scripted-fixture crates/task-zero-lab/fixtures/helper/search-then-submit.json \
+//!   --prompt-patterns-dir crates/task-zero-lab/fixtures/prompt_patterns
 //! ```
 
 use std::path::PathBuf;
@@ -113,6 +119,34 @@ enum Command {
         #[arg(long, default_value_t = task_zero_lab::prompt::PromptBudget::default().max_bytes)] max_prompt_bytes: usize,
         #[arg(long)] output: Option<PathBuf>,
     },
+    /// Render a prompt via the Epic 014 Task 5 optional helper-refinement
+    /// stage. Omitting `--scripted-fixture` runs the always-available
+    /// disabled path, byte-identical to `prompt` (Task 5 acceptance
+    /// criterion). Real open-weight model adapters are a deferred follow-up
+    /// (see `helper` module docs); this subcommand only supports the
+    /// deterministic, offline `ScriptedHelperModel` today.
+    Helper {
+        #[arg(long)] repo: PathBuf,
+        #[arg(long, default_value = "HEAD")] rev: String,
+        #[arg(long)] epics: String,
+        #[arg(long)] request: String,
+        #[arg(long)] objective: Option<String>,
+        #[arg(long = "constraint")] negative_constraints: Vec<String>,
+        #[arg(long)] include_dirty: bool,
+        #[arg(long, default_value_t = task_zero_lab::prompt::PromptBudget::default().max_bytes)] max_prompt_bytes: usize,
+        #[arg(long)] output: Option<PathBuf>,
+        /// Path to a JSON `Vec<HelperModelOutput>` scripted session (see
+        /// `crates/task-zero-lab/fixtures/helper/`). Omit to run disabled.
+        #[arg(long)] scripted_fixture: Option<PathBuf>,
+        #[arg(long, default_value_t = task_zero_lab::helper::HelperPolicy::default().max_rounds)] max_rounds: usize,
+        #[arg(long, default_value_t = task_zero_lab::helper::HelperPolicy::default().max_calls)] max_calls: usize,
+        #[arg(long, default_value_t = task_zero_lab::helper::HelperPolicy::default().max_result_bytes)] max_result_bytes: usize,
+        /// Directory of prompt-pattern JSON fixtures (see
+        /// `crates/task-zero-lab/fixtures/prompt_patterns/`).
+        #[arg(long)] prompt_patterns_dir: Option<PathBuf>,
+        /// Where to write the `HelperRunReport` JSON. Prints to stderr when omitted.
+        #[arg(long)] report_output: Option<PathBuf>,
+    },
 }
 
 /// Shared `--epics` parsing for `Graph` and `Packet`.
@@ -203,6 +237,84 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("exported manual-handoff prompt to {} (no dispatch performed)", path.display());
             } else {
                 print!("{}", rendered.text);
+            }
+        }
+        Command::Helper {
+            repo,
+            rev,
+            epics,
+            request,
+            objective,
+            negative_constraints,
+            include_dirty,
+            max_prompt_bytes,
+            output,
+            scripted_fixture,
+            max_rounds,
+            max_calls,
+            max_result_bytes,
+            prompt_patterns_dir,
+            report_output,
+        } => {
+            let epic_numbers = parse_epic_numbers(&epics)?;
+            let extraction = task_zero_lab::graph_build::build_graph(&repo, &rev, &epic_numbers, include_dirty)?;
+            let mut packet_budget = task_zero_lab::packet::PacketBudget::default();
+            packet_budget.max_items = 200;
+            packet_budget.max_total_bytes = 100_000;
+            let packet = task_zero_lab::packet::select_packet(&extraction, &request, packet_budget)?;
+            let prompt_request = task_zero_lab::prompt::PromptRequest {
+                original: request,
+                clarified_objective: objective,
+                negative_constraints,
+                mutation_boundary: task_zero_lab::prompt::MutationBoundary::RepositoryChangesOnlyWhenExplicitlyRequested,
+            };
+            let (patterns, pattern_diagnostics) = match &prompt_patterns_dir {
+                Some(dir) => task_zero_lab::helper::load_prompt_patterns(dir)?,
+                None => (Vec::new(), Vec::new()),
+            };
+            for diagnostic in &pattern_diagnostics {
+                eprintln!("prompt pattern diagnostic: {diagnostic}");
+            }
+            let policy = task_zero_lab::helper::HelperPolicy {
+                max_rounds,
+                max_calls,
+                max_result_bytes,
+                ..task_zero_lab::helper::HelperPolicy::default()
+            };
+            let prompt_budget = task_zero_lab::prompt::PromptBudget {
+                max_bytes: max_prompt_bytes,
+                bytes_per_token_estimate: 4,
+            };
+            let (rendered, report) = match &scripted_fixture {
+                Some(fixture_path) => {
+                    let mut model = task_zero_lab::helper::ScriptedHelperModel::from_fixture_file(fixture_path)?;
+                    task_zero_lab::helper::refine_prompt(
+                        &extraction,
+                        &packet,
+                        &prompt_request,
+                        prompt_budget,
+                        &policy,
+                        Some(&mut model),
+                        &patterns,
+                        &format!("scripted:{}", fixture_path.display()),
+                    )?
+                }
+                None => task_zero_lab::helper::refine_prompt(&extraction, &packet, &prompt_request, prompt_budget, &policy, None, &patterns, "disabled")?,
+            };
+            if let Some(path) = output {
+                std::fs::write(&path, &rendered.text)
+                    .map_err(|e| anyhow::anyhow!("failed to export prompt to {}: {}", path.display(), e))?;
+                eprintln!("exported manual-handoff prompt to {} (no dispatch performed)", path.display());
+            } else {
+                print!("{}", rendered.text);
+            }
+            let report_json = serde_json::to_string_pretty(&report)?;
+            if let Some(path) = report_output {
+                std::fs::write(&path, &report_json)
+                    .map_err(|e| anyhow::anyhow!("failed to write helper report to {}: {}", path.display(), e))?;
+                eprintln!("wrote helper run report to {}", path.display());
+            } else {
+                eprintln!("{report_json}");
             }
         }
     }
