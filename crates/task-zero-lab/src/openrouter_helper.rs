@@ -256,6 +256,53 @@ impl HelperModel for OpenRouterHelperModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::helper::HelperOperation;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn mock_server(responses: Vec<(u16, String)>) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 16 * 1024];
+                let _ = stream.read(&mut request).unwrap();
+                let reason = if status == 200 {
+                    "OK"
+                } else {
+                    "Service Unavailable"
+                };
+                write!(stream, "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        (url, handle)
+    }
+
+    fn config() -> OpenRouterHelperConfig {
+        OpenRouterHelperConfig {
+            model: "author/model".into(),
+            provider_order: vec!["Pinned".into()],
+            temperature: 0.0,
+            output_limit: 128,
+        }
+    }
+
+    fn completion(content: serde_json::Value, model: &str, provider: Option<&str>) -> String {
+        serde_json::json!({
+            "id": "offline-fixture",
+            "created": 1,
+            "model": model,
+            "provider": provider,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": content.to_string()},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        })
+        .to_string()
+    }
 
     #[test]
     fn config_requires_exact_model_and_provider_pin() {
@@ -312,5 +359,93 @@ mod tests {
             Some("Unexpected"),
         );
         assert_eq!(diagnostics.len(), 2);
+    }
+
+    #[test]
+    fn mocked_transport_accepts_tool_call_and_submission() {
+        let tool = serde_json::json!({"step":"tool_call","value":{"op":"get_coverage"}});
+        let submit = serde_json::json!({"step":"submit","value":{"clarifications":[],"selected_evidence":[],"candidate_claims":[],"proposed_gap_dispositions":[],"stop_reason":"done"}});
+        let (url, server) = mock_server(vec![
+            (200, completion(tool, "author/model", Some("Pinned"))),
+            (200, completion(submit, "author/model", Some("Pinned"))),
+        ]);
+        let mut model =
+            OpenRouterHelperModel::new_with_base_url("offline-key".into(), config(), Some(url))
+                .unwrap();
+        assert!(matches!(
+            model.decide("hashed, never persisted"),
+            Ok(HelperModelOutput::ToolCall(HelperOperation::GetCoverage))
+        ));
+        let record = model.take_inference_record().unwrap();
+        assert_eq!(record.returned_model, "author/model");
+        assert_eq!(record.input_tokens, Some(10));
+        assert!(matches!(
+            model.decide("second round"),
+            Ok(HelperModelOutput::Submit(_))
+        ));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn mocked_transport_sanitizes_malformed_and_identity_mismatch() {
+        let (url, server) = mock_server(vec![
+            (
+                200,
+                completion(
+                    serde_json::json!({"unexpected": true}),
+                    "author/model",
+                    Some("Pinned"),
+                ),
+            ),
+            (
+                200,
+                completion(
+                    serde_json::json!({"step":"tool_call","value":{"op":"get_coverage"}}),
+                    "other/model",
+                    Some("Other"),
+                ),
+            ),
+        ]);
+        let mut model =
+            OpenRouterHelperModel::new_with_base_url("offline-key".into(), config(), Some(url))
+                .unwrap();
+        assert!(matches!(
+            model.decide("prompt"),
+            Ok(HelperModelOutput::Malformed(_))
+        ));
+        assert!(!model
+            .take_inference_record()
+            .unwrap()
+            .validation_diagnostics
+            .is_empty());
+        assert!(matches!(
+            model.decide("prompt"),
+            Ok(HelperModelOutput::Malformed(_))
+        ));
+        assert_eq!(
+            model
+                .take_inference_record()
+                .unwrap()
+                .validation_diagnostics
+                .len(),
+            2
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn mocked_transport_failure_records_only_sanitized_diagnostic() {
+        let (url, server) = mock_server(vec![(
+            503,
+            r#"{"error":{"message":"provider-private-detail","code":503}}"#.into(),
+        )]);
+        let mut model =
+            OpenRouterHelperModel::new_with_base_url("offline-key".into(), config(), Some(url))
+                .unwrap();
+        assert!(model.decide("prompt").is_err());
+        let json = serde_json::to_string(&model.take_inference_record().unwrap()).unwrap();
+        assert!(!json.contains("provider-private-detail"));
+        assert!(json.contains("provider error details suppressed"));
+        server.join().unwrap();
     }
 }

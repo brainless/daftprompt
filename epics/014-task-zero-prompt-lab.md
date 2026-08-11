@@ -1551,3 +1551,37 @@ delete superseded notes; add a later note that revises or rejects them.
 - Detailed artifacts: `crates/task-zero-lab/src/openrouter_helper.rs`,
   `crates/task-zero-lab/src/helper.rs`, and
   `crates/task-zero-lab/src/main.rs`.
+
+### 2026-08-11 — Offline hosted-transport and sanitized replay preparation
+
+- Parent criterion/question: Epic 014 Task 5, OpenRouter completion plan step
+  6 and preparation for step 7 — can hosted success/failure behavior be tested
+  and replayed without credentials, network, prompts, or raw provider payloads?
+- Repository and immutable revision: working tree based on the current Epic
+  014 adapter revision; no live repository or provider input was consumed.
+- Fixture and input request: local mock HTTP responses for a tool call,
+  submission, malformed output, routing-identity mismatch, and 503 failure;
+  synthetic prompt strings only.
+- Harness/detector/prompt/policy/model versions: `task-zero-lab` 0.1.0,
+  `task-zero-helper-v1`, `task-zero-helper-replay-v1`; no model executed.
+- Harness change: added offline mocked-transport coverage and a deliberately
+  lossy `DecisionRecorder`/`SanitizedReplayArtifact` path containing hashes,
+  typed decisions, and sanitized inference metadata but no prompt/key/raw-payload fields. Added a
+  fixed four-case, three-repetition protocol for all three pinned models.
+- Observed result and measurements: offline tests cover valid tool/submission,
+  malformed schema, returned model/provider mismatch, and provider failure;
+  the replay schema rejects unpaired or wrong-model inference metadata.
+- Validated findings: the SDK base-URL seam exercises the real adapter parsing
+  and error path locally; provider failure details do not enter inference
+  reports. Sanitized artifacts reconstruct `ScriptedHelperModel` directly.
+- Rejected or unsupported interpretations: mock responses and a replay schema
+  do not constitute sanitized *live-derived* fixtures, provider availability,
+  three-model support in experiments, or evidence of prompt improvement.
+- Remaining gaps: run the reviewed live protocol, admit sanitized artifacts
+  only after disclosure review, then evaluate the two unchecked Task 5 boxes.
+- User decision or pending decision: provider pins for each model and approval
+  of the first paid/live smoke call remain runtime decisions.
+- Next iteration: execute one minimal reviewed smoke run, sanitize it, verify
+  offline replay, then complete the fixed 36-run matrix if routing is stable.
+- Detailed artifacts: `crates/task-zero-lab/src/replay.rs` and
+  `epics/research/task-zero-lab/openrouter-experiment-protocol-v1.md`.

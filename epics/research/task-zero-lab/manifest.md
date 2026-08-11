@@ -576,6 +576,9 @@ describe experimental model selection, not an additional human-request case:
 - `openrouter-model-verification-2026-08-11.md` records authoritative upstream
   size evidence, public weight availability, and licenses for the selected
   two 8B helpers and one 12B helper.
+- `openrouter-experiment-protocol-v1.md` freezes the cases, inputs, three-run
+  repetition policy, sanitization boundary, replay admission, and measurements
+  for the upcoming live comparison.
 
 Neither artifact contains credentials, completion payloads, private repository
 content, or evidence that a later OpenRouter route/provider will be available.

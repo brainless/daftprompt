@@ -54,6 +54,7 @@ pub mod helper;
 pub mod index_coverage;
 pub mod markdown_extract;
 pub mod openrouter_helper;
+pub mod replay;
 pub mod packet;
 pub mod prompt;
 pub mod run;
