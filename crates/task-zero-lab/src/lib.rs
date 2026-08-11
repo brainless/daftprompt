@@ -43,9 +43,8 @@
 //!   rendering with provenance, coverage disclosure, and a hard byte budget.
 //! - [`helper`] (Task 5): optional, stateless helper refinement behind a
 //!   closed operation catalog. The Task 4 baseline stays fully usable when a
-//!   helper is disabled or unavailable; real open-weight model adapters are
-//!   an explicit, deferred follow-up (see `helper`'s module docs and Epic
-//!   014 Task 5's scope note).
+//!   helper is disabled or unavailable. [`openrouter_helper`] provides the
+//!   explicit credentialed hosted adapter through the local `llm-sdk`.
 
 pub mod content_identity;
 pub mod git_snapshot;
@@ -54,6 +53,7 @@ pub mod graph_build;
 pub mod helper;
 pub mod index_coverage;
 pub mod markdown_extract;
+pub mod openrouter_helper;
 pub mod packet;
 pub mod prompt;
 pub mod run;

@@ -758,17 +758,16 @@ operation catalog.
   `injected_instruction_in_candidate_text_stays_inert`.
 - [ ] At least three open-weight helpers are supported in experiments,
   including at least two below 10B parameters and one sub-20B tier model.
-  Deferred — see the Task 5 scope note and OpenRouter completion plan above.
-  `HelperModel` is the extension point; the next implementation is one
-  configurable `OpenRouterHelperModel` using three pinned, independently
-  verified open-weight model IDs through the local `llm-sdk` boundary.
+  The configurable `OpenRouterHelperModel` adapter now exists and accepts the
+  three pinned, independently verified IDs through the local `llm-sdk`
+  boundary, but this remains unchecked until repeatable live experiments have
+  actually run across all three models as required by plan step 7.
 - [ ] Model/provider code uses the local `~/Projects/llm-sdk` source boundary;
   recorded replay fixtures require no credentials or network access.
-  Deferred alongside the criterion above — no live-model adapter exists yet
-  to record replay fixtures from. `ScriptedHelperModel` independently
-  satisfies "credential-free, no network" for the orchestration mechanism
-  itself (`crates/task-zero-lab/fixtures/helper/search-then-submit.json`),
-  but not the `llm-sdk` requirement.
+  The adapter now uses `llm-sdk` commit `87cebeb` and existing scripted
+  fixtures remain credential-free/offline. This remains unchecked until
+  sanitized replay fixtures are derived from successful/failure live traces;
+  no live request was made during adapter implementation.
 - [x] Malformed output, prompt injection, early stop, over-calling, and false
   completion preserve the deterministic baseline and produce diagnostics.
   Covered by `malformed_output_falls_back_to_baseline_with_diagnostics`
@@ -1505,3 +1504,50 @@ delete superseded notes; add a later note that revises or rejects them.
 - Detailed artifacts:
   `epics/research/task-zero-lab/openrouter-candidates-2026-08-11.json` and
   `epics/research/task-zero-lab/openrouter-model-verification-2026-08-11.md`.
+
+### 2026-08-11 — OpenRouter helper adapter and explicit live boundary
+
+- Parent criterion/question: Epic 014 Task 5 and OpenRouter completion plan
+  steps 3–5 — can a hosted model participate through the existing stateless,
+  closed helper interface while preserving reproducible routing and sanitized
+  inference metadata?
+- Repository and immutable revision: daftprompt working tree based on
+  `4d41973`; local `~/Projects/llm-sdk` at `87cebeb`.
+- Fixture and input request: local configuration/request-shape tests only; no
+  model completion, private repository prompt, or credential was transmitted.
+- Harness/detector/prompt/policy/model versions: `task-zero-lab` 0.1.0;
+  `task-zero-helper-v1`; deterministic temperature 0 and default 2,048-token
+  output cap; no model executed.
+- Harness change: added one configurable `OpenRouterHelperModel` around
+  `llm_sdk::openrouter::OpenRouterClient`, an explicit `--live-openrouter`
+  CLI branch, strict exact-model/provider configuration, disabled fallbacks,
+  required parameters, denied data collection, ZDR routing, JSON output, and
+  per-round sanitized inference audit records. Adapter failures use a distinct
+  `adapter_unavailable` stop reason, suppress provider payload details, and
+  retain the deterministic baseline; returned model/provider identity
+  mismatches are diagnosed and rejected.
+- Observed result and measurements: `cargo check -p task-zero-lab` passed with
+  `RUSTC_WRAPPER` cleared; focused offline configuration/request-shape tests
+  pass. No token, latency, provider-availability, or model-quality measurement
+  exists because live execution was intentionally excluded from this pass.
+- Validated findings: the local SDK exposes the required provider preferences,
+  returned model/provider identity, token usage, finish reason, and exact raw
+  response bytes. The lab stores only hashes and structured metadata, never
+  the API key or raw provider response. Model output remains a typed
+  `HelperModelOutput`; the existing host is still the sole tool executor.
+- Rejected or unsupported interpretations: adapter support does not establish
+  that any candidate/provider combination is currently routable, honors ZDR,
+  reliably emits the schema, or improves prompts. No Task 5 real-run criterion
+  is checked from compilation or request-shape evidence.
+- Remaining gaps: perform a reviewed live smoke test, sanitize successful and
+  failure traces into offline replay fixtures, and run the fixed repeated
+  experiment across all three verified models before evaluating the two
+  remaining Task 5 criteria.
+- User decision or pending decision: API key is present in ignored `.env`;
+  provider pins and paid/live invocation remain pending review.
+- Next iteration: review the adapter and CLI/report boundary, then run the
+  smallest approved live smoke test without printing or persisting secrets or
+  raw provider payloads.
+- Detailed artifacts: `crates/task-zero-lab/src/openrouter_helper.rs`,
+  `crates/task-zero-lab/src/helper.rs`, and
+  `crates/task-zero-lab/src/main.rs`.

@@ -2,9 +2,10 @@
 //!
 //! Experimental, read-only research-harness CLI for the Task Zero Prompt
 //! Lab (Epic 014). Not a production interface — see
-//! `epics/014-task-zero-prompt-lab.md` Design Constraint 1. Every subcommand
-//! is offline, credential-free, and performs no mutation, checkout, network
-//! call, or dependency installation.
+//! `epics/014-task-zero-prompt-lab.md` Design Constraint 1. All default and
+//! scripted paths are offline and credential-free. Only the explicit
+//! `helper --live-openrouter` mode performs a credentialed network request;
+//! no mode performs repository mutation, checkout, or dependency installation.
 //!
 //! ```text
 //! cargo run --bin task_zero_lab -- snapshot --repo . --rev HEAD
@@ -122,9 +123,8 @@ enum Command {
     /// Render a prompt via the Epic 014 Task 5 optional helper-refinement
     /// stage. Omitting `--scripted-fixture` runs the always-available
     /// disabled path, byte-identical to `prompt` (Task 5 acceptance
-    /// criterion). Real open-weight model adapters are a deferred follow-up
-    /// (see `helper` module docs); this subcommand only supports the
-    /// deterministic, offline `ScriptedHelperModel` today.
+    /// criterion). Live OpenRouter execution is opt-in and requires an exact
+    /// model, pinned provider order, and OPENROUTER_API_KEY.
     Helper {
         #[arg(long)] repo: PathBuf,
         #[arg(long, default_value = "HEAD")] rev: String,
@@ -138,6 +138,21 @@ enum Command {
         /// Path to a JSON `Vec<HelperModelOutput>` scripted session (see
         /// `crates/task-zero-lab/fixtures/helper/`). Omit to run disabled.
         #[arg(long)] scripted_fixture: Option<PathBuf>,
+        /// Explicitly enable credentialed OpenRouter execution. Mutually
+        /// exclusive with `--scripted-fixture`.
+        #[arg(long, conflicts_with = "scripted_fixture")]
+        live_openrouter: bool,
+        /// Exact OpenRouter author/model ID; routed aliases are rejected.
+        #[arg(long, requires = "live_openrouter")]
+        openrouter_model: Option<String>,
+        /// Ordered upstream provider pin. Repeat to specify a strict order;
+        /// fallback remains disabled.
+        #[arg(long, requires = "live_openrouter")]
+        openrouter_provider: Vec<String>,
+        #[arg(long, requires = "live_openrouter", default_value_t = task_zero_lab::openrouter_helper::DEFAULT_TEMPERATURE)]
+        openrouter_temperature: f32,
+        #[arg(long, requires = "live_openrouter", default_value_t = task_zero_lab::openrouter_helper::DEFAULT_OUTPUT_LIMIT)]
+        openrouter_output_limit: u32,
         #[arg(long, default_value_t = task_zero_lab::helper::HelperPolicy::default().max_rounds)] max_rounds: usize,
         #[arg(long, default_value_t = task_zero_lab::helper::HelperPolicy::default().max_calls)] max_calls: usize,
         #[arg(long, default_value_t = task_zero_lab::helper::HelperPolicy::default().max_result_bytes)] max_result_bytes: usize,
@@ -250,6 +265,11 @@ fn main() -> anyhow::Result<()> {
             max_prompt_bytes,
             output,
             scripted_fixture,
+            live_openrouter,
+            openrouter_model,
+            openrouter_provider,
+            openrouter_temperature,
+            openrouter_output_limit,
             max_rounds,
             max_calls,
             max_result_bytes,
@@ -297,6 +317,31 @@ fn main() -> anyhow::Result<()> {
                         Some(&mut model),
                         &patterns,
                         &format!("scripted:{}", fixture_path.display()),
+                    )?
+                }
+                None if live_openrouter => {
+                    // Load `.env` only in this explicit credentialed mode.
+                    // dotenvy never logs values, and neither does this CLI.
+                    let _ = dotenvy::dotenv();
+                    let api_key = std::env::var("OPENROUTER_API_KEY")
+                        .map_err(|_| anyhow::anyhow!("live OpenRouter mode requires OPENROUTER_API_KEY in the environment or ignored .env"))?;
+                    let config = task_zero_lab::openrouter_helper::OpenRouterHelperConfig {
+                        model: openrouter_model.ok_or_else(|| anyhow::anyhow!("--openrouter-model is required in live OpenRouter mode"))?,
+                        provider_order: openrouter_provider,
+                        temperature: openrouter_temperature,
+                        output_limit: openrouter_output_limit,
+                    };
+                    let adapter_name = format!("openrouter:{}", config.model);
+                    let mut model = task_zero_lab::openrouter_helper::OpenRouterHelperModel::new(api_key, config)?;
+                    task_zero_lab::helper::refine_prompt(
+                        &extraction,
+                        &packet,
+                        &prompt_request,
+                        prompt_budget,
+                        &policy,
+                        Some(&mut model),
+                        &patterns,
+                        &adapter_name,
                     )?
                 }
                 None => task_zero_lab::helper::refine_prompt(&extraction, &packet, &prompt_request, prompt_budget, &policy, None, &patterns, "disabled")?,

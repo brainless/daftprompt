@@ -12,13 +12,9 @@
 //! operation catalog, bounded/recorded round loop, stateless
 //! host-reconstructed prompting, the trust-labeled prompt-pattern library,
 //! and a deterministic, credential-free [`ScriptedHelperModel`] for offline
-//! testing/replay. It deliberately **defers** wiring real open-weight model
-//! adapters (Groq/Ollama/llama.cpp via the local `llm-sdk` crate): that work
-//! needs live credentials or a locally running model this environment cannot
-//! provision, so it is scoped as an explicit follow-up. [`HelperModel`] is
-//! the extension point a future adapter implements without touching this
-//! module's orchestration loop; see `epics/014-task-zero-prompt-lab.md`
-//! Task 5 for the tracked scope note.
+//! testing/replay. The credentialed OpenRouter transport adapter lives in
+//! [`crate::openrouter_helper`] and implements [`HelperModel`] without
+//! changing this orchestration loop.
 //!
 //! ## Why this reuses Task 3 types instead of inventing new ones
 //!
@@ -215,6 +211,7 @@ pub enum StopReason {
     LowMarginalYield,
     RetryBudgetExhausted,
     PrematureStop,
+    AdapterUnavailable,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,6 +224,33 @@ pub struct HelperRunReport {
     pub stop_reason: StopReason,
     pub submission: Option<HelperSubmission>,
     pub diagnostics: Vec<String>,
+    /// One sanitized audit record per hosted inference. Scripted and disabled
+    /// adapters leave this empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inferences: Vec<InferenceRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferenceRecord {
+    pub round: usize,
+    pub requested_model: String,
+    pub returned_model: String,
+    pub upstream_provider: Option<String>,
+    pub provider_order: Vec<String>,
+    pub allow_fallbacks: bool,
+    pub require_parameters: bool,
+    pub data_collection: String,
+    pub zdr: bool,
+    pub temperature: f32,
+    pub output_limit: u32,
+    pub protocol_version: String,
+    pub prompt_hash: String,
+    pub raw_response_hash: String,
+    pub input_tokens: Option<u32>,
+    pub output_tokens: Option<u32>,
+    pub elapsed_ms: u128,
+    pub stop_reason: Option<String>,
+    pub validation_diagnostics: Vec<String>,
 }
 
 // ── Submission schema ────────────────────────────────────────────────────
@@ -434,10 +458,15 @@ pub enum HelperModelOutput {
 }
 
 /// The interface any helper — scripted or a real model — must implement.
-/// Real adapters (Groq/Ollama/llama.cpp via `llm-sdk`) are a deferred
-/// follow-up; see module docs.
+/// Hosted/local adapters implement this boundary without gaining tool access.
 pub trait HelperModel {
     fn decide(&mut self, round_prompt: &str) -> anyhow::Result<HelperModelOutput>;
+
+    /// Return the latest sanitized hosted-inference record, if any. This
+    /// keeps transport metadata separate from the model's typed decision.
+    fn take_inference_record(&mut self) -> Option<InferenceRecord> {
+        None
+    }
 }
 
 /// A fully deterministic, offline, credential-free [`HelperModel`] that
@@ -502,6 +531,7 @@ pub fn refine_prompt(
                 stop_reason: StopReason::Disabled,
                 submission: None,
                 diagnostics: Vec::new(),
+                inferences: Vec::new(),
             },
         ));
     };
@@ -510,6 +540,7 @@ pub fn refine_prompt(
     let mut validated_calls: Vec<(HelperOperation, String)> = Vec::new();
     let mut records = Vec::new();
     let mut diagnostics = Vec::new();
+    let mut inferences = Vec::new();
     let mut duplicate_calls = 0usize;
     let mut malformed_outputs = 0usize;
     let mut low_yield_streak = 0usize;
@@ -524,7 +555,26 @@ pub fn refine_prompt(
             break;
         }
         let round_prompt = build_round_prompt(request, &validated_calls, patterns, round, policy.max_rounds);
-        let output = model.decide(&round_prompt)?;
+        let decision = model.decide(&round_prompt);
+        if let Some(mut inference) = model.take_inference_record() {
+            inference.round = round;
+            diagnostics.extend(inference.validation_diagnostics.iter().cloned());
+            inferences.push(inference);
+        }
+        let output = match decision {
+            Ok(output) => output,
+            Err(_) => {
+                // Provider errors can embed request/response bodies. Never
+                // copy an adapter error into this persisted report; callers
+                // still get an honest, actionable classification while the
+                // deterministic baseline remains usable.
+                diagnostics.push(format!(
+                    "round {round}: helper adapter unavailable; deterministic baseline retained (provider error details suppressed)"
+                ));
+                stop_reason = StopReason::AdapterUnavailable;
+                break 'rounds;
+            }
+        };
         match output {
             HelperModelOutput::ToolCall(op) => {
                 let before_bytes = executor.total_bytes;
@@ -584,7 +634,11 @@ pub fn refine_prompt(
             }
         }
     }
-    if records.is_empty() && submission.is_none() && malformed_outputs == 0 {
+    if records.is_empty()
+        && submission.is_none()
+        && malformed_outputs == 0
+        && stop_reason != StopReason::AdapterUnavailable
+    {
         stop_reason = StopReason::PrematureStop;
     }
 
@@ -605,6 +659,7 @@ pub fn refine_prompt(
             stop_reason,
             submission,
             diagnostics,
+            inferences,
         },
     ))
 }
@@ -739,6 +794,64 @@ mod tests {
         assert_eq!(direct, via_helper);
         assert_eq!(report.stop_reason, StopReason::Disabled);
         assert_eq!(report.rounds, 0);
+    }
+
+    struct FailingHelperModel {
+        record: Option<InferenceRecord>,
+    }
+
+    impl HelperModel for FailingHelperModel {
+        fn decide(&mut self, _round_prompt: &str) -> anyhow::Result<HelperModelOutput> {
+            Err(anyhow::anyhow!("secret provider payload that must not escape"))
+        }
+
+        fn take_inference_record(&mut self) -> Option<InferenceRecord> {
+            self.record.take()
+        }
+    }
+
+    #[test]
+    fn adapter_error_preserves_baseline_and_suppresses_provider_details() {
+        let direct = prompt::render_prompt(&prompt_request(), &packet(), PromptBudget::default()).unwrap();
+        let metadata = InferenceRecord {
+            round: 0,
+            requested_model: "author/model".to_string(),
+            returned_model: String::new(),
+            upstream_provider: None,
+            provider_order: vec!["Pinned".to_string()],
+            allow_fallbacks: false,
+            require_parameters: true,
+            data_collection: "deny".to_string(),
+            zdr: true,
+            temperature: 0.0,
+            output_limit: 128,
+            protocol_version: HELPER_PROTOCOL_VERSION.to_string(),
+            prompt_hash: "prompt-hash".to_string(),
+            raw_response_hash: String::new(),
+            input_tokens: None,
+            output_tokens: None,
+            elapsed_ms: 1,
+            stop_reason: None,
+            validation_diagnostics: vec![],
+        };
+        let mut model = FailingHelperModel { record: Some(metadata) };
+        let (rendered, report) = refine_prompt(
+            &graph(),
+            &packet(),
+            &prompt_request(),
+            PromptBudget::default(),
+            &HelperPolicy::default(),
+            Some(&mut model),
+            &[],
+            "failing-test",
+        )
+        .unwrap();
+        assert_eq!(rendered, direct);
+        assert_eq!(report.stop_reason, StopReason::AdapterUnavailable);
+        assert_eq!(report.inferences.len(), 1);
+        let report_json = serde_json::to_string(&report).unwrap();
+        assert!(!report_json.contains("secret provider payload"));
+        assert!(report_json.contains("provider error details suppressed"));
     }
 
     // AC2
