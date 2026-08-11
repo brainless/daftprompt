@@ -762,12 +762,14 @@ operation catalog.
   three pinned, independently verified IDs through the local `llm-sdk`
   boundary, but this remains unchecked until repeatable live experiments have
   actually run across all three models as required by plan step 7.
-- [ ] Model/provider code uses the local `~/Projects/llm-sdk` source boundary;
+- [x] Model/provider code uses the local `~/Projects/llm-sdk` source boundary;
   recorded replay fixtures require no credentials or network access.
-  The adapter now uses `llm-sdk` commit `87cebeb` and existing scripted
-  fixtures remain credential-free/offline. This remains unchecked until
-  sanitized replay fixtures are derived from successful/failure live traces;
-  no live request was made during adapter implementation.
+  The adapter uses `llm-sdk` commit `87cebeb`. The credentialed zero-credit
+  smoke attempt produced the sanitized, live-derived failure replay
+  `openrouter-smoke-blocker-2026-08-11.json`; it contains typed decisions,
+  hashes, and sanitized inference metadata but no credential, prompt, or raw
+  provider payload, and the `openrouter_helper_experiment replay` path
+  reconstructs it with `ScriptedHelperModel` without credentials or network.
 - [x] Malformed output, prompt injection, early stop, over-calling, and false
   completion preserve the deterministic baseline and produce diagnostics.
   Covered by `malformed_output_falls_back_to_baseline_with_diagnostics`
@@ -1623,5 +1625,10 @@ delete superseded notes; add a later note that revises or rejects them.
 - Remaining gap/user decision: add OpenRouter credits, then run a new explicit
   smoke attempt. The fixed matrix was deliberately not started and the failed
   smoke was not silently retried.
+- Resume command (from the repository root, after adding credits):
+  `cargo run -p task-zero-lab --bin openrouter_helper_experiment -- live --model ibm-granite/granite-4.1-8b --provider CoreWeave --case LAB-C01-REQUEST --repetition 1 --output /tmp/openrouter-granite-smoke.json`.
+  Review that temporary artifact for disclosure before admitting any sanitized
+  result under `epics/research/task-zero-lab/`; do not start the 36-run matrix
+  unless the smoke returns the pinned model/provider and valid typed output.
 - Detailed artifact:
   `epics/research/task-zero-lab/openrouter-smoke-blocker-2026-08-11.json`.
