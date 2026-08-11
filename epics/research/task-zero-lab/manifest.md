@@ -563,3 +563,19 @@ Task 0, for the authoritative status. Summary:
 - No production implementation task in Epics 011–013 has begun: `crates/`
   contains only `daftprompt-indexer` (re-verified 2026-08-02), and every
   Task 1+ checkbox in Epics 011, 012, and 013 remains unchecked.
+
+## 9. Hosted helper discovery artifacts
+
+Task 5's credential-free OpenRouter discovery run and upstream model
+verification are recorded separately from the prompt-case corpus because they
+describe experimental model selection, not an additional human-request case:
+
+- `openrouter-candidates-2026-08-11.json` archives the normalized public
+  catalog result, exact filters, command, candidates, and explicitly
+  non-authoritative parameter-size inferences.
+- `openrouter-model-verification-2026-08-11.md` records authoritative upstream
+  size evidence, public weight availability, and licenses for the selected
+  two 8B helpers and one 12B helper.
+
+Neither artifact contains credentials, completion payloads, private repository
+content, or evidence that a later OpenRouter route/provider will be available.

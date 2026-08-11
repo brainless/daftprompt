@@ -1,0 +1,32 @@
+{
+  "observed_date": "2026-08-11",
+  "source_url": "https://openrouter.ai/api/v1/models",
+  "command": "cargo run -p task-zero-lab --bin openrouter_model_candidates -- --format json",
+  "filters": {
+    "exact_input_modalities": ["text"],
+    "exact_output_modalities": ["text"],
+    "max_context": 131072,
+    "min_prompt_and_completion_usd_per_million": 0.0,
+    "max_prompt_and_completion_usd_per_million": 0.1,
+    "max_inferred_parameters_b": 20.0,
+    "require_hugging_face_id": true,
+    "required_parameters": ["response_format"]
+  },
+  "candidates": [
+    {"id":"ibm-granite/granite-4.1-8b","canonical_slug":"ibm-granite/granite-4.1-8b-20260429","hugging_face_id":"ibm-granite/granite-4.1-8b","context_length":131072,"prompt_usd_per_million":0.05,"completion_usd_per_million":0.10,"inferred_parameters_b":8.0},
+    {"id":"meta-llama/llama-3.1-8b-instruct","canonical_slug":"meta-llama/llama-3.1-8b-instruct","hugging_face_id":"meta-llama/Meta-Llama-3.1-8B-Instruct","context_length":131072,"prompt_usd_per_million":0.05,"completion_usd_per_million":0.08,"inferred_parameters_b":8.0},
+    {"id":"sao10k/l3-lunaris-8b","canonical_slug":"sao10k/l3-lunaris-8b","hugging_face_id":"Sao10K/L3-8B-Lunaris-v1","context_length":8192,"prompt_usd_per_million":0.04,"completion_usd_per_million":0.05,"inferred_parameters_b":8.0},
+    {"id":"nvidia/nemotron-nano-9b-v2:free","canonical_slug":"nvidia/nemotron-nano-9b-v2","hugging_face_id":"nvidia/NVIDIA-Nemotron-Nano-9B-v2","context_length":128000,"prompt_usd_per_million":0.0,"completion_usd_per_million":0.0,"inferred_parameters_b":9.0},
+    {"id":"mistralai/mistral-nemo","canonical_slug":"mistralai/mistral-nemo","hugging_face_id":"mistralai/Mistral-Nemo-Instruct-2407","context_length":131072,"prompt_usd_per_million":0.019,"completion_usd_per_million":0.03,"inferred_parameters_b":12.0},
+    {"id":"gryphe/mythomax-l2-13b","canonical_slug":"gryphe/mythomax-l2-13b","hugging_face_id":"Gryphe/MythoMax-L2-13b","context_length":8192,"prompt_usd_per_million":0.06,"completion_usd_per_million":0.06,"inferred_parameters_b":13.0}
+  ],
+  "suggested_three": [
+    {"tier":"below 10B (first)","id":"ibm-granite/granite-4.1-8b","inferred_parameters_b":8.0},
+    {"tier":"below 10B (second)","id":"meta-llama/llama-3.1-8b-instruct","inferred_parameters_b":8.0},
+    {"tier":"sub-20B tier (>=10B, <20B)","id":"mistralai/mistral-nemo","inferred_parameters_b":12.0}
+  ],
+  "limitations": [
+    "The archived numeric sizes are non-authoritative CLI inferences from catalog text, not parameter evidence.",
+    "Catalog availability, prices, supported parameters, and routing providers are time-varying and must be rechecked for a live run."
+  ]
+}

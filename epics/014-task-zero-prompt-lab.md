@@ -662,12 +662,15 @@ operation catalog.
    verify total parameter count, model-card license, and open-weight status
    before approving a model for the experiment.
 2. Select and record exact model IDs for two distinct helpers below 10B and
-   one helper in the 10B-to-below-20B tier. Catalog results are time-varying;
-   the 2026-08-11 discovery run suggested
+   one helper in the 10B-to-below-20B tier. Catalog results are time-varying.
+   The 2026-08-11 discovery run suggested, and upstream model-card/license
+   verification approved for experiments,
    `ibm-granite/granite-4.1-8b`,
    `meta-llama/llama-3.1-8b-instruct`, and
-   `mistralai/mistral-nemo`, but these are candidates until their upstream
-   model cards and licenses are recorded in the research artifact.
+   `mistralai/mistral-nemo`. The first two are 8B and the third is 12B;
+   Granite and Mistral Nemo are Apache-2.0, while Llama uses the Llama 3.1
+   Community License and is recorded as open-weight without claiming OSI
+   open-source status. See the dated catalog and verification artifacts.
 3. Add an `OpenRouterHelperModel` adapter around
    `llm_sdk::openrouter::OpenRouterClient`. Keep `HelperModelOutput` as the
    response schema: each stateless round asks for one typed JSON tool request
@@ -1451,3 +1454,54 @@ delete superseded notes; add a later note that revises or rejects them.
   complete packet is rejected and replaced by final serialized-packet
   enforcement. The broader pending decisions and cross-repository gaps in the
   preceding Task 3 note remain unchanged.
+
+### 2026-08-11 — OpenRouter catalog discovery and model verification
+
+- Parent criterion/question: Epic 014 Task 5's two unchecked real-helper
+  criteria; OpenRouter completion plan steps 1–2 — establish a reproducible,
+  credential-free candidate set and verify the required parameter tiers,
+  licenses, and public weight availability before implementing or paying for
+  completions.
+- Repository and immutable revision: daftprompt working tree based on
+  `cb0170d`; no model weights or private repository inputs were downloaded.
+- Fixture and input request: public `GET https://openrouter.ai/api/v1/models`
+  through `openrouter_model_candidates --format json`, with the CLI's exact
+  text-only, context, price, `response_format`, Hugging Face ID, and inferred
+  below-20B filters.
+- Harness/detector/prompt/policy/model versions: `task-zero-lab` 0.1.0;
+  candidate CLI at `cb0170d`; no helper adapter or completion model executed.
+- Harness change: no code change. Archived a normalized catalog report and a
+  separate upstream verification report.
+- Observed result and measurements: six catalog candidates survived. The
+  deterministic suggestion policy returned two inferred 8B candidates
+  (`ibm-granite/granite-4.1-8b`,
+  `meta-llama/llama-3.1-8b-instruct`) and one inferred 12B candidate
+  (`mistralai/mistral-nemo`). The normalized JSON report SHA-256 is
+  `e01c9f29e6418a30fffee0b1d1bb180c4114a4ec18ac531579323e236400c55b`;
+  the verification report SHA-256 is
+  `80a3438d3c06ae0f37d82c6d390b69cf60568b9081b26cc840abbefc35d8aa04`.
+- Validated findings: upstream repositories publish the weights and confirm
+  the tiers: IBM documents Granite as 8B, Meta identifies Llama 3.1 Instruct
+  as 8B, and Hugging Face weight metadata reports 12,247,782,400 parameters
+  for Mistral Nemo. Granite and Mistral Nemo declare Apache-2.0; Llama declares
+  the Llama 3.1 Community License. These exact three OpenRouter IDs are
+  approved as experimental candidates.
+- Rejected or unsupported interpretations: the CLI's parameter extraction is
+  not authoritative and did not establish the tiers; a Hugging Face ID alone
+  does not establish a license; the custom Llama license is not described as
+  OSI open source; catalog presence does not prove later provider/routing
+  availability or successful structured output.
+- Remaining gaps: OpenRouter routing/provider controls and response metadata
+  must exist in local `llm-sdk`; the lab adapter, offline transport tests,
+  explicit credentialed CLI mode, sanitized replay traces, and repeated
+  three-model experiment remain undone. The Task 5 acceptance boxes therefore
+  remain unchecked.
+- User decision or pending decision: the user selected hosted OpenRouter
+  helpers because local model storage is unavailable; final experiment
+  conclusions remain pending the controlled runs.
+- Next iteration: implement the required typed OpenRouter routing controls in
+  local `llm-sdk`, then the lab adapter and offline tests; do not make paid
+  calls until those boundaries pass review.
+- Detailed artifacts:
+  `epics/research/task-zero-lab/openrouter-candidates-2026-08-11.json` and
+  `epics/research/task-zero-lab/openrouter-model-verification-2026-08-11.md`.
