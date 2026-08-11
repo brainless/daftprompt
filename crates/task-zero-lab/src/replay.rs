@@ -62,12 +62,18 @@ impl<M: HelperModel> HelperModel for DecisionRecorder<M> {
 pub struct SanitizedReplayArtifact {
     pub schema_version: String,
     pub case_id: String,
+    pub input_rendering_id: String,
+    pub input_rendering_hash: String,
+    pub mutation_constraints_hash: String,
+    pub input_rendering_provenance: String,
     pub repository_revision: String,
+    pub graph_hash: String,
     pub packet_hash: String,
     pub prompt_patterns_hash: String,
     pub model_id: String,
     pub repetition: u32,
     pub policy_hash: String,
+    pub prompt_template_version: String,
     pub decisions: Vec<HelperModelOutput>,
     pub inferences: Vec<InferenceRecord>,
 }
@@ -80,16 +86,28 @@ impl SanitizedReplayArtifact {
         );
         anyhow::ensure!(!self.case_id.trim().is_empty(), "case_id is required");
         anyhow::ensure!(
+            !self.input_rendering_id.trim().is_empty()
+                && !self.input_rendering_hash.is_empty()
+                && !self.mutation_constraints_hash.is_empty()
+                && !self.input_rendering_provenance.trim().is_empty(),
+            "input rendering identity, hash, and provenance are required"
+        );
+        anyhow::ensure!(
             !self.repository_revision.trim().is_empty(),
             "repository_revision is required"
         );
         anyhow::ensure!(
-            !self.packet_hash.is_empty()
+            !self.graph_hash.is_empty()
+                && !self.packet_hash.is_empty()
                 && !self.prompt_patterns_hash.is_empty()
                 && !self.policy_hash.is_empty(),
             "input hashes are required"
         );
         anyhow::ensure!(!self.model_id.trim().is_empty(), "model_id is required");
+        anyhow::ensure!(
+            self.prompt_template_version == crate::prompt::PROMPT_TEMPLATE_VERSION,
+            "prompt template mismatch"
+        );
         anyhow::ensure!(self.repetition > 0, "repetition is one-based");
         anyhow::ensure!(
             self.decisions.len() == self.inferences.len(),
@@ -148,12 +166,18 @@ mod tests {
         let artifact = SanitizedReplayArtifact {
             schema_version: REPLAY_SCHEMA_VERSION.into(),
             case_id: "C01".into(),
+            input_rendering_id: "manifest:C01:expert".into(),
+            input_rendering_hash: "request-hash".into(),
+            mutation_constraints_hash: "constraints-hash".into(),
+            input_rendering_provenance: "manifest.md §3 C01 expert rendering".into(),
             repository_revision: "abc123".into(),
+            graph_hash: "graph-hash".into(),
             packet_hash: "packet-hash".into(),
             prompt_patterns_hash: "patterns-hash".into(),
             model_id: "author/model".into(),
             repetition: 1,
             policy_hash: "policy-hash".into(),
+            prompt_template_version: crate::prompt::PROMPT_TEMPLATE_VERSION.into(),
             decisions: vec![HelperModelOutput::Malformed("invalid schema".into())],
             inferences: vec![inference()],
         };
@@ -172,12 +196,18 @@ mod tests {
         let artifact = SanitizedReplayArtifact {
             schema_version: REPLAY_SCHEMA_VERSION.into(),
             case_id: "C01".into(),
+            input_rendering_id: "manifest:C01:expert".into(),
+            input_rendering_hash: "request-hash".into(),
+            mutation_constraints_hash: "constraints-hash".into(),
+            input_rendering_provenance: "manifest.md §3 C01 expert rendering".into(),
             repository_revision: "abc".into(),
+            graph_hash: "g".into(),
             packet_hash: "p".into(),
             prompt_patterns_hash: "q".into(),
             model_id: "author/model".into(),
             repetition: 1,
             policy_hash: "h".into(),
+            prompt_template_version: crate::prompt::PROMPT_TEMPLATE_VERSION.into(),
             decisions: vec![],
             inferences: vec![record],
         };

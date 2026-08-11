@@ -12,6 +12,10 @@ path = "src/main.rs"
 name = "openrouter_model_candidates"
 path = "src/bin/openrouter_model_candidates.rs"
 
+[[bin]]
+name = "openrouter_helper_experiment"
+path = "src/bin/openrouter_helper_experiment.rs"
+
 [dependencies]
 daftprompt-indexer = { path = "../daftprompt-indexer" }
 # The `status` feature (needed for `Repository::is_dirty()`) is enabled only

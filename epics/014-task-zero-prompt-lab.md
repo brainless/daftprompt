@@ -1585,3 +1585,43 @@ delete superseded notes; add a later note that revises or rejects them.
   offline replay, then complete the fixed 36-run matrix if routing is stable.
 - Detailed artifacts: `crates/task-zero-lab/src/replay.rs` and
   `epics/research/task-zero-lab/openrouter-experiment-protocol-v1.md`.
+
+### 2026-08-11 — Credentialed OpenRouter smoke run blocked by zero credits
+
+- Parent criterion/question: Epic 014 Task 5, OpenRouter plan steps 6–7 —
+  does the pinned privacy/routing/schema path pass one minimal completion
+  before beginning the 36-run matrix?
+- Repository, immutable revision, fixture, and input request: daftprompt
+  `275b4f3351a3770b2ccfdd5869923307bb8830ee`, newly authored public
+  `DERIVED-SMOKE-C01` control derived from C01 but not the canonical manifest
+  rendering; no private Keystone/ReporGo content was read or transmitted.
+- Harness/prompt/policy/model versions: `task-zero-lab` 0.1.0,
+  `task-zero-helper-v1`, `task-zero-helper-replay-v1`,
+  `task-zero-baseline-v1`, `HelperPolicy::default()`, Granite 4.1 8B pinned
+  to CoreWeave with fallback disabled, required parameters, denied data
+  collection, ZDR, temperature 0, and output limit 2,048.
+- Harness change: added `openrouter_helper_experiment`, which freezes graph,
+  packet, prompt-pattern, policy, protocol, and template hashes, wraps the
+  live adapter in `DecisionRecorder`, exports only disclosure-reviewable
+  typed replay data plus aggregate measurements, and replays the retained
+  typed decisions offline. Public endpoint discovery pinned DeepInfra for the other two
+  approved models.
+- Corpus-status correction: the future 36-run Task 5 matrix uses explicit
+  `LAB-C01-REQUEST`, `LAB-C02-REQUEST`, and `LAB-C07-REQUEST` derived controls.
+  They replay the exact manifest request/constraint strings against the
+  daftprompt Task Zero graph, not the manifest repositories, and therefore
+  cannot count as canonical case runs or Task 6 comparative evidence.
+- Observed results: the smoke run failed before completion with zero tokens,
+  no returned model/provider, 576 ms elapsed, and `adapter_unavailable`.
+  The sanitized artifact contains only the generic suppressed-error marker.
+  A read-only credits query reported total credits `0` (usage `0.0005159`).
+- Validated findings and rejected interpretations: the credential and live
+  boundary execute without leaking the key, and the failure artifact is
+  replayable; this does not establish provider/model support or prompt
+  improvement. The original smoke input must not be counted as a canonical
+  C01 corpus run. Neither unchecked Task 5 criterion was changed.
+- Remaining gap/user decision: add OpenRouter credits, then run a new explicit
+  smoke attempt. The fixed matrix was deliberately not started and the failed
+  smoke was not silently retried.
+- Detailed artifact:
+  `epics/research/task-zero-lab/openrouter-smoke-blocker-2026-08-11.json`.
