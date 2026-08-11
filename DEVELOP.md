@@ -73,6 +73,14 @@ RUST_LOG=debug cargo run       # run with debug logging
 cargo test --workspace         # run all tests
 ```
 
+### Local API credentials
+
+Copy `.env.example` to `.env` and set `OPENROUTER_API_KEY` there for explicit
+live Task Zero lab experiments. `.env` is ignored by Git and must never be
+committed. Shell commands do not load it automatically; load it into the
+process environment before invoking a credentialed CLI (for example with a
+local dotenv runner), or export `OPENROUTER_API_KEY` in the current shell.
+
 ## Project Structure
 
 ```
