@@ -635,6 +635,65 @@ without touching this module's orchestration loop (`refine_prompt`). The two
 criteria below that name real open-weight helpers stay unchecked until that
 follow-up lands.
 
+#### OpenRouter hosted-helper completion plan
+
+Local model storage is not required to finish the deferred half of this task.
+Use OpenRouter as the first hosted experimental provider through the local
+`~/Projects/llm-sdk` boundary, while keeping the existing deterministic and
+scripted paths credential-free and offline. OpenRouter is a transport/provider
+choice, not an evidence source and not a reason to weaken the closed helper
+operation catalog.
+
+1. Discover candidates with the lab's read-only filter rather than hardcoding
+   whatever models happen to be visible in the OpenRouter catalog:
+
+   ```bash
+   cargo run -p task-zero-lab --bin openrouter_model_candidates
+   cargo run -p task-zero-lab --bin openrouter_model_candidates -- --format json
+   ```
+
+   The CLI queries the public models endpoint with text modality and prompt/
+   completion price bounds of USD 0–0.10 per million tokens, then locally
+   requires exact text-only input/output, context at most 131,072 tokens,
+   `response_format`, a Hugging Face identifier, and an inferred size below
+   20B. The API does not expose parameter count directly: the CLI reports its
+   conservative inference and the source text, and unknown sizes remain
+   excluded by default. A Hugging Face identifier is only discovery evidence;
+   verify total parameter count, model-card license, and open-weight status
+   before approving a model for the experiment.
+2. Select and record exact model IDs for two distinct helpers below 10B and
+   one helper in the 10B-to-below-20B tier. Catalog results are time-varying;
+   the 2026-08-11 discovery run suggested
+   `ibm-granite/granite-4.1-8b`,
+   `meta-llama/llama-3.1-8b-instruct`, and
+   `mistralai/mistral-nemo`, but these are candidates until their upstream
+   model cards and licenses are recorded in the research artifact.
+3. Add an `OpenRouterHelperModel` adapter around
+   `llm_sdk::openrouter::OpenRouterClient`. Keep `HelperModelOutput` as the
+   response schema: each stateless round asks for one typed JSON tool request
+   or submission, and the host remains the only component that validates and
+   executes a closed read-only operation. Native provider tool execution is
+   unnecessary for this experiment.
+4. Make live execution an explicit credentialed CLI mode using
+   `OPENROUTER_API_KEY`. Pin the requested model ID, disable provider fallback,
+   pin or record the upstream provider, require supported request parameters,
+   and apply no-data-collection/ZDR routing when available. If the current
+   `llm-sdk` request type cannot express those routing controls, add them there
+   rather than bypassing the SDK from the lab.
+5. Record requested and returned model IDs, upstream provider, routing policy,
+   temperature, output limit, protocol/prompt hashes, input/output tokens,
+   elapsed time, stop reason, raw-response hash, and validation diagnostics.
+   Never treat a routed alias such as `openrouter/free` as a reproducible model
+   experiment.
+6. Sanitize successful and failure traces into credential-free replay fixtures.
+   Replays use `ScriptedHelperModel` and never contact OpenRouter; private raw
+   repository content, API keys, and provider payloads must not be committed.
+7. Run all three pinned helpers over the same fixed cases, packets, prompt
+   patterns, budgets, and repeated-run policy before checking the two remaining
+   criteria. Availability or one successful request is not experimental
+   support, and model comparison results feed Task 6 rather than proving task
+   outcome by themselves.
+
 #### Acceptance Criteria
 
 - [x] The deterministic baseline remains fully usable when helper execution is
@@ -696,8 +755,10 @@ follow-up lands.
   `injected_instruction_in_candidate_text_stays_inert`.
 - [ ] At least three open-weight helpers are supported in experiments,
   including at least two below 10B parameters and one sub-20B tier model.
-  Deferred — see the Task 5 scope note above. `HelperModel` is the extension
-  point; needs `llm-sdk` Groq/Ollama/llama.cpp adapters implementing it.
+  Deferred — see the Task 5 scope note and OpenRouter completion plan above.
+  `HelperModel` is the extension point; the next implementation is one
+  configurable `OpenRouterHelperModel` using three pinned, independently
+  verified open-weight model IDs through the local `llm-sdk` boundary.
 - [ ] Model/provider code uses the local `~/Projects/llm-sdk` source boundary;
   recorded replay fixtures require no credentials or network access.
   Deferred alongside the criterion above — no live-model adapter exists yet

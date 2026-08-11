@@ -8,6 +8,10 @@ description = "Epic 014 Task 1: experimental, read-only snapshot/index-coverage 
 name = "task_zero_lab"
 path = "src/main.rs"
 
+[[bin]]
+name = "openrouter_model_candidates"
+path = "src/bin/openrouter_model_candidates.rs"
+
 [dependencies]
 daftprompt-indexer = { path = "../daftprompt-indexer" }
 # The `status` feature (needed for `Repository::is_dirty()`) is enabled only
@@ -30,6 +34,8 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 # in the workspace's Cargo.lock as a transitive dependency, so this adds no
 # new supply-chain surface.
 regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [dev-dependencies]
 tempfile = "3"
