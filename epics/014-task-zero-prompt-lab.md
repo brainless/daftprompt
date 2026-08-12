@@ -633,7 +633,14 @@ environment cannot provision. `HelperModel` (`helper.rs`) is the extension
 point a future adapter implements — plugging in, e.g., a `GroqHelperModel` —
 without touching this module's orchestration loop (`refine_prompt`). The two
 criteria below that name real open-weight helpers stay unchecked until that
-follow-up lands.
+follow-up lands. **Status correction (2026-08-12):** that was true when this
+scope note was written, but the `llm-sdk` source-boundary criterion was
+checked on 2026-08-11 in `d82a7d2` once the sanitized, live-derived failure
+replay existed. Only one criterion — "At least three open-weight helpers are
+supported in experiments" — remains unchecked under Task 5, and it still
+requires the repeated live runs in plan step 7. Dated notes below that refer
+to "the two unchecked Task 5 criteria" were accurate when written and are
+retained unedited.
 
 #### OpenRouter hosted-helper completion plan
 
@@ -1840,7 +1847,8 @@ delete superseded notes; add a later note that revises or rejects them.
   pinned model/provider) will now emit a conforming submission, does not
   measure prompt improvement, and does not authorize starting the 36-run
   matrix. **No Task 5 acceptance criterion was checked as a result of this
-  pass; both remaining unchecked criteria are unchanged.**
+  pass. Task 5 has exactly one unchecked criterion — "At least three
+  open-weight helpers are supported in experiments" — and it is unchanged.**
 - Recorded side effect: the new `truncated_retry_budget` field changes the
   serialized `HelperPolicy`, and therefore the recorded `policy_hash` of
   future artifacts. Existing sanitized artifacts still replay, since replay
