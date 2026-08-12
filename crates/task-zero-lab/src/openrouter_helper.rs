@@ -6,6 +6,7 @@
 
 use std::time::Instant;
 
+use llm_sdk::error::LlmError;
 use llm_sdk::openrouter::{
     OpenRouterChatCompletionRequest, OpenRouterClient, OpenRouterDataCollection, OpenRouterMessage,
     OpenRouterProviderPreferences, OpenRouterResponseFormat,
@@ -15,6 +16,15 @@ use crate::helper::{HelperModel, HelperModelOutput, InferenceRecord, HELPER_PROT
 
 pub const DEFAULT_TEMPERATURE: f32 = 0.0;
 pub const DEFAULT_OUTPUT_LIMIT: u32 = 2_048;
+
+fn sanitized_diagnostic(error: &LlmError) -> String {
+    match error.openrouter_diagnostic() {
+        Some((status, error_type)) => {
+            format!("OpenRouter diagnostic: status={status} error_type={error_type}")
+        }
+        None => "OpenRouter diagnostic: status=unavailable error_type=unavailable".to_string(),
+    }
+}
 
 fn routing_identity_diagnostics(
     requested_model: &str,
@@ -82,6 +92,7 @@ pub struct OpenRouterHelperModel {
     config: OpenRouterHelperConfig,
     runtime: tokio::runtime::Runtime,
     latest_record: Option<InferenceRecord>,
+    diagnose: bool,
 }
 
 impl OpenRouterHelperModel {
@@ -117,7 +128,14 @@ impl OpenRouterHelperModel {
                 .enable_all()
                 .build()?,
             latest_record: None,
+            diagnose: false,
         })
+    }
+
+    /// Enable stderr-only sanitized transport diagnostics.
+    pub fn with_diagnostics(mut self, diagnose: bool) -> Self {
+        self.diagnose = diagnose;
+        self
     }
 
     fn request(&self, prompt: &str) -> OpenRouterChatCompletionRequest {
@@ -165,6 +183,9 @@ impl HelperModel for OpenRouterHelperModel {
         let result = match result {
             Ok(result) => result,
             Err(error) => {
+                if self.diagnose {
+                    eprintln!("{}", sanitized_diagnostic(&error));
+                }
                 self.latest_record = Some(InferenceRecord {
                     round: 0,
                     requested_model: self.config.model.clone(),
@@ -259,6 +280,18 @@ mod tests {
     use crate::helper::HelperOperation;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn diagnostic_contains_only_status_and_canonical_error_type() {
+        let diagnostic =
+            sanitized_diagnostic(&LlmError::openrouter_api_error(503, "provider_overloaded"));
+        assert_eq!(
+            diagnostic,
+            "OpenRouter diagnostic: status=503 error_type=provider_overloaded"
+        );
+        assert!(!diagnostic.contains("message"));
+        assert!(!diagnostic.contains("body"));
+    }
 
     fn mock_server(responses: Vec<(u16, String)>) -> (String, std::thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

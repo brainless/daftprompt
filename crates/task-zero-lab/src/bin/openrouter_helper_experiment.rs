@@ -43,6 +43,9 @@ enum Command {
         repetition: u32,
         #[arg(long)]
         output: PathBuf,
+        /// Print only sanitized OpenRouter status/error_type diagnostics to stderr.
+        #[arg(long)]
+        diagnose_openrouter: bool,
     },
     Replay {
         #[arg(long)]
@@ -189,6 +192,7 @@ fn main() -> anyhow::Result<()> {
             case,
             repetition,
             output,
+            diagnose_openrouter,
         } => {
             anyhow::ensure!(repetition > 0, "repetition is one-based");
             let (graph, packet, request, patterns, policy) = frozen_inputs(&repo, &rev, &case)?;
@@ -206,7 +210,8 @@ fn main() -> anyhow::Result<()> {
                 temperature: DEFAULT_TEMPERATURE,
                 output_limit: DEFAULT_OUTPUT_LIMIT,
             };
-            let inner = OpenRouterHelperModel::new(api_key, config)?;
+            let inner =
+                OpenRouterHelperModel::new(api_key, config)?.with_diagnostics(diagnose_openrouter);
             let mut recorder = DecisionRecorder::new(inner);
             let (rendered, report) = helper::refine_prompt(
                 &graph,

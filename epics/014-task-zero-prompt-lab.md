@@ -1632,3 +1632,102 @@ delete superseded notes; add a later note that revises or rejects them.
   unless the smoke returns the pinned model/provider and valid typed output.
 - Detailed artifact:
   `epics/research/task-zero-lab/openrouter-smoke-blocker-2026-08-11.json`.
+
+### 2026-08-11 — Second credentialed Granite/CoreWeave smoke still blocked
+
+- Parent criterion/question: Epic 014 Task 5, OpenRouter plan step 7 — does the
+  pinned privacy/routing/schema path now pass one minimal completion after
+  credits were added, and may the fixed 36-run matrix start?
+- Repository, immutable revision, fixture, and input request: daftprompt
+  `d82a7d2e0b9af686c1a8b47721469f538dbc85f9`; same public
+  `LAB-C01-REQUEST` (`derived:daftprompt-graph:C01-expert:v1`) and exact
+  LAB controls as the prior note; no private Keystone/ReporGo content read
+  or transmitted; local `~/Projects/llm-sdk` still at `87cebeb`.
+- Harness/prompt/policy/model versions: `task-zero-lab` 0.1.0,
+  `task-zero-helper-v1`, `task-zero-helper-replay-v1`,
+  `task-zero-baseline-v1`, `HelperPolicy::default()`, Granite 4.1 8B pinned
+  to CoreWeave with fallback disabled, required parameters, denied data
+  collection, ZDR, temperature 0, output limit 2,048.
+- Harness change: no code change. The exact resume command from
+  `epics/014-task-zero-prompt-lab.md:1629` was executed after the user added
+  OpenRouter credits; the temporary output (`/tmp/openrouter-granite-smoke.json`)
+  is the literal stdout of that run.
+- Observed result and measurements: 826 ms elapsed, zero tokens, no returned
+  model or upstream provider, sanitized `Malformed` decision with one paired
+  inference, and `adapter_unavailable` stop reason. The 2,175-byte file
+  contains only the generic suppressed-error diagnostic; a byte-level scan
+  found none of `OPENROUTER_API_KEY`, `sk-or-`, `raw_response"`, `round_prompt`,
+  or `provider-private-detail`. SHA-256
+  `d8963f44dcb0bfb5231e80cad70f49b9976205a09e1554f115468b5ffe7bcf31`. The
+  offline `openrouter_helper_experiment replay` path reconstructed the typed
+  decision without credentials or network.
+- Validated findings and rejected interpretations: the credential and live
+  boundary still execute without leaking the key, the failure artifact is
+  replayable, and the per-run `DecisionRecorder`/`SanitizedReplayArtifact`
+  path is preserved. This does not establish provider/model support or
+  prompt improvement. The previous blocker was diagnosed as a 0-credit
+  account; today's run still fails after credits were added, so the cause is
+  no longer necessarily credit balance and may be the Granite + CoreWeave
+  pairing, the privacy/ZDR/required-parameters stack, or the SDK's error
+  mapping. The adapter deliberately suppresses provider error details, so
+  the artifact does not isolate which.
+- Remaining gap / user decision: stop and consult OpenRouter (or surface the
+  suppressed error) before the next paid attempt. The fixed 36-run matrix
+  was deliberately not started and the failed smoke was not silently retried
+  on a different provider or model; the protocol guardrail forbids both.
+- Detailed artifact: `/tmp/openrouter-granite-smoke.json` (2,175 bytes,
+  SHA-256 `d8963f44dcb0bfb5231e80cad70f49b9976205a09e1554f115468b5ffe7bcf31`).
+  This is a temporary file outside the repository; review it before any
+  sanitized result is admitted under `epics/research/task-zero-lab/`.
+
+### 2026-08-12 — Granite diagnostic isolates OpenRouter token-field mismatch
+
+- Parent criterion/question: Epic 014 Task 5, OpenRouter plan step 7 — why
+  does the pinned Granite/CoreWeave smoke fail after credits were added?
+- Observed result: the explicitly enabled stderr-only diagnostic reported
+  HTTP 404 with no canonical `metadata.error_type`; the sanitized replay
+  artifact boundary remained unchanged.
+- Current public endpoint evidence: OpenRouter's model-endpoints API still
+  lists `ibm-granite/granite-4.1-8b` on CoreWeave, status available, with ZDR
+  catalog membership and `response_format` support. The endpoint advertises
+  `max_tokens`, while the local OpenRouter SDK serialized the experiment's
+  output limit as `max_completion_tokens` under `require_parameters: true`.
+- Disposition: retain Granite in the fixed three-model set and correct the
+  adapter wire field to `max_tokens`; changing the model is unnecessary while
+  its live endpoint satisfies the selection, privacy, and JSON criteria. Do
+  not count the diagnostic failure as a matrix run and do not start the matrix
+  until one corrected Granite smoke returns valid typed output and pinned
+  routing identity.
+
+### 2026-08-12 — Corrected Granite transport succeeds; helper schema smoke fails
+
+- Parent criterion/question: Epic 014 Task 5, OpenRouter plan step 7 — does a
+  corrected `max_tokens` request pass the complete typed-helper smoke gate?
+- Fixture and runtime identity: public `LAB-C01-REQUEST`, Granite 4.1 8B pinned
+  to CoreWeave with fallback disabled, required parameters, denied data
+  collection, ZDR, temperature 0, and output limit 2,048. The temporary
+  artifact records daftprompt revision
+  `d82a7d2e0b9af686c1a8b47721469f538dbc85f9`, but the adapter and diagnostic
+  changes were uncommitted during the run, so this result is diagnostic and
+  cannot be admitted as reproducible matrix evidence.
+- Observed result: OpenRouter returned the exact requested model and CoreWeave
+  provider for all three rounds with nonzero token counts. Round 1 returned a
+  valid `submit` envelope whose value invented an unsupported `analysis`
+  shape; rounds 2 and 3 stopped at the 2,048-token limit with truncated JSON.
+  The host rejected all three typed submissions and stopped with
+  `retry_budget_exhausted` after 39,877 ms, 1,311 input tokens, and 4,678
+  output tokens. Offline replay reconstructed all three retained decisions.
+- Disclosure review: `/tmp/openrouter-granite-smoke.json` is 5,148 bytes with
+  SHA-256
+  `b487bba5d815c8e237c8c094c1568abf24122c5ebc25b454c7616b7c11f6b54f`.
+  Inspection found no API key, bearer authorization, original request,
+  negative constraint, round prompt, or raw response. `raw_response_hash`
+  fields contain only expected content hashes.
+- Validated finding and rejected interpretation: the OpenRouter transport,
+  credits, privacy filters, model pin, and provider pin now work; this is not
+  a successful helper smoke and does not authorize the 36-run matrix. The
+  system instruction names `HelperModelOutput` but does not disclose the
+  actual five-field `HelperSubmission` schema, so the next iteration must
+  provide the exact bounded schema and concise-output requirements, add tests,
+  commit both repositories, and run a newly numbered smoke. Do not admit the
+  temporary artifact under `epics/research/task-zero-lab/`.
