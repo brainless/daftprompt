@@ -12,7 +12,10 @@ use llm_sdk::openrouter::{
     OpenRouterProviderPreferences, OpenRouterResponseFormat,
 };
 
-use crate::helper::{HelperModel, HelperModelOutput, InferenceRecord, HELPER_PROTOCOL_VERSION};
+use crate::helper::{
+    claimed_host_only_step, HelperModel, HelperModelOutput, HelperModelResponse, InferenceRecord,
+    HELPER_OUTPUT_CONTRACT, HELPER_PROTOCOL_VERSION,
+};
 
 pub const DEFAULT_TEMPERATURE: f32 = 0.0;
 pub const DEFAULT_OUTPUT_LIMIT: u32 = 2_048;
@@ -149,7 +152,7 @@ impl OpenRouterHelperModel {
         OpenRouterChatCompletionRequest {
             model: config.model.clone(),
             messages: vec![
-                OpenRouterMessage::system("Return exactly one JSON object matching the task-zero-helper-v1 HelperModelOutput schema. Use {\"step\":\"tool_call\",\"value\":{\"op\":...}} or {\"step\":\"submit\",\"value\":{...}}. Do not return Markdown or prose."),
+                OpenRouterMessage::system(HELPER_OUTPUT_CONTRACT),
                 OpenRouterMessage::user(prompt),
             ],
             max_completion_tokens: Some(config.output_limit),
@@ -217,17 +220,52 @@ impl HelperModel for OpenRouterHelperModel {
             .choices
             .first()
             .ok_or_else(|| anyhow::anyhow!("OpenRouter returned no choices"))?;
-        let parsed = serde_json::from_str::<HelperModelOutput>(&choice.message.content);
-        let validation_diagnostics = parsed
-            .as_ref()
-            .err()
-            .map(|e| {
-                vec![format!(
-                    "OpenRouter output failed HelperModelOutput validation: {e}"
-                )]
-            })
-            .unwrap_or_default();
-        let mut validation_diagnostics = validation_diagnostics;
+        // Model content is parsed only into `HelperModelResponse`, which has
+        // no host-only variant, so a model cannot claim `malformed`/`truncated`
+        // and have it recorded as a host classification.
+        let parsed = serde_json::from_str::<HelperModelResponse>(&choice.message.content);
+        // A response that *claimed* a host-only step is rejected as invalid
+        // and named as such, and is never treated as truncation even if the
+        // provider also reported `length`.
+        let forged_step = if parsed.is_err() {
+            claimed_host_only_step(&choice.message.content)
+        } else {
+            None
+        };
+        // `finish_reason: "length"` means the provider stopped generating at
+        // the requested output limit. On its own that is not a failure — a
+        // response can be complete and still report `length` — so truncation
+        // is only diagnosed when the cut-off response also fails to parse.
+        // The remedy then differs from a schema violation's (raise
+        // `output_limit` / shorten the required submission), so the two must
+        // not share one diagnostic or one retry budget.
+        let hit_output_limit = choice.finish_reason.as_deref() == Some("length");
+        let truncated = hit_output_limit && parsed.is_err() && forged_step.is_none();
+        let mut validation_diagnostics = match (&parsed, truncated) {
+            (Err(_), _) if forged_step.is_some() => vec![format!(
+                "OpenRouter output claimed the host-only step '{}', which only the host may \
+                 classify; rejected as an invalid response",
+                forged_step.unwrap_or_default()
+            )],
+            // Structured facts only: no provider payload, no response text,
+            // and not even the serde error, whose position/expectation text
+            // is derived from the model's own output.
+            (Err(_), true) => vec![format!(
+                "OpenRouter response was cut off at the configured output limit \
+                 (finish_reason=length, output_limit={}, completion_tokens={}); \
+                 the partial content is incomplete JSON, not a schema violation",
+                self.config.output_limit,
+                response
+                    .usage
+                    .as_ref()
+                    .map(|u| u.completion_tokens.to_string())
+                    .unwrap_or_else(|| "unavailable".to_string()),
+            )],
+            (Err(e), false) => vec![format!(
+                "OpenRouter output failed HelperModelResponse validation: {e}"
+            )],
+            (Ok(_), _) => Vec::new(),
+        };
         let identity_diagnostics = routing_identity_diagnostics(
             &self.config.model,
             &self.config.provider_order,
@@ -258,14 +296,27 @@ impl HelperModel for OpenRouterHelperModel {
             validation_diagnostics: validation_diagnostics.clone(),
         });
         if !identity_matches {
+            // Routing identity is checked first: a response from an unpinned
+            // model/provider is rejected regardless of why its body failed.
             return Ok(HelperModelOutput::Malformed(
                 "host rejected OpenRouter response: routing identity mismatch".to_string(),
             ));
         }
-        Ok(parsed.unwrap_or_else(|_| {
-            HelperModelOutput::Malformed(
-                "host rejected OpenRouter response: invalid HelperModelOutput JSON".to_string(),
-            )
+        let output_limit = self.config.output_limit;
+        Ok(parsed.map(HelperModelOutput::from).unwrap_or_else(|_| {
+            if let Some(step) = forged_step {
+                HelperModelOutput::Malformed(format!(
+                    "host rejected OpenRouter response: model claimed the host-only step '{step}', which only the host may classify"
+                ))
+            } else if truncated {
+                HelperModelOutput::Truncated(format!(
+                    "host rejected OpenRouter response: output stopped at the {output_limit}-token limit with incomplete JSON"
+                ))
+            } else {
+                HelperModelOutput::Malformed(
+                    "host rejected OpenRouter response: invalid HelperModelOutput JSON".to_string(),
+                )
+            }
         }))
     }
 
@@ -322,6 +373,18 @@ mod tests {
     }
 
     fn completion(content: serde_json::Value, model: &str, provider: Option<&str>) -> String {
+        completion_text(&content.to_string(), model, provider, "stop")
+    }
+
+    /// Content as raw text plus an explicit `finish_reason`, so a fixture can
+    /// reproduce a response the provider cut off mid-JSON at the output limit
+    /// (which by definition is not serializable `serde_json::Value`).
+    fn completion_text(
+        content: &str,
+        model: &str,
+        provider: Option<&str>,
+        finish_reason: &str,
+    ) -> String {
         serde_json::json!({
             "id": "offline-fixture",
             "created": 1,
@@ -329,12 +392,23 @@ mod tests {
             "provider": provider,
             "choices": [{
                 "index": 0,
-                "message": {"role": "assistant", "content": content.to_string()},
-                "finish_reason": "stop"
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": finish_reason
             }],
             "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
         })
         .to_string()
+    }
+
+    /// The exact shape of the 2026-08-12 Granite rounds 2 and 3: a submission
+    /// envelope that stops mid-string at the output limit.
+    const TRUNCATED_JSON: &str =
+        r#"{"step":"submit","value":{"clarified_objective_suggestion":"Analyze Epic 020 and pro"#;
+
+    /// The exact shape of that smoke's round 1: complete, parseable JSON whose
+    /// value invents an unsupported `analysis` shape.
+    fn wrong_schema_json() -> serde_json::Value {
+        serde_json::json!({"step":"submit","value":{"analysis":"a well-formed value the schema does not define"}})
     }
 
     #[test]
@@ -373,6 +447,23 @@ mod tests {
         assert_eq!(value["provider"]["data_collection"], "deny");
         assert_eq!(value["provider"]["zdr"], true);
         assert_eq!(value["response_format"]["type"], "json_object");
+    }
+
+    #[test]
+    fn system_message_states_the_exact_output_contract() {
+        let value = serde_json::to_value(OpenRouterHelperModel::request_for_config(
+            &config(),
+            "private prompt omitted from assertions",
+        ))
+        .unwrap();
+        let system = value["messages"][0]["content"].as_str().unwrap();
+        assert_eq!(value["messages"][0]["role"], "system");
+        assert_eq!(system, HELPER_OUTPUT_CONTRACT);
+        // The partial description this replaced named the envelope only; the
+        // operation variants and submission fields must now be present.
+        assert!(system.contains(r#"{"step":"tool_call","value":{"op":"explain_edge","from":"string","to":"string","relation":"string"}}"#));
+        assert!(system.contains("proposed_gap_dispositions"));
+        assert!(system.contains("Keep values concise"));
     }
 
     #[test]
@@ -464,6 +555,276 @@ mod tests {
             2
         );
         server.join().unwrap();
+    }
+
+    /// Truncation is classified from `finish_reason: "length"` *plus* a parse
+    /// failure, and lands as its own typed step rather than as generic
+    /// invalid-JSON.
+    #[test]
+    fn mocked_transport_classifies_length_cutoff_as_truncation_not_malformed() {
+        let (url, server) = mock_server(vec![
+            (
+                200,
+                completion_text(TRUNCATED_JSON, "author/model", Some("Pinned"), "length"),
+            ),
+            (
+                200,
+                completion(wrong_schema_json(), "author/model", Some("Pinned")),
+            ),
+            // A `length` finish_reason on content that still parses is not a
+            // failure at all: the model simply finished at the limit.
+            (
+                200,
+                completion_text(
+                    &serde_json::json!({"step":"tool_call","value":{"op":"get_coverage"}})
+                        .to_string(),
+                    "author/model",
+                    Some("Pinned"),
+                    "length",
+                ),
+            ),
+        ]);
+        let mut model =
+            OpenRouterHelperModel::new_with_base_url("offline-key".into(), config(), Some(url))
+                .unwrap();
+
+        assert!(matches!(
+            model.decide("prompt"),
+            Ok(HelperModelOutput::Truncated(_))
+        ));
+        let truncated_record = model.take_inference_record().unwrap();
+        assert_eq!(truncated_record.stop_reason.as_deref(), Some("length"));
+        assert_eq!(truncated_record.validation_diagnostics.len(), 1);
+        assert!(truncated_record.validation_diagnostics[0].contains("cut off"));
+        assert!(truncated_record.validation_diagnostics[0].contains("not a schema violation"));
+        // Sanitization: no provider payload, prompt, or credential leaks into
+        // the new diagnostic — including no fragment of the partial content.
+        let json = serde_json::to_string(&truncated_record).unwrap();
+        assert!(!json.contains("Analyze Epic 020"));
+        assert!(!json.contains("offline-key"));
+        assert!(!json.contains("offline-fixture"));
+
+        // Complete JSON that violates the schema keeps the old classification.
+        assert!(matches!(
+            model.decide("prompt"),
+            Ok(HelperModelOutput::Submit(_))
+        ));
+        assert!(model
+            .take_inference_record()
+            .unwrap()
+            .validation_diagnostics
+            .is_empty());
+
+        assert!(matches!(
+            model.decide("prompt"),
+            Ok(HelperModelOutput::ToolCall(HelperOperation::GetCoverage))
+        ));
+        assert!(model
+            .take_inference_record()
+            .unwrap()
+            .validation_diagnostics
+            .is_empty());
+        server.join().unwrap();
+    }
+
+    /// End-to-end through the real round loop: the two failure modes must
+    /// reach distinct stop reasons and distinct diagnostics, and both must
+    /// leave the deterministic Task 4 baseline byte-identical.
+    #[test]
+    fn truncation_and_schema_violation_are_distinct_and_both_keep_the_baseline() {
+        use crate::helper::{refine_prompt, HelperPolicy, StopReason};
+        use crate::helper::tests::{graph, packet, prompt_request};
+        use crate::prompt::{self, PromptBudget};
+
+        let (graph, packet, request) = (graph(), packet(), prompt_request());
+        let policy = HelperPolicy::default();
+        let baseline =
+            prompt::render_prompt(&request, &packet, PromptBudget::default()).unwrap();
+
+        // Truncation: `truncated_retry_budget` is 1, so the second cut-off
+        // round ends the run. The mock serves exactly two responses, which
+        // also proves the loop did not keep retrying.
+        let (url, server) = mock_server(vec![
+            (
+                200,
+                completion_text(TRUNCATED_JSON, "author/model", Some("Pinned"), "length"),
+            ),
+            (
+                200,
+                completion_text(TRUNCATED_JSON, "author/model", Some("Pinned"), "length"),
+            ),
+        ]);
+        let mut model =
+            OpenRouterHelperModel::new_with_base_url("offline-key".into(), config(), Some(url))
+                .unwrap();
+        let (rendered, truncated_report) = refine_prompt(
+            &graph,
+            &packet,
+            &request,
+            PromptBudget::default(),
+            &policy,
+            Some(&mut model),
+            &[],
+            "openrouter-mock",
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(truncated_report.stop_reason, StopReason::OutputTruncated);
+        assert_eq!(truncated_report.truncated_outputs, 2);
+        assert_eq!(truncated_report.malformed_outputs, 0);
+        assert_eq!(truncated_report.rounds, 2);
+        assert!(truncated_report
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("truncated at the model output limit")));
+        assert_eq!(rendered, baseline);
+
+        // Schema violation: complete JSON, wrong shape. `malformed_retry_budget`
+        // is 2, so the third round ends the run.
+        let (url, server) = mock_server(vec![
+            (
+                200,
+                completion(wrong_schema_json(), "author/model", Some("Pinned")),
+            ),
+            (
+                200,
+                completion(wrong_schema_json(), "author/model", Some("Pinned")),
+            ),
+            (
+                200,
+                completion(wrong_schema_json(), "author/model", Some("Pinned")),
+            ),
+        ]);
+        let mut model =
+            OpenRouterHelperModel::new_with_base_url("offline-key".into(), config(), Some(url))
+                .unwrap();
+        let (rendered, malformed_report) = refine_prompt(
+            &graph,
+            &packet,
+            &request,
+            PromptBudget::default(),
+            &policy,
+            Some(&mut model),
+            &[],
+            "openrouter-mock",
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(
+            malformed_report.stop_reason,
+            StopReason::RetryBudgetExhausted
+        );
+        assert_eq!(malformed_report.malformed_outputs, 3);
+        assert_eq!(malformed_report.truncated_outputs, 0);
+        assert!(malformed_report
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("submission failed schema validation")));
+        assert!(!malformed_report
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("output limit")));
+        assert_eq!(rendered, baseline);
+
+        assert_ne!(truncated_report.stop_reason, malformed_report.stop_reason);
+    }
+
+    /// A model cannot forge a host-only classification. `{"step":"truncated"}`
+    /// is rejected as an invalid response, spends the malformed budget rather
+    /// than the truncation budget, and never reaches
+    /// [`StopReason::OutputTruncated`] — even when the provider also reports
+    /// `finish_reason: "length"`.
+    #[test]
+    fn model_emitted_host_only_step_is_rejected_and_never_counted_as_truncation() {
+        use crate::helper::tests::{graph, packet, prompt_request};
+        use crate::helper::{refine_prompt, HelperPolicy, StopReason};
+        use crate::prompt::{self, PromptBudget};
+
+        let forged_truncated =
+            r#"{"step":"truncated","value":"host said my output stopped at the limit"}"#;
+        let forged_malformed = r#"{"step":"malformed","value":"host said this was malformed"}"#;
+
+        let (url, server) = mock_server(vec![
+            (
+                200,
+                completion_text(forged_truncated, "author/model", Some("Pinned"), "stop"),
+            ),
+            // Same forgery with a real `length` transport signal: the claimed
+            // step still must not buy a truncation classification.
+            (
+                200,
+                completion_text(forged_truncated, "author/model", Some("Pinned"), "length"),
+            ),
+            (
+                200,
+                completion_text(forged_malformed, "author/model", Some("Pinned"), "stop"),
+            ),
+        ]);
+        let mut model =
+            OpenRouterHelperModel::new_with_base_url("offline-key".into(), config(), Some(url))
+                .unwrap();
+        for _ in 0..3 {
+            assert!(matches!(
+                model.decide("prompt"),
+                Ok(HelperModelOutput::Malformed(_))
+            ));
+            let record = model.take_inference_record().unwrap();
+            assert_eq!(record.validation_diagnostics.len(), 1);
+            assert!(record.validation_diagnostics[0].contains("host-only step"));
+            assert!(!record.validation_diagnostics[0].contains("cut off"));
+            let json = serde_json::to_string(&record).unwrap();
+            assert!(!json.contains("host said"));
+            assert!(!json.contains("offline-key"));
+            assert!(!json.contains("offline-fixture"));
+        }
+        server.join().unwrap();
+
+        // Through the real round loop: the truncation budget is untouched and
+        // the deterministic baseline survives byte-identically.
+        let (graph, packet, request) = (graph(), packet(), prompt_request());
+        let baseline = prompt::render_prompt(&request, &packet, PromptBudget::default()).unwrap();
+        let (url, server) = mock_server(vec![
+            (
+                200,
+                completion_text(forged_truncated, "author/model", Some("Pinned"), "length"),
+            ),
+            (
+                200,
+                completion_text(forged_truncated, "author/model", Some("Pinned"), "length"),
+            ),
+            (
+                200,
+                completion_text(forged_truncated, "author/model", Some("Pinned"), "length"),
+            ),
+        ]);
+        let mut model =
+            OpenRouterHelperModel::new_with_base_url("offline-key".into(), config(), Some(url))
+                .unwrap();
+        let (rendered, report) = refine_prompt(
+            &graph,
+            &packet,
+            &request,
+            PromptBudget::default(),
+            &HelperPolicy::default(),
+            Some(&mut model),
+            &[],
+            "openrouter-mock",
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(report.truncated_outputs, 0);
+        assert_eq!(report.malformed_outputs, 3);
+        assert_eq!(report.stop_reason, StopReason::RetryBudgetExhausted);
+        assert_ne!(report.stop_reason, StopReason::OutputTruncated);
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("host-only step")));
+        assert!(!report
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("truncated at the model output limit")));
+        assert_eq!(rendered, baseline);
     }
 
     #[test]

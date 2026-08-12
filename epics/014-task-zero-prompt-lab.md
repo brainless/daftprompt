@@ -764,7 +764,9 @@ operation catalog.
   actually run across all three models as required by plan step 7.
 - [x] Model/provider code uses the local `~/Projects/llm-sdk` source boundary;
   recorded replay fixtures require no credentials or network access.
-  The adapter uses `llm-sdk` commit `87cebeb`. The credentialed zero-credit
+  The adapter uses `llm-sdk` commit `491e99e` (updated from `87cebeb` on
+  2026-08-12); it still sends `response_format: json_object` and does not yet
+  use that commit's strict `json_schema` response format. The credentialed zero-credit
   smoke attempt produced the sanitized, live-derived failure replay
   `openrouter-smoke-blocker-2026-08-11.json`; it contains typed decisions,
   hashes, and sanitized inference metadata but no credential, prompt, or raw
@@ -777,9 +779,29 @@ operation catalog.
   baseline with recorded diagnostics),
   `injected_instruction_in_candidate_text_stays_inert` (an embedded
   "ignore previous instructions" claim changes no policy value and invokes
-  no tool), and `premature_stop_preserves_baseline` /
+  no tool) and `injected_instruction_in_rejection_feedback_stays_inert`
+  (the same attempt carried through the host-rejection feedback path — the
+  only path by which model-chosen text reaches a round prompt, via serde's
+  quoted-value validator message — changes no policy value, budget, stop
+  reason, or gap, invokes no operation, survives only as one sanitized,
+  bounded, host-prefixed line inside the rejection section with no forged
+  section heading elsewhere in the prompt, and still falls back
+  byte-identically to the deterministic baseline; a model-chosen *key* never
+  reaches the prompt or report at all, since `HelperSubmission` has no
+  `deny_unknown_fields` and the resulting error is the host-authored
+  `missing field \`stop_reason\``), and `premature_stop_preserves_baseline` /
   `over_calling_stops_at_max_calls` (an empty script and an over-long script
-  both stop cleanly within policy bounds).
+  both stop cleanly within policy bounds). Output truncation is diagnosed and
+  bounded separately from schema violation: the adapter classifies a
+  `finish_reason: "length"` response that also fails to parse as
+  `HelperModelOutput::Truncated`, and the round loop spends
+  `HelperPolicy::truncated_retry_budget` (default 1) and reports
+  `StopReason::OutputTruncated` instead of consuming the malformed budget.
+  Covered by
+  `mocked_transport_classifies_length_cutoff_as_truncation_not_malformed` and
+  `truncation_and_schema_violation_are_distinct_and_both_keep_the_baseline`
+  (distinct stop reasons and diagnostics; both fall back to the byte-identical
+  deterministic baseline).
 
 ### Task 6: Add replay, baselines, ablations, and prompt assessment
 
@@ -1731,3 +1753,129 @@ delete superseded notes; add a later note that revises or rejects them.
   provide the exact bounded schema and concise-output requirements, add tests,
   commit both repositories, and run a newly numbered smoke. Do not admit the
   temporary artifact under `epics/research/task-zero-lab/`.
+
+### 2026-08-12 — Helper output contract, truncation, and rejection feedback (harness correction, no live run)
+
+- Parent criterion/question: Epic 014 Task 5, OpenRouter plan step 7 — correct
+  the harness defects the previous note diagnosed, so that the next Granite
+  smoke tests the helper protocol rather than re-testing an under-specified
+  prompt. This is a harness-correction pass: **no live model call was made, no
+  credentials were used, and it produces no experimental result.**
+- Repository and immutable revision: daftprompt working tree based on
+  `d82a7d2e0b9af686c1a8b47721469f538dbc85f9` (the corrections were uncommitted
+  while this note was written). Local `~/Projects/llm-sdk` moved from
+  `87cebeb` to `491e99e`.
+- Fixture and input request: none live. Only offline unit fixtures and the
+  existing mocked-transport seam were exercised; no repository prompt or
+  provider payload was transmitted.
+- Harness/detector/prompt/policy/model versions: `task-zero-lab` 0.1.0,
+  `task-zero-helper-v1`, `task-zero-baseline-v1`,
+  `task-zero-helper-replay-v1`, and a new
+  `task-zero-helper-output-contract-v1` (`HELPER_OUTPUT_CONTRACT_VERSION`).
+  `HelperPolicy::default()` gains `truncated_retry_budget: 1`. No model was
+  executed.
+- Root cause, confirmed by inspection: the 2026-08-12 Granite helper-schema
+  failure was caused by the model being told to match a schema that was never
+  stated. `crates/task-zero-lab/src/openrouter_helper.rs`'s system message
+  named only the `HelperModelOutput` envelope, and
+  `crates/task-zero-lab/src/helper.rs`'s `build_round_prompt` said the
+  submission must match "the required schema" without stating it anywhere.
+- Harness change:
+  1. **Stated contract.** New versioned constants `HELPER_OUTPUT_CONTRACT` /
+     `HELPER_OUTPUT_CONTRACT_VERSION` in `helper.rs` state the envelope, all
+     four `HelperOperation` variants, and every `HelperSubmission` key (the
+     five schema fields named in the criterion above, plus `stop_reason`),
+     plus a concise-values clause. The same text is now both the OpenRouter
+     system message and a `## Required output schema (exact)` section of every
+     reconstructed round prompt. Drift-guard tests assert the contract text
+     matches the real serde shapes in both directions (each embedded example
+     round-trips through the real types, and each type's serialized shape
+     appears in the contract text).
+  2. **Truncation distinguished from schema violation.**
+     `HelperModelOutput::Truncated`, `HelperPolicy::truncated_retry_budget`
+     (default 1), `StopReason::OutputTruncated`, and
+     `HelperRunReport::truncated_outputs`. The adapter classifies truncation
+     only when `finish_reason == "length"` *and* the content fails to parse,
+     because a complete response can also report `length`.
+  3. **Host-only steps made unforgeable.** The adapter parses model content
+     into a new parse-only `HelperModelResponse` (`ToolCall`/`Submit` only),
+     so a model emitting `{"step":"truncated"}` or `{"step":"malformed"}` is
+     rejected as `Malformed` with a diagnostic naming the claim, and can
+     neither spend the truncation budget nor influence the recorded stop
+     reason.
+  4. **Wasted-retry correction.** The round loop now carries bounded,
+     sanitized, host-authored `RoundRejection` state (at most
+     `MAX_CARRIED_REJECTIONS` = 3 carried, each detail capped at
+     `MAX_REJECTION_DETAIL_BYTES` = 200) and re-renders it in each
+     reconstructed round prompt, so a retry at temperature 0 is no longer
+     handed a near-identical prompt. Motivation: the 2026-08-12 run spent
+     4,678 output tokens on three deterministically identical failures.
+     Stateless reconstruction is preserved and tested — the section is fully
+     re-rendered from structured state every round, never appended.
+  5. **Injection coverage extended to the new feedback path** (see the Task 5
+     criterion above for the test-level detail).
+- Observed result and measurements: `cargo check --workspace` and `cargo test
+  --workspace` pass — 253 tests, 0 failures. There are no token, latency,
+  provider, or model-quality measurements, because no live call was made. No
+  new sanitized artifact was admitted under `epics/research/task-zero-lab/`.
+- Injection-coverage correction found while testing: `HelperSubmission` does
+  **not** use `deny_unknown_fields`, so a model-invented key is silently
+  dropped rather than reported. The actual rejection detail for the Granite
+  round-1 shape is therefore the host-authored ``missing field `stop_reason` ``,
+  and the real model-text surface is a rejected *value* embedded verbatim in
+  serde's type error, not a model-chosen key. The earlier assumption that an
+  invented key is echoed back is rejected.
+- Accepted-but-imperfect limits (recorded, not fixed): `sanitize_rejection_detail`
+  strips control characters and backticks but does not strip U+2028-class
+  separators or bidi controls; they cannot split a line, so the section's
+  single-line-per-rejection property still holds. Separately, the raw
+  unsanitized serde message is retained in the host `diagnostics` list; that is
+  a host record, not prompt text.
+- Validated findings: the schema-omission root cause is established by direct
+  code inspection, not inferred from the model's behavior. Truncation and
+  schema violation are now separable by construction, and the host-only steps
+  are unforgeable by type rather than by convention.
+- Rejected or unsupported interpretations: passing offline tests are not
+  experimental evidence. This pass does not establish that Granite (or any
+  pinned model/provider) will now emit a conforming submission, does not
+  measure prompt improvement, and does not authorize starting the 36-run
+  matrix. **No Task 5 acceptance criterion was checked as a result of this
+  pass; both remaining unchecked criteria are unchanged.**
+- Recorded side effect: the new `truncated_retry_budget` field changes the
+  serialized `HelperPolicy`, and therefore the recorded `policy_hash` of
+  future artifacts. Existing sanitized artifacts still replay, since replay
+  validates the retained typed decisions and requires only that the recorded
+  hashes be present, not that they match a recomputed current policy.
+- Local `llm-sdk` update: `491e99e` adds a strict `json_schema` response format
+  (`OpenRouterResponseFormat::json_schema`, wire shape
+  `{"type":"json_schema","json_schema":{"name":...,"strict":true,"schema":...}}`).
+  The lab adapter still sends `response_format: json_object` and does **not**
+  yet use the strict schema. Task 5's acceptance-criterion text, which still
+  pinned `87cebeb`, was updated to `491e99e` so the next smoke records a
+  correct SDK identity.
+- User decision or pending decision (new, deliberately deferred): should the
+  experiment require providers that support strict structured outputs,
+  repinning models/providers accordingly? Evidence from OpenRouter's public
+  model-endpoints API on 2026-08-12: `ibm-granite/granite-4.1-8b` on CoreWeave
+  supports `structured_outputs`; `meta-llama/llama-3.1-8b-instruct` supports it
+  only on CoreWeave (not DeepInfra, Novita, Groq, or Cloudflare);
+  `mistralai/mistral-nemo` supports it on Novita and Parasail but not
+  DeepInfra. The currently pinned providers for Llama and Mistral Nemo are both
+  DeepInfra, which lack it, so strict schema cannot be a protocol-wide default
+  under the current pins, and repinning would require re-verifying
+  ZDR/data-collection/privacy properties for the new providers. The user's
+  position is that structured outputs are a low ask from modern models and this
+  may justify changing a model or provider later. Taken up in a later
+  iteration, not this one.
+- Remaining gaps: the corrected code is still uncommitted, and the honest next
+  step is unchanged — commit both repositories, then run **one newly numbered
+  Granite smoke** and review its temporary artifact for disclosure before
+  admitting anything under `epics/research/task-zero-lab/`. The 36-run matrix
+  remains unauthorized until that smoke returns the pinned model/provider and
+  valid typed output.
+- Next iteration: that single corrected smoke.
+- Detailed artifacts: `crates/task-zero-lab/src/helper.rs`,
+  `crates/task-zero-lab/src/openrouter_helper.rs`,
+  `crates/task-zero-lab/src/replay.rs`, and
+  `crates/task-zero-lab/src/bin/openrouter_helper_experiment.rs`
+  (no new file under `epics/research/task-zero-lab/`).

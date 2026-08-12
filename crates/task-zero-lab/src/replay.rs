@@ -189,6 +189,51 @@ mod tests {
         restored.scripted_model().unwrap();
     }
 
+    /// The artifact needs no new field to carry the truncation/schema-violation
+    /// distinction: `decisions` is `Vec<HelperModelOutput>`, so the adapter's
+    /// typed `Truncated` step is retained and replayed as itself, distinctly
+    /// from `Malformed`. This test pins that so the distinction cannot be
+    /// silently flattened by a future schema change.
+    #[test]
+    fn artifact_retains_truncated_and_malformed_as_distinct_replayable_steps() {
+        let mut record = inference();
+        record.stop_reason = Some("length".into());
+        let artifact = SanitizedReplayArtifact {
+            schema_version: REPLAY_SCHEMA_VERSION.into(),
+            case_id: "C01".into(),
+            input_rendering_id: "manifest:C01:expert".into(),
+            input_rendering_hash: "request-hash".into(),
+            mutation_constraints_hash: "constraints-hash".into(),
+            input_rendering_provenance: "manifest.md §3 C01 expert rendering".into(),
+            repository_revision: "abc123".into(),
+            graph_hash: "graph-hash".into(),
+            packet_hash: "packet-hash".into(),
+            prompt_patterns_hash: "patterns-hash".into(),
+            model_id: "author/model".into(),
+            repetition: 1,
+            policy_hash: "policy-hash".into(),
+            prompt_template_version: crate::prompt::PROMPT_TEMPLATE_VERSION.into(),
+            decisions: vec![
+                HelperModelOutput::Truncated("stopped at the output limit".into()),
+                HelperModelOutput::Malformed("invalid schema".into()),
+            ],
+            inferences: vec![record, inference()],
+        };
+        let json = serde_json::to_string(&artifact).unwrap();
+        assert!(json.contains(r#""step":"truncated""#));
+        assert!(json.contains(r#""step":"malformed""#));
+        let restored: SanitizedReplayArtifact = serde_json::from_str(&json).unwrap();
+        let mut model = restored.scripted_model().unwrap();
+        assert!(matches!(
+            model.decide("sanitized offline replay").unwrap(),
+            HelperModelOutput::Truncated(_)
+        ));
+        assert!(matches!(
+            model.decide("sanitized offline replay").unwrap(),
+            HelperModelOutput::Malformed(_)
+        ));
+    }
+
     #[test]
     fn artifact_rejects_unpaired_or_wrong_model_metadata() {
         let mut record = inference();
