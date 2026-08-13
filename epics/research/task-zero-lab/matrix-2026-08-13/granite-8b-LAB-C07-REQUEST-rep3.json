@@ -1,0 +1,148 @@
+{
+  "replay": {
+    "schema_version": "task-zero-helper-replay-v1",
+    "case_id": "LAB-C07-REQUEST",
+    "input_rendering_id": "derived:daftprompt-graph:C07-expert:v1",
+    "input_rendering_hash": "a6e6b48b36842a3f",
+    "mutation_constraints_hash": "edabecc9f065106e",
+    "input_rendering_provenance": "Exact manifest.md §3 C07 expert rendering replayed against the daftprompt Task Zero graph; derived Task 5 helper control, not canonical C07 or Task 6 evidence",
+    "repository_revision": "dd4519d86cdc456230e2158f6fffb53ee3963a31",
+    "graph_hash": "980e2ed77d04f191",
+    "packet_hash": "1244c6813657c923",
+    "prompt_patterns_hash": "e86ab65665f2ea5c",
+    "model_id": "ibm-granite/granite-4.1-8b",
+    "repetition": 3,
+    "policy_hash": "5aabc729988b81c1",
+    "prompt_template_version": "task-zero-baseline-v1",
+    "decisions": [
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "search_graph",
+          "query": "Unicode byte-boundary panic in email ranking at email_ranking/mod.rs::contains_date"
+        }
+      },
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "get_node",
+          "locator": "email_ranking/mod.rs::contains_date"
+        }
+      },
+      {
+        "step": "submit",
+        "value": {
+          "candidate_claims": [
+            "Adding a boundary check in contains_date will prevent the Unicode byte-boundary panic."
+          ],
+          "clarifications": [
+            "The request explicitly excludes an unrelated GUI date-request change that shares the same commit."
+          ],
+          "clarified_objective_suggestion": "Fix the Unicode byte-boundary panic in email ranking at email_ranking/mod.rs::contains_date with a regression test, excluding the unrelated GUI date-request change.",
+          "proposed_gap_dispositions": [
+            {
+              "gap_locator": "email_ranking/mod.rs::contains_date",
+              "note": "Evidence gap: no direct node for the function exists in the graph; assume implementation details are absent, but the keyword search confirms relevance.",
+              "proposed": "proposed_resolved"
+            }
+          ],
+          "selected_evidence": [
+            {
+              "classification": "observation_validated",
+              "locator": "epics/research/task-zero-lab/openrouter-candidates-2026-08-11.json",
+              "note": "Contains date-related keyword matching."
+            }
+          ],
+          "stop_reason": "Evidence gap acknowledged and clarified objective refined."
+        }
+      }
+    ],
+    "inferences": [
+      {
+        "round": 1,
+        "requested_model": "ibm-granite/granite-4.1-8b",
+        "returned_model": "ibm-granite/granite-4.1-8b",
+        "upstream_provider": "CoreWeave",
+        "provider_order": [
+          "CoreWeave"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "358c904e481bbaa3",
+        "raw_response_hash": "d9791df26fbe99b8",
+        "input_tokens": 1718,
+        "output_tokens": 34,
+        "elapsed_ms": 923,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      },
+      {
+        "round": 2,
+        "requested_model": "ibm-granite/granite-4.1-8b",
+        "returned_model": "ibm-granite/granite-4.1-8b",
+        "upstream_provider": "CoreWeave",
+        "provider_order": [
+          "CoreWeave"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "7f6094bff6826521",
+        "raw_response_hash": "75c3d667734ec46b",
+        "input_tokens": 1845,
+        "output_tokens": 25,
+        "elapsed_ms": 522,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      },
+      {
+        "round": 3,
+        "requested_model": "ibm-granite/granite-4.1-8b",
+        "returned_model": "ibm-granite/granite-4.1-8b",
+        "upstream_provider": "CoreWeave",
+        "provider_order": [
+          "CoreWeave"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "5f0b548c54821775",
+        "raw_response_hash": "598c45defe262d44",
+        "input_tokens": 1867,
+        "output_tokens": 200,
+        "elapsed_ms": 1832,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      }
+    ]
+  },
+  "measurements": {
+    "calls": 2,
+    "rounds": 3,
+    "input_tokens": 5430,
+    "output_tokens": 259,
+    "result_bytes": 443,
+    "elapsed_ms": 3277,
+    "duplicate_calls": 0,
+    "stop_reason": "submitted",
+    "validation_diagnostics": 0,
+    "prompt_bytes": 5771,
+    "intent_preserved": true,
+    "gap_recall": null,
+    "unsupported_claims": null,
+    "typed_decision_review_required": true
+  }
+}

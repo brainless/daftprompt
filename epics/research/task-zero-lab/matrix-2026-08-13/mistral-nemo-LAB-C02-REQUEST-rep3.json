@@ -1,0 +1,98 @@
+{
+  "replay": {
+    "schema_version": "task-zero-helper-replay-v1",
+    "case_id": "LAB-C02-REQUEST",
+    "input_rendering_id": "derived:daftprompt-graph:C02-expert-sanitized:v1",
+    "input_rendering_hash": "5fd2bbac8d82f864",
+    "mutation_constraints_hash": "67ff3ae8266abc5a",
+    "input_rendering_provenance": "Exact sanitized manifest.md §3 C02 expert rendering replayed against the daftprompt Task Zero graph; derived Task 5 helper control, not canonical C02 or Task 6 evidence",
+    "repository_revision": "dd4519d86cdc456230e2158f6fffb53ee3963a31",
+    "graph_hash": "980e2ed77d04f191",
+    "packet_hash": "cc8b87c2f82af469",
+    "prompt_patterns_hash": "e86ab65665f2ea5c",
+    "model_id": "mistralai/mistral-nemo",
+    "repetition": 3,
+    "policy_hash": "5aabc729988b81c1",
+    "prompt_template_version": "task-zero-baseline-v1",
+    "decisions": [
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "search_graph",
+          "query": "LOG-019"
+        }
+      },
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "get_node",
+          "locator": "LOG-019"
+        }
+      }
+    ],
+    "inferences": [
+      {
+        "round": 1,
+        "requested_model": "mistralai/mistral-nemo",
+        "returned_model": "mistralai/mistral-nemo",
+        "upstream_provider": "DeepInfra",
+        "provider_order": [
+          "DeepInfra"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "d88b840f8b8367fc",
+        "raw_response_hash": "d48c56b40feb1168",
+        "input_tokens": 1852,
+        "output_tokens": 21,
+        "elapsed_ms": 860,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      },
+      {
+        "round": 2,
+        "requested_model": "mistralai/mistral-nemo",
+        "returned_model": "mistralai/mistral-nemo",
+        "upstream_provider": "DeepInfra",
+        "provider_order": [
+          "DeepInfra"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "6007efa5a6a6774e",
+        "raw_response_hash": "1c8e4359daaa2873",
+        "input_tokens": 1865,
+        "output_tokens": 22,
+        "elapsed_ms": 1063,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      }
+    ]
+  },
+  "measurements": {
+    "calls": 2,
+    "rounds": 2,
+    "input_tokens": 3717,
+    "output_tokens": 43,
+    "result_bytes": 56,
+    "elapsed_ms": 1923,
+    "duplicate_calls": 0,
+    "stop_reason": "low_marginal_yield",
+    "validation_diagnostics": 0,
+    "prompt_bytes": 9009,
+    "intent_preserved": true,
+    "gap_recall": null,
+    "unsupported_claims": null,
+    "typed_decision_review_required": true
+  }
+}

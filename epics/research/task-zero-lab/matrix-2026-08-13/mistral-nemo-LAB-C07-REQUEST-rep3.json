@@ -1,0 +1,128 @@
+{
+  "replay": {
+    "schema_version": "task-zero-helper-replay-v1",
+    "case_id": "LAB-C07-REQUEST",
+    "input_rendering_id": "derived:daftprompt-graph:C07-expert:v1",
+    "input_rendering_hash": "a6e6b48b36842a3f",
+    "mutation_constraints_hash": "edabecc9f065106e",
+    "input_rendering_provenance": "Exact manifest.md §3 C07 expert rendering replayed against the daftprompt Task Zero graph; derived Task 5 helper control, not canonical C07 or Task 6 evidence",
+    "repository_revision": "dd4519d86cdc456230e2158f6fffb53ee3963a31",
+    "graph_hash": "980e2ed77d04f191",
+    "packet_hash": "1244c6813657c923",
+    "prompt_patterns_hash": "e86ab65665f2ea5c",
+    "model_id": "mistralai/mistral-nemo",
+    "repetition": 3,
+    "policy_hash": "5aabc729988b81c1",
+    "prompt_template_version": "task-zero-baseline-v1",
+    "decisions": [
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "search_graph",
+          "query": "email_ranking/mod.rs::contains_date"
+        }
+      },
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "get_node",
+          "locator": "epic:011/constraint:14"
+        }
+      },
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "get_node",
+          "locator": "epic:011/constraint:9"
+        }
+      }
+    ],
+    "inferences": [
+      {
+        "round": 1,
+        "requested_model": "mistralai/mistral-nemo",
+        "returned_model": "mistralai/mistral-nemo",
+        "upstream_provider": "DeepInfra",
+        "provider_order": [
+          "DeepInfra"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "358c904e481bbaa3",
+        "raw_response_hash": "f2ba434841e8671f",
+        "input_tokens": 1823,
+        "output_tokens": 24,
+        "elapsed_ms": 1359,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      },
+      {
+        "round": 2,
+        "requested_model": "mistralai/mistral-nemo",
+        "returned_model": "mistralai/mistral-nemo",
+        "upstream_provider": "DeepInfra",
+        "provider_order": [
+          "DeepInfra"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "16570c63c773fa1d",
+        "raw_response_hash": "7e02def28a7a0515",
+        "input_tokens": 1979,
+        "output_tokens": 28,
+        "elapsed_ms": 790,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      },
+      {
+        "round": 3,
+        "requested_model": "mistralai/mistral-nemo",
+        "returned_model": "mistralai/mistral-nemo",
+        "upstream_provider": "DeepInfra",
+        "provider_order": [
+          "DeepInfra"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "4421eab7e77aa04b",
+        "raw_response_hash": "5e1dca4fcd82a5e1",
+        "input_tokens": 2070,
+        "output_tokens": 27,
+        "elapsed_ms": 4860,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      }
+    ]
+  },
+  "measurements": {
+    "calls": 3,
+    "rounds": 3,
+    "input_tokens": 5872,
+    "output_tokens": 79,
+    "result_bytes": 774,
+    "elapsed_ms": 7009,
+    "duplicate_calls": 0,
+    "stop_reason": "low_marginal_yield",
+    "validation_diagnostics": 0,
+    "prompt_bytes": 4858,
+    "intent_preserved": true,
+    "gap_recall": null,
+    "unsupported_claims": null,
+    "typed_decision_review_required": true
+  }
+}

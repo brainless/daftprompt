@@ -1,0 +1,100 @@
+{
+  "replay": {
+    "schema_version": "task-zero-helper-replay-v1",
+    "case_id": "LAB-C01-REQUEST",
+    "input_rendering_id": "derived:daftprompt-graph:C01-expert:v1",
+    "input_rendering_hash": "4eba136a1d28e220",
+    "mutation_constraints_hash": "76c5b5fbad71e291",
+    "input_rendering_provenance": "Exact manifest.md §3 C01 expert rendering replayed against the daftprompt Task Zero graph; derived Task 5 helper control, not canonical C01 or Task 6 evidence",
+    "repository_revision": "dd4519d86cdc456230e2158f6fffb53ee3963a31",
+    "graph_hash": "980e2ed77d04f191",
+    "packet_hash": "e33ec0d2283c87de",
+    "prompt_patterns_hash": "e86ab65665f2ea5c",
+    "model_id": "meta-llama/llama-3.1-8b-instruct",
+    "repetition": 1,
+    "policy_hash": "5aabc729988b81c1",
+    "prompt_template_version": "task-zero-baseline-v1",
+    "decisions": [
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "search_graph",
+          "query": "Epic 020"
+        }
+      },
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "explain_edge",
+          "from": "epic:011",
+          "to": "epic:020",
+          "relation": "analyzes"
+        }
+      }
+    ],
+    "inferences": [
+      {
+        "round": 1,
+        "requested_model": "meta-llama/llama-3.1-8b-instruct",
+        "returned_model": "meta-llama/llama-3.1-8b-instruct",
+        "upstream_provider": "DeepInfra",
+        "provider_order": [
+          "DeepInfra"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "77561ec46ea6a1e3",
+        "raw_response_hash": "767d66e0493275b7",
+        "input_tokens": 1713,
+        "output_tokens": 21,
+        "elapsed_ms": 3171,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      },
+      {
+        "round": 2,
+        "requested_model": "meta-llama/llama-3.1-8b-instruct",
+        "returned_model": "meta-llama/llama-3.1-8b-instruct",
+        "upstream_provider": "DeepInfra",
+        "provider_order": [
+          "DeepInfra"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "33e3fca56df743d5",
+        "raw_response_hash": "ab57ef68b3a54e43",
+        "input_tokens": 1785,
+        "output_tokens": 33,
+        "elapsed_ms": 3632,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      }
+    ]
+  },
+  "measurements": {
+    "calls": 2,
+    "rounds": 2,
+    "input_tokens": 3498,
+    "output_tokens": 54,
+    "result_bytes": 245,
+    "elapsed_ms": 6803,
+    "duplicate_calls": 0,
+    "stop_reason": "low_marginal_yield",
+    "validation_diagnostics": 0,
+    "prompt_bytes": 8664,
+    "intent_preserved": true,
+    "gap_recall": null,
+    "unsupported_claims": null,
+    "typed_decision_review_required": true
+  }
+}

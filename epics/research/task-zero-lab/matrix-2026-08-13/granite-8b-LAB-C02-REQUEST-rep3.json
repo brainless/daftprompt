@@ -1,0 +1,163 @@
+{
+  "replay": {
+    "schema_version": "task-zero-helper-replay-v1",
+    "case_id": "LAB-C02-REQUEST",
+    "input_rendering_id": "derived:daftprompt-graph:C02-expert-sanitized:v1",
+    "input_rendering_hash": "5fd2bbac8d82f864",
+    "mutation_constraints_hash": "67ff3ae8266abc5a",
+    "input_rendering_provenance": "Exact sanitized manifest.md §3 C02 expert rendering replayed against the daftprompt Task Zero graph; derived Task 5 helper control, not canonical C02 or Task 6 evidence",
+    "repository_revision": "dd4519d86cdc456230e2158f6fffb53ee3963a31",
+    "graph_hash": "980e2ed77d04f191",
+    "packet_hash": "cc8b87c2f82af469",
+    "prompt_patterns_hash": "e86ab65665f2ea5c",
+    "model_id": "ibm-granite/granite-4.1-8b",
+    "repetition": 3,
+    "policy_hash": "5aabc729988b81c1",
+    "prompt_template_version": "task-zero-baseline-v1",
+    "decisions": [
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "search_graph",
+          "query": "admin filters review queue export empty file"
+        }
+      },
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "explain_edge",
+          "from": "epic:011/task:0/criterion:11",
+          "to": "file:admin-gui/src/pages/DBDeveloperPage.tsx",
+          "relation": "implements"
+        }
+      },
+      {
+        "step": "submit",
+        "value": {
+          "candidate_claims": [
+            "The current export logic fails to include filtered rows due to a missing update in the export handler.",
+            "The PRD explicitly states that filtered rows must be exported, suggesting a deviation in implementation."
+          ],
+          "clarifications": [
+            "The admin filter operation is expected to include only filtered rows in the export, but the current export is empty.",
+            "What specific implementation handles the export after filtering?",
+            "Are there related tests that validate this behavior?"
+          ],
+          "clarified_objective_suggestion": "Verify whether the admin filter logic correctly populates the export file with filtered rows, and assess if the current implementation aligns with the PRD and prior decisions.",
+          "proposed_gap_dispositions": [
+            {
+              "gap_locator": "epic:011/task:0/criterion:11#gap",
+              "note": "No direct evidence of the export handling logic being updated post-filtering; gap remains unresolved.",
+              "proposed": "proposed_still_open"
+            }
+          ],
+          "selected_evidence": [
+            {
+              "classification": "observation_validated",
+              "locator": "file:admin-gui/src/pages/DBDeveloperPage.tsx",
+              "note": "Contains admin GUI component, likely involved in filtering."
+            },
+            {
+              "classification": "observation_validated",
+              "locator": "epic:011/task:0/criterion:11",
+              "note": "References filtering constraint, indicating expected behavior."
+            },
+            {
+              "classification": "observation_validated",
+              "locator": "epic:011/task:0/criterion:12",
+              "note": "Mentions export functionality, linking to filtering logic."
+            }
+          ],
+          "stop_reason": "Evidence gap identified; awaiting further implementation details."
+        }
+      }
+    ],
+    "inferences": [
+      {
+        "round": 1,
+        "requested_model": "ibm-granite/granite-4.1-8b",
+        "returned_model": "ibm-granite/granite-4.1-8b",
+        "upstream_provider": "CoreWeave",
+        "provider_order": [
+          "CoreWeave"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "d88b840f8b8367fc",
+        "raw_response_hash": "5cd37a31538340a1",
+        "input_tokens": 1745,
+        "output_tokens": 24,
+        "elapsed_ms": 731,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      },
+      {
+        "round": 2,
+        "requested_model": "ibm-granite/granite-4.1-8b",
+        "returned_model": "ibm-granite/granite-4.1-8b",
+        "upstream_provider": "CoreWeave",
+        "provider_order": [
+          "CoreWeave"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "732d1fd6f718828b",
+        "raw_response_hash": "bf968cfe5526f846",
+        "input_tokens": 1905,
+        "output_tokens": 48,
+        "elapsed_ms": 711,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      },
+      {
+        "round": 3,
+        "requested_model": "ibm-granite/granite-4.1-8b",
+        "returned_model": "ibm-granite/granite-4.1-8b",
+        "upstream_provider": "CoreWeave",
+        "provider_order": [
+          "CoreWeave"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "362ad887230a390c",
+        "raw_response_hash": "06a53148f7235e86",
+        "input_tokens": 1930,
+        "output_tokens": 305,
+        "elapsed_ms": 2645,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      }
+    ]
+  },
+  "measurements": {
+    "calls": 2,
+    "rounds": 3,
+    "input_tokens": 5580,
+    "output_tokens": 377,
+    "result_bytes": 576,
+    "elapsed_ms": 4087,
+    "duplicate_calls": 0,
+    "stop_reason": "submitted",
+    "validation_diagnostics": 0,
+    "prompt_bytes": 10750,
+    "intent_preserved": true,
+    "gap_recall": null,
+    "unsupported_claims": null,
+    "typed_decision_review_required": true
+  }
+}

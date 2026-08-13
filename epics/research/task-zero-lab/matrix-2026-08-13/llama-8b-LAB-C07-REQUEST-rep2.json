@@ -1,0 +1,67 @@
+{
+  "replay": {
+    "schema_version": "task-zero-helper-replay-v1",
+    "case_id": "LAB-C07-REQUEST",
+    "input_rendering_id": "derived:daftprompt-graph:C07-expert:v1",
+    "input_rendering_hash": "a6e6b48b36842a3f",
+    "mutation_constraints_hash": "edabecc9f065106e",
+    "input_rendering_provenance": "Exact manifest.md §3 C07 expert rendering replayed against the daftprompt Task Zero graph; derived Task 5 helper control, not canonical C07 or Task 6 evidence",
+    "repository_revision": "dd4519d86cdc456230e2158f6fffb53ee3963a31",
+    "graph_hash": "980e2ed77d04f191",
+    "packet_hash": "1244c6813657c923",
+    "prompt_patterns_hash": "e86ab65665f2ea5c",
+    "model_id": "meta-llama/llama-3.1-8b-instruct",
+    "repetition": 2,
+    "policy_hash": "5aabc729988b81c1",
+    "prompt_template_version": "task-zero-baseline-v1",
+    "decisions": [
+      {
+        "step": "malformed",
+        "value": "sanitized adapter failure; provider details suppressed"
+      }
+    ],
+    "inferences": [
+      {
+        "round": 1,
+        "requested_model": "meta-llama/llama-3.1-8b-instruct",
+        "returned_model": "",
+        "upstream_provider": null,
+        "provider_order": [
+          "DeepInfra"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "358c904e481bbaa3",
+        "raw_response_hash": "",
+        "input_tokens": null,
+        "output_tokens": null,
+        "elapsed_ms": 814,
+        "stop_reason": null,
+        "validation_diagnostics": [
+          "OpenRouter request failed; provider error details suppressed"
+        ]
+      }
+    ]
+  },
+  "measurements": {
+    "calls": 0,
+    "rounds": 1,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "result_bytes": 0,
+    "elapsed_ms": 814,
+    "duplicate_calls": 0,
+    "stop_reason": "adapter_unavailable",
+    "validation_diagnostics": 2,
+    "prompt_bytes": 4858,
+    "intent_preserved": true,
+    "gap_recall": null,
+    "unsupported_claims": null,
+    "typed_decision_review_required": true
+  }
+}

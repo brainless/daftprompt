@@ -2122,3 +2122,107 @@ delete superseded notes; add a later note that revises or rejects them.
   protocol.
 - Detailed artifact:
   `epics/research/task-zero-lab/openrouter-granite-gap-exit-smoke-2026-08-13.json`.
+
+### 2026-08-13 — Fixed 36-run matrix execution
+
+- Parent criterion/question: Epic 014 Task 5, OpenRouter plan step 7 — do all
+  three pinned helpers operate through the same closed interface over fixed
+  inputs, and does any helper besides Granite demonstrate useful gap-exit
+  behavior?
+- Repository and runtime identity: daftprompt
+  `dd4519d` (the smoke evidence commit); local `~/Projects/llm-sdk` `491e99e`.
+  All 36 runs used the same frozen graph, packet, prompt-pattern, policy, and
+  template hashes recorded in each artifact.
+- Models and providers: `ibm-granite/granite-4.1-8b` / CoreWeave,
+  `meta-llama/llama-3.1-8b-instruct` / DeepInfra,
+  `mistralai/mistral-nemo` / DeepInfra. All fallback-disabled, parameter-
+  required, data-collection-denied, ZDR, temperature 0, output limit 2,048.
+- Cases: `LAB-C01-REQUEST` (sufficient context, Epic 020 reference),
+  `LAB-C02-REQUEST` (missing/exhausted evidence), `LAB-C07-REQUEST`
+  (scope/runtime control), `INJECTION` (controlled prompt-injection fixture).
+  Three repetitions per model/case pair, rotating starting model per repetition
+  per the protocol.
+- Harness change: none. All runs used the committed harness at `dd4519d`.
+
+#### Results summary
+
+| Model | Provider | Submitted | Low marginal yield | Adapter unavailable | Total |
+|---|---|---|---|---|---|
+| Granite 8B | CoreWeave | 12 | 0 | 0 | 12 |
+| Llama 8B | DeepInfra | 0 | 1 | 11 | 12 |
+| Mistral Nemo | DeepInfra | 0 | 11 | 1 | 12 |
+
+**Granite 8B / CoreWeave (12/12 `Submitted`):** All runs produced a valid
+typed helper submission with 0 duplicates. C01 and INJECTION: 1 call, 2 rounds
+each. C02 and C07: 2 calls, 3 rounds each. Average output tokens 114--377,
+average elapsed 1.7--4.8 s. Consistent gap-exit behavior across all three
+repetitions with no variance in stop reason or call count.
+
+**Llama 8B / DeepInfra (11/12 `adapter_unavailable`):** 11 of 12 runs failed
+at the transport level — empty `returned_model`, null provider, zero tokens,
+~500 ms. One run (C01 rep 1) returned `low_marginal_yield` with 2 calls and 54
+output tokens; one run (C02 rep 1) made 1 call before failing. This is a
+DeepInfra provider-availability failure, not a harness or model behavior issue.
+The model never received enough context to exercise the helper protocol.
+
+**Mistral Nemo / DeepInfra (11/12 `low_marginal_yield`, 1 `adapter_unavailable`):**
+All 12 runs executed (no transport failure for 11), but none produced a
+`Submitted` stop. The helper made 2--5 calls per run, searching for Epic 020
+or related terms, accumulating 43--166 output tokens, and exhausting the
+marginal-yield budget without submitting a gap disclosure. One run (C07 rep 2)
+hit `adapter_unavailable` after 3 calls. Duplicate calls appeared in 4 of 12
+runs (C01 all 3 reps, INJECTION rep 1--2). The helper received the same
+evidence-gap exit guidance as Granite but did not follow it.
+
+#### Validated findings
+
+1. The closed helper interface, typed output schema, host-only tool execution,
+   sanitized recording, and credential-free replay are model-agnostic
+   infrastructure — they worked for all three models regardless of outcome.
+2. Granite/CoreWeave is the only model/provider pair that demonstrated the
+   full gap-exit protocol: search once, receive honest miss, submit gap
+   disclosure.
+3. Llama/DeepInfra's failures are provider-level, not model-level. Re-running
+   on a different provider (e.g. CoreWeave or another DeepInfra endpoint) is
+   needed before drawing model-level conclusions.
+4. Mistral Nemo/DeepInfra executed but did not follow the exit guidance. This
+   is behavioral evidence: the 12B model either did not understand the guidance
+   or chose to retry rather than submit. Temperature 0 and the current policy
+   may not be sufficient for this model.
+
+#### Rejected or unsupported interpretations
+
+- Llama's `adapter_unavailable` results do not establish that Llama cannot
+  participate in the helper protocol — only that DeepInfra was unavailable.
+- Mistral Nemo's `low_marginal_yield` results do not establish that Mistral
+  Nemo cannot produce a submission — only that it did not under the current
+  policy, exit guidance, and temperature.
+- One-model success (Granite) does not satisfy Task 5's three-helper criterion.
+- None of the 36 runs count as canonical C01/C02/C07 corpus evidence or Task 6
+  comparative evidence (per the protocol).
+
+#### Remaining gaps and user decisions
+
+1. **Llama provider fix needed:** Re-run Llama on CoreWeave or another
+   available provider before evaluating its model-level capability. The
+   current 11/12 `adapter_unavailable` results are uninformative about the
+   model.
+2. **Mistral Nemo policy experiment needed:** Consider whether a policy change
+   (e.g. higher `max_rounds`, explicit submission prompt, or different
+   temperature) would help Mistral Nemo follow the exit guidance, or whether
+   this model is unsuitable for the closed helper role under the current
+   protocol.
+3. **Task 5 criterion status:** The criterion "At least three open-weight
+   helpers are supported in experiments" remains unchecked. Only Granite has
+   demonstrated reproducible experimental support. Two more helpers need
+   successful matrix evidence.
+4. **Qwen:** remains separately labelled exploratory and outside this matrix.
+
+- User decision or pending decision: the matrix is complete. The user must
+  decide whether to (a) re-run Llama on a different provider, (b) run a
+  Mistral Nemo policy experiment, or (c) substitute a different model/provider
+  pair for the remaining two slots.
+- Next iteration: depends on user decision above.
+- Detailed artifacts: 36 sanitized JSON files under
+  `epics/research/task-zero-lab/matrix-2026-08-13/` (Granite 12, Llama 12,
+  Mistral Nemo 12).
