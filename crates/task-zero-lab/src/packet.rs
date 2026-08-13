@@ -275,6 +275,37 @@ fn epic_task_ref_regex() -> &'static regex::Regex {
     RE.get_or_init(|| regex::Regex::new(r"(?i)\bepics?\s+(\d{3})(?:.{0,40}?\btask\s+(\d+))?").unwrap())
 }
 
+fn epic_locator_ref_regex() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"(?i)\bepic:(\d{3})\b").unwrap())
+}
+
+/// Canonical epic locators explicitly named in a query.
+///
+/// This recognizes both prose references (`Epic 020`) and graph-locator
+/// references (`epic:020`) without consulting the loaded graph. Callers can
+/// therefore distinguish an exact-reference miss from an ordinary lexical
+/// query instead of losing the numeric identity during tokenization.
+pub fn explicit_epic_locators(request: &str) -> Vec<String> {
+    let mut locators = BTreeSet::new();
+    for caps in epic_task_ref_regex().captures_iter(request) {
+        if let Ok(epic_num) = caps[1].parse::<u32>() {
+            locators.insert(format!("epic:{epic_num:03}"));
+        }
+    }
+    for caps in epic_locator_ref_regex().captures_iter(request) {
+        if let Ok(epic_num) = caps[1].parse::<u32>() {
+            locators.insert(format!("epic:{epic_num:03}"));
+        }
+    }
+    for caps in epic_path_ref_regex().captures_iter(request) {
+        if let Ok(epic_num) = caps[1].parse::<u32>() {
+            locators.insert(format!("epic:{epic_num:03}"));
+        }
+    }
+    locators.into_iter().collect()
+}
+
 fn epic_path_ref_regex() -> &'static regex::Regex {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| regex::Regex::new(r"epics/(\d{3})-[A-Za-z0-9\-]+\.md").unwrap())

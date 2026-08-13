@@ -1887,3 +1887,172 @@ delete superseded notes; add a later note that revises or rejects them.
   `crates/task-zero-lab/src/replay.rs`, and
   `crates/task-zero-lab/src/bin/openrouter_helper_experiment.rs`
   (no new file under `epics/research/task-zero-lab/`).
+
+### 2026-08-13 — Corrected Granite smoke passes protocol gate with low marginal yield
+
+- Parent criterion/question: Epic 014 Task 5, OpenRouter plan step 7 — after
+  committing the stated output contract and failure-mode corrections, does one
+  newly run Granite/CoreWeave smoke return the pinned routing identity and valid
+  typed helper output without disclosing protected inputs?
+- Repository and runtime identity: daftprompt
+  `c1776cb04f6a7807b95470a34dfa7523231b1a6e`; local `~/Projects/llm-sdk`
+  `491e99e`; public derived control `LAB-C01-REQUEST`, repetition 1; Granite
+  4.1 8B pinned to CoreWeave with fallback disabled, required parameters,
+  denied data collection, ZDR, temperature 0, and output limit 2,048.
+- Harness/prompt/policy versions: `task-zero-lab` 0.1.0,
+  `task-zero-helper-v1`, `task-zero-helper-replay-v1`,
+  `task-zero-baseline-v1`, and `task-zero-helper-output-contract-v1` under the
+  recorded policy hash `5aabc729988b81c1`.
+- Harness change: none. This was the single live smoke authorized by the prior
+  note; the fixed 36-run matrix was not started.
+- Observed result and measurements: all three rounds returned the exact
+  requested model and CoreWeave provider with valid typed tool calls and no
+  validation diagnostics. The helper requested `search_graph("Epic 020")`
+  twice, then `get_node("file:epics/011-provenance-graph.md")`; the host stopped
+  with `low_marginal_yield`. Totals were 3 calls/rounds, 5,436 input tokens, 70
+  output tokens, 1,642 result bytes, 2,605 ms provider elapsed time, and one
+  duplicate call. No helper submission was produced.
+- Disclosure and replay review: the 3,933-byte temporary artifact at
+  `/tmp/openrouter-granite-corrected-smoke.json` has SHA-256
+  `57260cd5d5ccea447a05d2c896977a1c577d71029ef6b24dbded5432a4168fdd`.
+  A prohibited-string scan found no API key marker, `sk-or-`, authorization or
+  bearer value, round prompt, raw response field, or provider-private detail.
+  It retains hashes and typed decisions only. Offline replay succeeded with
+  three decisions and the recorded `LowMarginalYield` stop reason.
+- Validated findings: the corrected hosted protocol now passes the smoke gate:
+  live transport, privacy/routing pins, typed output parsing, host-only tool
+  execution, sanitized recording, and credential-free replay all worked.
+- Rejected or unsupported interpretations: this run did not refine the prompt,
+  did not show useful evidence selection, and does not count as canonical C01
+  or Task 6 evidence. It does not by itself satisfy the three-open-weight-model
+  criterion. The repeated irrelevant query is negative behavioral evidence,
+  not a reason to relabel the smoke as prompt-quality success.
+- User decision or pending decision: review whether the successful protocol
+  gate plus poor marginal yield is sufficient to begin the already-fixed
+  repeated three-model matrix without first changing policy. No Task 5
+  checkbox is changed by this one-model smoke.
+- Next proposed iteration: if approved, run the fixed 36-run matrix unchanged
+  across all three pinned helpers and retain the duplicate/low-yield Granite
+  behavior in the comparison; otherwise define a narrowly scoped policy
+  experiment before changing the matrix protocol.
+- Detailed artifact: temporary sanitized artifact
+  `/tmp/openrouter-granite-corrected-smoke.json`; it has not yet been admitted
+  under `epics/research/task-zero-lab/`.
+
+### 2026-08-13 — Out-of-protocol Qwen3.5-9B comparison smoke
+
+- Parent criterion/question: user-requested comparison against the corrected
+  Granite smoke — can `qwen/qwen3.5-9b` execute the identical closed helper
+  protocol, and does it avoid Granite's low-yield behavior?
+- Candidate qualification and protocol exception: the official Qwen model
+  repository publishes 9B Apache-2.0 weights. OpenRouter lists the exact model
+  ID and a SiliconFlow endpoint supporting `max_tokens`, `response_format`,
+  and structured outputs with zero retention. The model is not silently
+  substituted into the fixed matrix: its 262,144-token context exceeds the
+  original 131,072 discovery cap and its USD 0.15/M output price exceeds the
+  USD 0.10/M discovery ceiling. This is therefore a separately labelled
+  out-of-protocol candidate smoke.
+- Repository and runtime identity: daftprompt
+  `c1776cb04f6a7807b95470a34dfa7523231b1a6e`; local `~/Projects/llm-sdk`
+  `491e99e`; public derived control `LAB-C01-REQUEST`, repetition 1; Qwen3.5-9B
+  pinned to SiliconFlow with fallback disabled, required parameters, denied
+  data collection, ZDR, temperature 0, and output limit 2,048.
+- Harness change: none. The same committed helper contract, policy, fixture,
+  packet, and replay path used by the Granite smoke were retained.
+- Observed result and measurements: all four rounds returned the exact model
+  and SiliconFlow provider with valid typed tool calls and no validation
+  diagnostics. The calls searched for `Epic 020` once and `epic:020` three
+  times; the host stopped with `low_marginal_yield`. Totals were 4 calls/rounds,
+  8,154 input tokens, 575 output tokens, 2,980 result bytes, 19,887 ms provider
+  elapsed time, and two duplicate calls. No helper submission was produced.
+- Disclosure and replay review: the 4,706-byte temporary artifact at
+  `/tmp/openrouter-qwen35-9b-smoke.json` has SHA-256
+  `2ceee0169a5371f6b841b2e7ef3907ee7737283d8154e8d51de6d2cb052488a9`.
+  The same prohibited-string scan used for Granite passed, and offline replay
+  succeeded with four decisions and the recorded `LowMarginalYield` stop.
+- Validated findings: Qwen participates successfully in the closed typed
+  protocol with exact private routing and credential-free replay.
+- Rejected or unsupported interpretations: Qwen did not improve the prompt or
+  resolve the missing evidence; it repeated the same search more often than
+  Granite and used materially more tokens and time. One smoke cannot support a
+  general model-quality ranking, and the exception to the discovery filters
+  means it cannot replace a fixed-matrix model without an explicit protocol
+  revision and user decision.
+- User decision or pending decision: whether to revise the candidate filters
+  and fixed model set to admit Qwen, or retain it only as negative exploratory
+  evidence. No Task 5 checkbox changes from this smoke.
+- Next proposed iteration: review the shared `Epic 020` search behavior as a
+  possible fixture/packet gap before spending on repeated Qwen runs; keep the
+  existing fixed matrix unchanged unless the protocol is deliberately revised.
+- Detailed artifact: temporary sanitized artifact
+  `/tmp/openrouter-qwen35-9b-smoke.json`; it has not yet been admitted under
+  `epics/research/task-zero-lab/`.
+
+### 2026-08-13 — Epic 020 helper-loop diagnosis and offline harness correction
+
+- Parent criterion/question: Epic 014 Task 5 — why did both the corrected
+  Granite smoke and the exploratory Qwen smoke repeatedly search for Epic 020
+  without producing a helper submission, and what is the smallest correction
+  required before another paid experiment?
+- Provenance finding: `LAB-C01-REQUEST` intentionally replays the manifest C01
+  expert request, `Analyze Epic 020 and suggest changes before
+  implementation.`, against the daftprompt Task Zero graph. The rendering is
+  correctly labelled `derived:daftprompt-graph:C01-expert:v1`; it is not the
+  canonical akar C01 fixture. The harness graph is built only from daftprompt
+  Epics 011--014. Epic 020 is therefore outside the loaded graph, but it was
+  not requested during graph construction and is not recorded in
+  `GraphCoverage::requested_epics_unavailable`.
+- Confirmed failure chain: exact packet seeding could not establish
+  `epic:020`; helper `search_graph` then reused generic lexical seeding, whose
+  tokenizer discarded the three-character token `020` and matched unrelated
+  nodes through the word `epic`. The helper consequently received
+  `zero_results=false` with irrelevant Epic 011--014 results rather than an
+  honest exact-reference miss. Reconstructed rounds also lacked explicit
+  guidance to submit an evidence-gap disclosure after an exact miss or
+  non-matching results. Finally, duplicate accounting treated `Epic 020` and
+  `epic:020` as different serialized operations. These combined harness
+  weaknesses explain the shared behavior more directly than a provider,
+  transport, JSON-format, or model-specific failure.
+- Offline harness correction:
+  1. `packet::explicit_epic_locators` recognizes explicit prose, locator, and
+     epic-path references without consulting graph membership.
+  2. `HelperToolExecutor::SearchGraph` now uses exact semantics for those
+     references. It reports requested and missing locators, exact matches, the
+     deterministic loaded epic scope, and `lexical_fallback=skipped`; ordinary
+     searches retain the existing lexical behavior.
+  3. Every reconstructed round now includes bounded evidence-gap exit
+     guidance. A helper is told to stop retrying after an exact artifact miss,
+     true zero results, or non-matching results and to submit through the
+     existing `HelperSubmission` schema. The guidance limits the claim to
+     “unavailable in the loaded graph,” forbids unrelated evidence and invented
+     facts, and adds no new operation.
+  4. Duplicate detection now conservatively normalizes `Epic 020`,
+     `epic:020`, case/whitespace variants, the plural spelling, and terminal
+     sentence punctuation to one search key. Ordinary searches normalize only
+     case and whitespace; generic punctuation remains significant, and
+     non-search operation keys retain exact serialized identity.
+- Files changed: `crates/task-zero-lab/src/packet.rs` and
+  `crates/task-zero-lab/src/helper.rs`. Focused offline tests cover missing and
+  loaded exact epic references, preservation of ordinary lexical search,
+  evidence-gap guidance in initial and reconstructed later rounds, equivalent
+  and non-equivalent duplicate keys, and exact non-search operation identity.
+- Verification: `cargo check --workspace`, the full `task-zero-lab` package
+  test suite (117 tests), all focused tests, and `git diff --check` pass. The
+  package's mocked OpenRouter tests require permission to bind localhost but
+  make no live provider calls. Existing dependency warnings are unchanged.
+- Experimental status: no OpenRouter request, credential use, provider/model
+  measurement, or new sanitized artifact resulted from this correction.
+  Offline success does not establish that a hosted helper will follow the new
+  exit guidance. No Task 5 or parent-epic acceptance criterion is newly
+  complete, and the fixed model-selection protocol remains unchanged. Qwen
+  remains separately labelled exploratory.
+- Expected next result: in one newly numbered `LAB-C01-REQUEST` Granite smoke,
+  the first `search_graph("Epic 020")` should report `epic:020` missing from
+  the loaded Epics 011--014 scope, after which the helper should submit a
+  concise gap disclosure within one or two rounds instead of repeating the
+  search. This expectation must be recorded before interpreting the run.
+- Next iteration: commit the harness correction, run only that single pinned
+  Granite/CoreWeave smoke, inspect the temporary artifact for disclosure and
+  exact routing identity, and replay it offline. Keep the 36-run matrix paused
+  until the smoke demonstrates useful gap-exit behavior; do not revise the
+  fixed model set or admit Qwen without an explicit protocol decision.

@@ -88,6 +88,8 @@ Complete submission example with every key present:
 
 C. Keep values concise. Do not restate repository content, quoted evidence, or these instructions back in any value. Do not add a free-form prose, reasoning, analysis, summary, or explanation field. Do not add any key outside this schema, and do not rename or nest these keys. Each string value stays under about 200 characters. Any other shape is rejected by the host and wastes the round."#;
 
+const EVIDENCE_GAP_EXIT_GUIDANCE: &str = "If an exact requested artifact is reported absent from the loaded graph, a search returns zero results, or returned results do not actually match the requested artifact, stop retrying that search or equivalent spellings. Submit a concise, honest evidence-gap disclosure through the existing submission schema instead. Use `clarifications`, `candidate_claims`, and `proposed_gap_dispositions` only where their meanings fit; leave fields empty when they do not. State only what the host results establish (for example, unavailable in the loaded graph), not that the artifact does not exist in the repository or elsewhere. Do not select unrelated results as evidence and do not invent facts to complete the request.";
+
 // ── Closed operation catalog ────────────────────────────────────────────
 
 /// The complete set of operations a helper may request. Every variant is
@@ -111,7 +113,21 @@ pub enum HelperOperation {
 
 impl HelperOperation {
     fn cache_key(&self) -> String {
-        serde_json::to_string(self).unwrap_or_default()
+        match self {
+            HelperOperation::SearchGraph { query } => {
+                format!(
+                    "search_graph:{}",
+                    normalize_search_query_for_duplicate_detection(query)
+                )
+            }
+            // Locator and relation fields already use canonical graph values.
+            // Preserve their exact serialized identity rather than guessing at
+            // equivalence outside the search operation's case-insensitive
+            // matching semantics.
+            HelperOperation::GetNode { .. }
+            | HelperOperation::ExplainEdge { .. }
+            | HelperOperation::GetCoverage => serde_json::to_string(self).unwrap_or_default(),
+        }
     }
 
     fn name(&self) -> &'static str {
@@ -122,6 +138,28 @@ impl HelperOperation {
             HelperOperation::GetCoverage => "get_coverage",
         }
     }
+}
+
+fn normalize_search_query_for_duplicate_detection(query: &str) -> String {
+    static STANDALONE_EPIC_REF: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let standalone_epic_ref = STANDALONE_EPIC_REF.get_or_init(|| {
+        regex::Regex::new(r"(?i)^\s*(?:epics?\s+|epic:)(\d{3})\s*[.!?]?\s*$").unwrap()
+    });
+    if let Some(captures) = standalone_epic_ref.captures(query) {
+        if let Ok(epic_number) = captures[1].parse::<u32>() {
+            return format!("epic:{epic_number:03}");
+        }
+    }
+
+    // Graph lexical search is case-insensitive, so these transformations
+    // preserve its meaning. Punctuation is retained conservatively rather
+    // than defining a second broad tokenizer that could drift from packet
+    // search or future identifier-aware search semantics.
+    query
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A truncation/zero-result marker mirroring `src/bin/groq_context_gap.rs`'s
@@ -174,13 +212,48 @@ impl<'a> HelperToolExecutor<'a> {
         let is_duplicate = !self.seen.insert(op.cache_key());
         let raw = match op {
             HelperOperation::SearchGraph { query } => {
-                let hits = packet::find_lexical_seeds(self.graph, query);
-                if hits.is_empty() {
-                    "zero_results=true".to_string()
+                let epic_locators = packet::explicit_epic_locators(query);
+                if !epic_locators.is_empty() {
+                    let loaded_epics: BTreeSet<&str> = self
+                        .graph
+                        .nodes
+                        .iter()
+                        .filter(|node| matches!(node.kind, crate::graph::NodeKind::Epic))
+                        .map(|node| node.locator.logical_id.as_str())
+                        .collect();
+                    let exact_matches: Vec<&str> = epic_locators
+                        .iter()
+                        .map(String::as_str)
+                        .filter(|locator| loaded_epics.contains(locator))
+                        .collect();
+                    let missing: Vec<&str> = epic_locators
+                        .iter()
+                        .map(String::as_str)
+                        .filter(|locator| !loaded_epics.contains(locator))
+                        .collect();
+                    vec![
+                        format!("zero_results={}", exact_matches.is_empty()),
+                        "match_mode=exact_epic_reference".to_string(),
+                        format!("requested_locators={}", epic_locators.join(",")),
+                        format!("exact_matches={}", exact_matches.join(",")),
+                        format!("missing_locators={}", missing.join(",")),
+                        format!("loaded_epic_scope={}", loaded_epics.iter().copied().collect::<Vec<_>>().join(",")),
+                        "lexical_fallback=skipped".to_string(),
+                    ]
+                    .join("\n")
                 } else {
-                    let mut lines = vec!["zero_results=false".to_string()];
-                    lines.extend(hits.iter().take(20).map(|h| format!("{} via={:?} matched={}", h.locator, h.channel, h.query_fragment)));
-                    lines.join("\n")
+                    let hits = packet::find_lexical_seeds(self.graph, query);
+                    if hits.is_empty() {
+                        "zero_results=true".to_string()
+                    } else {
+                        let mut lines = vec!["zero_results=false".to_string()];
+                        lines.extend(
+                            hits.iter()
+                                .take(20)
+                                .map(|h| format!("{} via={:?} matched={}", h.locator, h.channel, h.query_fragment)),
+                        );
+                        lines.join("\n")
+                    }
                 }
             }
             HelperOperation::GetNode { locator } => match self.graph.nodes.iter().find(|n| &n.locator.logical_id == locator) {
@@ -647,6 +720,9 @@ pub fn build_round_prompt(
     out.push_str("## Required output schema (exact)\n\n");
     out.push_str(HELPER_OUTPUT_CONTRACT);
     out.push_str("\n\n");
+    out.push_str("## Evidence-gap exit guidance\n\n");
+    out.push_str(EVIDENCE_GAP_EXIT_GUIDANCE);
+    out.push_str("\n\n");
     out.push_str("## Immutable human intent (verbatim, do not restate as your own words)\n\n```text\n");
     out.push_str(&request.original);
     out.push_str("\n```\n\n### Negative constraints (verbatim)\n\n");
@@ -669,7 +745,7 @@ pub fn build_round_prompt(
             out.push_str(&format!("### Call {} — {}\n\n```text\n{}\n```\n\n", index + 1, op.name(), result));
         }
     }
-    out.push_str("\nCall one operation, or submit your refinement now if you have enough evidence.\n");
+    out.push_str("\nCall one operation, or submit your refinement now if you have enough evidence or need to disclose an evidence gap as instructed above.\n");
     out
 }
 
@@ -1216,6 +1292,111 @@ pub(crate) mod tests {
         assert_eq!(report.stop_reason, StopReason::RetryBudgetExhausted);
     }
 
+    #[test]
+    fn explicit_missing_epic_search_reports_scope_without_lexical_fallback() {
+        let mut graph = graph();
+        graph.nodes.extend([
+            node("epic:011", NodeKind::Epic, "Epic 011"),
+            node("epic:014", NodeKind::Epic, "Epic 014"),
+        ]);
+        let packet = packet();
+        let policy = HelperPolicy::default();
+        let mut executor = HelperToolExecutor::new(&graph, &packet, &policy);
+
+        for (index, query) in ["Epic 020", "epic:020"].into_iter().enumerate() {
+            let (result, duplicate) = executor.execute(&HelperOperation::SearchGraph { query: query.to_string() });
+            assert_eq!(duplicate, index > 0);
+            assert!(result.contains("zero_results=true"));
+            assert!(result.contains("match_mode=exact_epic_reference"));
+            assert!(result.contains("requested_locators=epic:020"));
+            assert!(result.contains("exact_matches="));
+            assert!(result.contains("missing_locators=epic:020"));
+            assert!(result.contains("loaded_epic_scope=epic:011,epic:014"));
+            assert!(result.contains("lexical_fallback=skipped"));
+            assert!(!result.contains("via=LexicalKeyword"));
+        }
+    }
+
+    #[test]
+    fn duplicate_detection_normalizes_only_safe_search_query_variants() {
+        let equivalent = ["Epic 020", " epic:020 ", "EPIC 020!", "Epics 020"];
+        let expected_key = HelperOperation::SearchGraph { query: equivalent[0].to_string() }.cache_key();
+        for query in equivalent.iter().skip(1) {
+            assert_eq!(
+                HelperOperation::SearchGraph { query: (*query).to_string() }.cache_key(),
+                expected_key
+            );
+        }
+
+        assert_eq!(
+            HelperOperation::SearchGraph { query: "  Closed   Catalog ".to_string() }.cache_key(),
+            HelperOperation::SearchGraph { query: "closed catalog".to_string() }.cache_key()
+        );
+        assert_ne!(
+            HelperOperation::SearchGraph { query: "render pipeline".to_string() }.cache_key(),
+            HelperOperation::SearchGraph { query: "render latency".to_string() }.cache_key()
+        );
+    }
+
+    #[test]
+    fn non_search_operation_keys_preserve_canonical_field_identity() {
+        assert_ne!(
+            HelperOperation::GetNode { locator: "epic:014".to_string() }.cache_key(),
+            HelperOperation::GetNode { locator: "EPIC:014".to_string() }.cache_key()
+        );
+        assert_ne!(
+            HelperOperation::ExplainEdge {
+                from: "a".to_string(),
+                to: "b".to_string(),
+                relation: "requires".to_string(),
+            }
+            .cache_key(),
+            HelperOperation::ExplainEdge {
+                from: "a".to_string(),
+                to: "b".to_string(),
+                relation: "Requires".to_string(),
+            }
+            .cache_key()
+        );
+        assert_eq!(HelperOperation::GetCoverage.cache_key(), HelperOperation::GetCoverage.cache_key());
+    }
+
+    #[test]
+    fn explicit_loaded_epic_search_returns_only_exact_match() {
+        let mut graph = graph();
+        graph.nodes.extend([
+            node("epic:011", NodeKind::Epic, "Epic 011"),
+            node("epic:014", NodeKind::Epic, "Epic 014"),
+        ]);
+        let packet = packet();
+        let policy = HelperPolicy::default();
+        let mut executor = HelperToolExecutor::new(&graph, &packet, &policy);
+
+        let (result, duplicate) = executor.execute(&HelperOperation::SearchGraph { query: "Epic 014".to_string() });
+        assert!(!duplicate);
+        assert!(result.contains("zero_results=false"));
+        assert!(result.contains("requested_locators=epic:014"));
+        assert!(result.contains("exact_matches=epic:014"));
+        assert!(result.contains("missing_locators="));
+        assert!(result.contains("lexical_fallback=skipped"));
+        assert!(!result.contains("epic:014/task:5 via="));
+    }
+
+    #[test]
+    fn ordinary_search_preserves_generic_lexical_behavior() {
+        let graph = graph();
+        let packet = packet();
+        let policy = HelperPolicy::default();
+        let mut executor = HelperToolExecutor::new(&graph, &packet, &policy);
+
+        let (result, duplicate) =
+            executor.execute(&HelperOperation::SearchGraph { query: "closed catalog".to_string() });
+        assert!(!duplicate);
+        assert!(result.contains("zero_results=false"));
+        assert!(result.contains("via=LexicalKeyword"));
+        assert!(!result.contains("match_mode=exact_epic_reference"));
+    }
+
     // AC3
     #[test]
     fn submission_schema_round_trips_all_five_fields() {
@@ -1551,6 +1732,43 @@ pub(crate) mod tests {
         assert!(round_prompt.contains(HELPER_OUTPUT_CONTRACT_VERSION));
         // The concise-output requirement travels with the schema.
         assert!(round_prompt.contains("Keep values concise"));
+    }
+
+    #[test]
+    fn round_prompt_instructs_an_honest_exit_for_zero_or_nonmatching_results() {
+        let round_prompt = build_round_prompt(&prompt_request(), &[], &[], 0, &[], 1, 6);
+
+        assert!(round_prompt.contains("## Evidence-gap exit guidance"));
+        assert!(round_prompt.contains("an exact requested artifact is reported absent from the loaded graph"));
+        assert!(round_prompt.contains("a search returns zero results"));
+        assert!(round_prompt.contains("returned results do not actually match the requested artifact"));
+        assert!(round_prompt.contains("stop retrying that search or equivalent spellings"));
+        assert!(round_prompt.contains("Submit a concise, honest evidence-gap disclosure"));
+        assert!(round_prompt.contains("not that the artifact does not exist in the repository or elsewhere"));
+        assert!(round_prompt.contains("Do not select unrelated results as evidence and do not invent facts"));
+        assert!(!round_prompt.contains("report_gap"));
+    }
+
+    #[test]
+    fn reconstructed_later_round_preserves_evidence_gap_exit_guidance() {
+        let calls = vec![(
+            HelperOperation::SearchGraph { query: "Epic 020".to_string() },
+            "zero_results=true\nmatch_mode=exact_epic_reference\nmissing_locators=epic:020".to_string(),
+        )];
+        let rejections = vec![RoundRejection::new(
+            1,
+            RejectionKind::SchemaViolation,
+            "missing field stop_reason",
+        )];
+
+        let first = build_round_prompt(&prompt_request(), &[], &[], 0, &[], 1, 6);
+        let later = build_round_prompt(&prompt_request(), &calls, &rejections, 1, &[], 4, 6);
+
+        assert_eq!(first.matches(EVIDENCE_GAP_EXIT_GUIDANCE).count(), 1);
+        assert_eq!(later.matches(EVIDENCE_GAP_EXIT_GUIDANCE).count(), 1);
+        assert!(later.contains("missing_locators=epic:020"));
+        assert!(later.contains("Round 1: rejected as `schema_violation`"));
+        assert_eq!(later.matches("## Evidence-gap exit guidance").count(), 1);
     }
 
     // AC6: bounds and recording.
