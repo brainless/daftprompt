@@ -678,6 +678,16 @@ operation catalog.
    Granite and Mistral Nemo are Apache-2.0, while Llama uses the Llama 3.1
    Community License and is recorded as open-weight without claiming OSI
    open-source status. See the dated catalog and verification artifacts.
+
+   **Revised model set (2026-08-13):** the 36-run matrix exposed provider-level
+   failures for Llama/DeepInfra (11/12 `adapter_unavailable`) and Mistral
+   Nemo/DeepInfra (11/12 `low_marginal_yield`). Llama was replaced by local
+   Qwen 3.5 0.8B via llama.cpp, which was then dropped due to unreliable
+   schema compliance (see experiment notes below). The current three-helper
+   candidate set is:
+   1. `ibm-granite/granite-4.1-8b` (hosted, Granite/CoreWeave) — demonstrated
+   2. Qwen 3.5 9B (local, llama.cpp) — demonstrated (clean first-attempt submit)
+   3. Third helper TBD (user will download additional local models)
 3. Add an `OpenRouterHelperModel` adapter around
    `llm_sdk::openrouter::OpenRouterClient`. Keep `HelperModelOutput` as the
    response schema: each stateless round asks for one typed JSON tool request
@@ -2286,3 +2296,49 @@ evidence-gap exit guidance as Granite but did not follow it.
   adapter, 9 unit tests), updated `main.rs` (`--live-llama-cpp` mode),
   updated `openrouter_helper_experiment.rs` (`LiveLlamaCpp` subcommand),
   `/tmp/llama-cpp-smoke-report.json` (temporary live smoke artifact).
+
+### 2026-08-13 — Qwen 3.5 9B smoke and 0.8B retirement
+
+- Parent criterion/question: Epic 014 Task 5, "At least three open-weight
+  helpers are supported in experiments" — smoke test the locally-available
+  Qwen 3.5 9B through the same `LlamaCppHelperModel` adapter, and decide
+  whether the 0.8B remains viable.
+- Repository and immutable revision: daftprompt `fe4556a`; no model weights
+  or private repository inputs were transmitted to any external service.
+- Candidate qualification: Qwen 3.5 9B is Apache-2.0 licensed, 9B parameters
+  (below-10B sub-tier), and the GGUF
+  (`unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL`, 5.6 GB) is present locally at
+  `/Users/brainless/hf_models/models--unsloth--Qwen3.5-9B-GGUF/`. Runs on
+  Apple Silicon with Metal GPU offload via llama-server v10360.
+- Harness change: none. Same adapter, same `--live-llama-cpp` CLI, same
+  `LAB-C01-REQUEST` case, same policy.
+- Observed result (9B, reasoning on): 1 call, 2 rounds, 0 duplicates.
+  Round 1: 1777 input / 103 output tokens, 15.6 s, clean stop. Round 2:
+  1861 input / 316 output tokens, 26.6 s, clean stop. Produced a valid
+  `submit` with `stop_reason: evidence_gap` — recognized Epic 020 is outside
+  the graph scope and correctly reported the gap. No validation diagnostics,
+  no truncation, no malformed output. Total elapsed 42 s.
+- Observed result (0.8B, reasoning off): also tested with `--reasoning off`
+  on the 0.8B model. Round 1–2 produced malformed JSON (column 295/297
+  parse errors), round 3 produced a valid submit. Stop reason
+  `retry_budget_exhausted`. The model is fast (~2 s/round) but schema
+  compliance is unreliable even without thinking overhead.
+- Validated findings: the 9B model cleanly completes the helper protocol on
+  the first attempt without retry budget exhaustion. The 0.8B model cannot
+  reliably produce valid `HelperModelResponse` JSON — with reasoning on it
+  exhausts the output limit thinking, with reasoning off it produces
+  malformed JSON that burns through the retry budget. This is model-quality
+  evidence, not a transport or adapter failure.
+- User decision: **drop Qwen 3.5 0.8B from the experiment model set.**
+  The adapter and infrastructure remain (useful for future small models),
+  but the 0.8B will not participate in the fixed matrix. The user may
+  download other local models for future comparison.
+- Revised three-helper candidate set:
+  1. `ibm-granite/granite-4.1-8b` (hosted, Granite/CoreWeave) — demonstrated
+  2. Qwen 3.5 9B (local, llama.cpp) — just demonstrated
+  3. Third helper TBD (user will download additional local models)
+- Next iteration: when a third model is available, run the fixed matrix with
+  all three helpers over the same cases, packets, prompt patterns, and
+  repeated-run policy.
+- Detailed artifacts: `/tmp/llama-cpp-9b-smoke.json` (9B live smoke),
+  `/tmp/llama-cpp-0.8b-noreason-smoke.json` (0.8B reasoning-off smoke).
