@@ -2056,3 +2056,69 @@ delete superseded notes; add a later note that revises or rejects them.
   exact routing identity, and replay it offline. Keep the 36-run matrix paused
   until the smoke demonstrates useful gap-exit behavior; do not revise the
   fixed model set or admit Qwen without an explicit protocol decision.
+
+### 2026-08-13 — Granite gap-exit smoke passes protocol gate
+
+- Parent criterion/question: Epic 014 Task 5, OpenRouter plan step 7 — after
+  committing the Epic 020 missing-evidence harness corrections (exact-search
+  semantics, duplicate normalization, evidence-gap exit guidance), does one
+  pinned Granite/CoreWeave smoke demonstrate useful gap-exit behavior and
+  authorize the fixed 36-run matrix?
+- Repository and runtime identity: daftprompt
+  `60bf03fcd38962cd693cfc6dd9f7c8ced11f6aad`; local `~/Projects/llm-sdk`
+  `491e99e`; public derived control `LAB-C01-REQUEST` (`derived:daftprompt-graph:C01-expert:v1`),
+  repetition 1; Granite 4.1 8B pinned to CoreWeave with fallback disabled,
+  required parameters, denied data collection, ZDR, temperature 0, and output
+  limit 2,048.
+- Harness/prompt/policy versions: `task-zero-lab` 0.1.0,
+  `task-zero-helper-v1`, `task-zero-helper-replay-v1`,
+  `task-zero-baseline-v1`, `task-zero-helper-output-contract-v1`, policy hash
+  `5aabc729988b81c1`.
+- Harness change: none. This was the single live smoke authorized by the
+  2026-08-13 offline-correction note; the fixed 36-run matrix was not started.
+- Observed result and measurements: round 1 returned `search_graph("Epic 020")`
+  (expected — the C01 expert request references Epic 020). The host responded
+  with the honest exact-miss diagnostic: `epic:020` missing from the loaded
+  Epics 011--014 scope. Round 2 submitted a valid gap disclosure: clarifications
+  stated "Epic 020 is not present in the loaded graph (epic:020)",
+  `proposed_gap_dispositions` proposed `proposed_still_open` for `epic:020`,
+  and `stop_reason` was "Evidence gap for Epic 020". Host stopped with
+  `Submitted`. Totals: 1 call, 2 rounds, 0 duplicates, 3,494 input tokens,
+  176 output tokens, 197 result bytes, 2,570 ms provider elapsed, 0 validation
+  diagnostics.
+- Disclosure and replay review: the 3,491-byte sanitized artifact at
+  `epics/research/task-zero-lab/openrouter-granite-gap-exit-smoke-2026-08-13.json`
+  has SHA-256 `4407b3be7e0f71c9271db2a8ed04c6e6ab728609ebacfb13d2c5c5147149d059`.
+  A prohibited-string scan found no API key marker, `sk-or-`, authorization or
+  bearer value, round prompt, raw response field, or provider-private detail.
+  It retains hashes and typed decisions only. Offline replay succeeded with
+  two decisions and the recorded `Submitted` stop reason.
+- Validated findings: the corrected hosted protocol passes the complete smoke
+  gate — live transport, privacy/routing pins, exact-model/provider identity,
+  typed output parsing, host-only tool execution, evidence-gap exit guidance,
+  sanitized recording, and credential-free replay all worked. The gap-exit
+  behavior is a material improvement over the pre-fix runs (2026-08-12 and
+  Qwen 2026-08-13): 1 call instead of 3--4, 0 duplicates instead of 1--2,
+  `Submitted` instead of `LowMarginalYield`, and 176 output tokens instead of
+  4,678--575.
+- Rejected or unsupported interpretations: one-model smoke success does not
+  establish that Llama or Mistral Nemo will exhibit the same gap-exit behavior,
+  does not measure prompt improvement, and does not count as canonical C01 or
+  Task 6 evidence. The `candidate_claims` field ("Epic 020 requires a follow-up
+  request for any implementation changes") is a model interpretation, not an
+  established fact; it is retained as typed output but not promoted to evidence.
+- Remaining gaps: the fixed 36-run matrix (3 models × 4 cases × 3 reps) has
+  not started. Task 5's final criterion ("At least three open-weight helpers
+  are supported in experiments") requires reproducible evidence across all
+  three pinned helpers. Qwen remains separately labelled exploratory and
+  outside this matrix.
+- User decision or pending decision: user approved proceeding with the fixed
+  36-run matrix unchanged. No Task 5 checkbox is changed by this one-model
+  smoke.
+- Next iteration: execute the 36-run matrix — Granite/CoreWeave,
+  Llama/DeepInfra, Mistral Nemo/DeepInfra over LAB-C01-REQUEST,
+  LAB-C02-REQUEST, LAB-C07-REQUEST, and the controlled injection fixture,
+  three repetitions each, rotating starting model by repetition per the
+  protocol.
+- Detailed artifact:
+  `epics/research/task-zero-lab/openrouter-granite-gap-exit-smoke-2026-08-13.json`.

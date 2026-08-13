@@ -77,3 +77,14 @@ returned: zero tokens, no returned model/provider identity, and the sanitized
 query reported total credits `0`, which is the exact sanitized blocker. The
 fixed 36-run matrix was not started and neither remaining Task 5 criterion is
 satisfied. See `openrouter-smoke-blocker-2026-08-11.json`.
+
+## 2026-08-13 corrected smoke disposition
+
+After the output-contract, truncation, and Epic 020 gap-exit harness
+corrections were committed (`60bf03f`), a single pinned Granite/CoreWeave
+smoke over `LAB-C01-REQUEST` passed the complete protocol gate: exact
+model/provider identity, valid typed tool call, evidence-gap exit after one
+search, proper `Submitted` stop, sanitized artifact, and credential-free
+replay. Totals: 1 call, 2 rounds, 0 duplicates, 176 output tokens, 2,570 ms.
+The fixed 36-run matrix is now authorized. See
+`openrouter-granite-gap-exit-smoke-2026-08-13.json`.

@@ -1,0 +1,113 @@
+{
+  "replay": {
+    "schema_version": "task-zero-helper-replay-v1",
+    "case_id": "LAB-C01-REQUEST",
+    "input_rendering_id": "derived:daftprompt-graph:C01-expert:v1",
+    "input_rendering_hash": "4eba136a1d28e220",
+    "mutation_constraints_hash": "76c5b5fbad71e291",
+    "input_rendering_provenance": "Exact manifest.md §3 C01 expert rendering replayed against the daftprompt Task Zero graph; derived Task 5 helper control, not canonical C01 or Task 6 evidence",
+    "repository_revision": "60bf03fcd38962cd693cfc6dd9f7c8ced11f6aad",
+    "graph_hash": "09bcde529eec8add",
+    "packet_hash": "f74563500c216a04",
+    "prompt_patterns_hash": "e86ab65665f2ea5c",
+    "model_id": "ibm-granite/granite-4.1-8b",
+    "repetition": 1,
+    "policy_hash": "5aabc729988b81c1",
+    "prompt_template_version": "task-zero-baseline-v1",
+    "decisions": [
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "search_graph",
+          "query": "Epic 020"
+        }
+      },
+      {
+        "step": "submit",
+        "value": {
+          "candidate_claims": [
+            "Epic 020 requires a follow-up request for any implementation changes due to read-only review constraints."
+          ],
+          "clarifications": [
+            "The review phase is read-only; any revisions must be authorized by a follow-up request.",
+            "Epic 020 is not present in the loaded graph (epic:020)."
+          ],
+          "clarified_objective_suggestion": "Suggest changes to Epic 020 before implementation based on review constraints.",
+          "proposed_gap_dispositions": [
+            {
+              "gap_locator": "epic:020",
+              "note": "Epic 020 is absent from the loaded graph; cannot directly analyze or suggest changes without it.",
+              "proposed": "proposed_still_open"
+            }
+          ],
+          "selected_evidence": [],
+          "stop_reason": "Evidence gap for Epic 020"
+        }
+      }
+    ],
+    "inferences": [
+      {
+        "round": 1,
+        "requested_model": "ibm-granite/granite-4.1-8b",
+        "returned_model": "ibm-granite/granite-4.1-8b",
+        "upstream_provider": "CoreWeave",
+        "provider_order": [
+          "CoreWeave"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "77561ec46ea6a1e3",
+        "raw_response_hash": "3601f95f90a30f3d",
+        "input_tokens": 1711,
+        "output_tokens": 21,
+        "elapsed_ms": 1044,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      },
+      {
+        "round": 2,
+        "requested_model": "ibm-granite/granite-4.1-8b",
+        "returned_model": "ibm-granite/granite-4.1-8b",
+        "upstream_provider": "CoreWeave",
+        "provider_order": [
+          "CoreWeave"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "33e3fca56df743d5",
+        "raw_response_hash": "caca682854e01ebd",
+        "input_tokens": 1783,
+        "output_tokens": 155,
+        "elapsed_ms": 1526,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      }
+    ]
+  },
+  "measurements": {
+    "calls": 1,
+    "rounds": 2,
+    "input_tokens": 3494,
+    "output_tokens": 176,
+    "result_bytes": 197,
+    "elapsed_ms": 2570,
+    "duplicate_calls": 0,
+    "stop_reason": "submitted",
+    "validation_diagnostics": 0,
+    "prompt_bytes": 9743,
+    "intent_preserved": true,
+    "gap_recall": null,
+    "unsupported_claims": null,
+    "typed_decision_review_required": true
+  }
+}
