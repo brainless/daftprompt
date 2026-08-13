@@ -22,6 +22,9 @@
 //!   --request "continue closing the Task 0 blockers" \
 //!   --scripted-fixture crates/task-zero-lab/fixtures/helper/search-then-submit.json \
 //!   --prompt-patterns-dir crates/task-zero-lab/fixtures/prompt_patterns
+//! cargo run --bin task_zero_lab -- helper --repo . --rev HEAD --epics 014 \
+//!   --request "continue closing the Task 0 blockers" \
+//!   --live-llama-cpp --llama-cpp-model qwen3.5-0.8b
 //! ```
 
 use std::path::PathBuf;
@@ -123,8 +126,9 @@ enum Command {
     /// Render a prompt via the Epic 014 Task 5 optional helper-refinement
     /// stage. Omitting `--scripted-fixture` runs the always-available
     /// disabled path, byte-identical to `prompt` (Task 5 acceptance
-    /// criterion). Live OpenRouter execution is opt-in and requires an exact
-    /// model, pinned provider order, and OPENROUTER_API_KEY.
+    /// criterion). Live execution is opt-in: either `--live-openrouter`
+    /// (requires OPENROUTER_API_KEY) or `--live-llama-cpp` (requires a
+    /// locally-running llama-server).
     Helper {
         #[arg(long)] repo: PathBuf,
         #[arg(long, default_value = "HEAD")] rev: String,
@@ -139,8 +143,8 @@ enum Command {
         /// `crates/task-zero-lab/fixtures/helper/`). Omit to run disabled.
         #[arg(long)] scripted_fixture: Option<PathBuf>,
         /// Explicitly enable credentialed OpenRouter execution. Mutually
-        /// exclusive with `--scripted-fixture`.
-        #[arg(long, conflicts_with = "scripted_fixture")]
+        /// exclusive with `--scripted-fixture` and `--live-llama-cpp`.
+        #[arg(long, conflicts_with_all = ["scripted_fixture", "live_llama_cpp"])]
         live_openrouter: bool,
         /// Exact OpenRouter author/model ID; routed aliases are rejected.
         #[arg(long, requires = "live_openrouter")]
@@ -153,6 +157,22 @@ enum Command {
         openrouter_temperature: f32,
         #[arg(long, requires = "live_openrouter", default_value_t = task_zero_lab::openrouter_helper::DEFAULT_OUTPUT_LIMIT)]
         openrouter_output_limit: u32,
+        /// Explicitly enable local llama.cpp execution via llama-server.
+        /// No API key or network access required. Mutually exclusive with
+        /// `--scripted-fixture` and `--live-openrouter`.
+        #[arg(long, conflicts_with_all = ["scripted_fixture", "live_openrouter"])]
+        live_llama_cpp: bool,
+        /// Model name to pass to llama-server (informational; the server
+        /// loads whatever model was specified at startup).
+        #[arg(long, requires = "live_llama_cpp", default_value = "qwen3.5-0.8b")]
+        llama_cpp_model: String,
+        /// llama-server base URL.
+        #[arg(long, requires = "live_llama_cpp", default_value = "http://localhost:8080")]
+        llama_cpp_url: String,
+        #[arg(long, requires = "live_llama_cpp", default_value_t = task_zero_lab::llama_cpp_helper::DEFAULT_TEMPERATURE)]
+        llama_cpp_temperature: f32,
+        #[arg(long, requires = "live_llama_cpp", default_value_t = task_zero_lab::llama_cpp_helper::DEFAULT_OUTPUT_LIMIT)]
+        llama_cpp_output_limit: u32,
         #[arg(long, default_value_t = task_zero_lab::helper::HelperPolicy::default().max_rounds)] max_rounds: usize,
         #[arg(long, default_value_t = task_zero_lab::helper::HelperPolicy::default().max_calls)] max_calls: usize,
         #[arg(long, default_value_t = task_zero_lab::helper::HelperPolicy::default().max_result_bytes)] max_result_bytes: usize,
@@ -270,6 +290,11 @@ fn main() -> anyhow::Result<()> {
             openrouter_provider,
             openrouter_temperature,
             openrouter_output_limit,
+            live_llama_cpp,
+            llama_cpp_model,
+            llama_cpp_url,
+            llama_cpp_temperature,
+            llama_cpp_output_limit,
             max_rounds,
             max_calls,
             max_result_bytes,
@@ -333,6 +358,26 @@ fn main() -> anyhow::Result<()> {
                     };
                     let adapter_name = format!("openrouter:{}", config.model);
                     let mut model = task_zero_lab::openrouter_helper::OpenRouterHelperModel::new(api_key, config)?;
+                    task_zero_lab::helper::refine_prompt(
+                        &extraction,
+                        &packet,
+                        &prompt_request,
+                        prompt_budget,
+                        &policy,
+                        Some(&mut model),
+                        &patterns,
+                        &adapter_name,
+                    )?
+                }
+                None if live_llama_cpp => {
+                    let config = task_zero_lab::llama_cpp_helper::LlamaCppHelperConfig {
+                        model: llama_cpp_model.clone(),
+                        base_url: llama_cpp_url,
+                        temperature: llama_cpp_temperature,
+                        output_limit: llama_cpp_output_limit,
+                    };
+                    let adapter_name = format!("llama_cpp:{}", config.model);
+                    let mut model = task_zero_lab::llama_cpp_helper::LlamaCppHelperModel::new(config)?;
                     task_zero_lab::helper::refine_prompt(
                         &extraction,
                         &packet,

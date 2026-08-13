@@ -2226,3 +2226,63 @@ evidence-gap exit guidance as Granite but did not follow it.
 - Detailed artifacts: 36 sanitized JSON files under
   `epics/research/task-zero-lab/matrix-2026-08-13/` (Granite 12, Llama 12,
   Mistral Nemo 12).
+
+### 2026-08-13 — Local Qwen 3.5 0.8B via llama.cpp replaces Llama/DeepInfra
+
+- Parent criterion/question: Epic 014 Task 5, "At least three open-weight
+  helpers are supported in experiments" — the 36-run matrix exposed two
+  provider-level failures (Llama/DeepInfra 11/12 `adapter_unavailable`,
+  Mistral Nemo/DeepInfra 11/12 `low_marginal_yield`). Rather than chasing
+  hosted provider fixes, substitute a locally-running Qwen 3.5 0.8B via
+  llama.cpp, eliminating provider-availability and routing variables entirely.
+- Repository and immutable revision: daftprompt working tree; no model weights
+  or private repository inputs were transmitted to any external service.
+- Candidate qualification: Qwen 3.5 0.8B is Apache-2.0 licensed, 0.8B
+  parameters (well under the 10B sub-tier), and the GGUF
+  (`unsloth/Qwen3.5-0.8B-GGUF:UD-Q4_K_XL`, 533 MB) is present locally at
+  `/Users/brainless/hf_models/models--unsloth--Qwen3.5-0.8B-GGUF/`. The local
+  `~/Projects/llm-sdk` already defines `LlamaCppClient` (OpenAI-compatible
+  HTTP client for llama-server at localhost:8080) and a `QWEN_3_5_0_8B_ID`
+  constant.
+- Infrastructure: llama-server v10360 installed at `/opt/homebrew/bin/llama-server`
+  (Apple Silicon, Metal GPU offload). Smoke test confirmed: model loads in
+  ~1 s, returns valid JSON chat completions at ~100 tok/s, responds to
+  tool-call-shaped prompts. The model is a thinking model (returns
+  `reasoning_content`) and wraps JSON in markdown code fences — the adapter
+  must strip fences before parsing.
+- Harness change: new `LlamaCppHelperModel` adapter implementing `HelperModel`
+  via `llm_sdk::llama_cpp::LlamaCppClient`. Simpler than the OpenRouter
+  adapter: no API key, no provider routing, no ZDR/data-collection fields, no
+  `response_format` parameter (model may ignore it). Local inference means
+  zero cost, zero network dependency, and zero provider-availability risk.
+  New `--live-llama-cpp` CLI mode in `task_zero_lab helper`.
+- Validated findings: local execution eliminates the two failure modes that
+  dominated the hosted matrix (provider unavailability and provider-specific
+  routing). The 0.8B model's small size means it may struggle with the full
+  helper output schema — this is model-quality evidence, not a transport
+  failure, and is exactly what the experiment needs to measure.
+- Rejected or unsupported interpretations: local availability does not
+  establish that the 0.8B model will produce useful helper submissions or
+  follow gap-exit guidance. The thinking-model `reasoning_content` field and
+  markdown-fenced JSON are known quirks, not confirmed protocol failures;
+  the adapter handles them defensively.
+- Remaining gaps: the 0.8B model hit the 2048-token output limit in both
+  smoke rounds (24 s and 22 s, 2048 output tokens each, `stop_reason: length`).
+  The model generates extensive `reasoning_content` before producing JSON and
+  never completed a helper submission. This is model-quality evidence, not a
+  transport or adapter failure — the truncation was correctly classified and
+  the deterministic baseline survived byte-identically. The 9B model
+  (`models--unsloth--Qwen3.5-9B-GGUF`, also present locally) may perform
+  better on the helper schema and deserves its own smoke. No Task 5 criterion
+  is checked until repeated experiment evidence exists across at least three
+  models.
+- User decision or pending decision: user approved replacing Llama/DeepInfra
+  with local Qwen 3.5 0.8B and implementing the adapter.
+- Next iteration: smoke test Qwen 3.5 9B through the same adapter (same
+  llama-server, different model file), then run the fixed matrix with
+  Granite/CoreWeave and the best-performing local Qwen as the three-helper
+  set.
+- Detailed artifacts: `crates/task-zero-lab/src/llama_cpp_helper.rs` (new
+  adapter, 9 unit tests), updated `main.rs` (`--live-llama-cpp` mode),
+  updated `openrouter_helper_experiment.rs` (`LiveLlamaCpp` subcommand),
+  `/tmp/llama-cpp-smoke-report.json` (temporary live smoke artifact).

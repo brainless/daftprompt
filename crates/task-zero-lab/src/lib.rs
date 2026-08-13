@@ -44,7 +44,9 @@
 //! - [`helper`] (Task 5): optional, stateless helper refinement behind a
 //!   closed operation catalog. The Task 4 baseline stays fully usable when a
 //!   helper is disabled or unavailable. [`openrouter_helper`] provides the
-//!   explicit credentialed hosted adapter through the local `llm-sdk`.
+//!   explicit credentialed hosted adapter through the local `llm-sdk`;
+//!   [`llama_cpp_helper`] provides a local adapter via llama-server
+//!   (OpenAI-compatible, no credentials or network required).
 
 pub mod content_identity;
 pub mod git_snapshot;
@@ -52,6 +54,7 @@ pub mod graph;
 pub mod graph_build;
 pub mod helper;
 pub mod index_coverage;
+pub mod llama_cpp_helper;
 pub mod markdown_extract;
 pub mod openrouter_helper;
 pub mod replay;

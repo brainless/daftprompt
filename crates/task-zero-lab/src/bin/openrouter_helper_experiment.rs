@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use task_zero_lab::{
     helper::{self, HelperModel, HelperPolicy},
+    llama_cpp_helper::{LlamaCppHelperConfig, LlamaCppHelperModel},
     openrouter_helper::{
         OpenRouterHelperConfig, OpenRouterHelperModel, DEFAULT_OUTPUT_LIMIT, DEFAULT_TEMPERATURE,
     },
@@ -46,6 +47,23 @@ enum Command {
         /// Print only sanitized OpenRouter status/error_type diagnostics to stderr.
         #[arg(long)]
         diagnose_openrouter: bool,
+    },
+    /// Run experiment against a local llama-server (no API key or network).
+    LiveLlamaCpp {
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        #[arg(long, default_value = "HEAD")]
+        rev: String,
+        #[arg(long, default_value = "qwen3.5-0.8b")]
+        model: String,
+        #[arg(long, default_value = "http://localhost:8080")]
+        url: String,
+        #[arg(long)]
+        case: String,
+        #[arg(long)]
+        repetition: u32,
+        #[arg(long)]
+        output: PathBuf,
     },
     Replay {
         #[arg(long)]
@@ -272,8 +290,6 @@ fn main() -> anyhow::Result<()> {
                         .negative_constraints
                         .iter()
                         .all(|c| rendered.text.contains(c)),
-                // These semantic measurements require disclosure review of
-                // the typed submission; never fabricate them automatically.
                 gap_recall: None,
                 unsupported_claims: None,
                 typed_decision_review_required: true,
@@ -287,6 +303,100 @@ fn main() -> anyhow::Result<()> {
                 !json.contains("OPENROUTER_API_KEY") && !json.contains("sk-or-"),
                 "refusing artifact containing credential marker"
             );
+            std::fs::write(&output, json)?;
+            eprintln!("wrote sanitized artifact {}", output.display());
+        }
+        Command::LiveLlamaCpp {
+            repo,
+            rev,
+            model,
+            url,
+            case,
+            repetition,
+            output,
+        } => {
+            anyhow::ensure!(repetition > 0, "repetition is one-based");
+            let (graph, packet, request, patterns, policy) = frozen_inputs(&repo, &rev, &case)?;
+            let graph_json = graph.to_normalized_json()?;
+            let packet_json = packet.to_normalized_json()?;
+            let patterns_json = serde_json::to_vec(&patterns)?;
+            let policy_json = serde_json::to_vec(&policy)?;
+            let config = LlamaCppHelperConfig {
+                model: model.clone(),
+                base_url: url,
+                temperature: task_zero_lab::llama_cpp_helper::DEFAULT_TEMPERATURE,
+                output_limit: task_zero_lab::llama_cpp_helper::DEFAULT_OUTPUT_LIMIT,
+            };
+            let inner = LlamaCppHelperModel::new(config)?;
+            let mut recorder = DecisionRecorder::new(inner);
+            let (rendered, report) = helper::refine_prompt(
+                &graph,
+                &packet,
+                &request,
+                PromptBudget::default(),
+                &policy,
+                Some(&mut recorder),
+                &patterns,
+                &format!("llama_cpp:{model}"),
+            )?;
+            let case_spec = cases()
+                .into_iter()
+                .find(|candidate| candidate.id == case)
+                .unwrap();
+            let replay = SanitizedReplayArtifact {
+                schema_version: REPLAY_SCHEMA_VERSION.into(),
+                case_id: case,
+                input_rendering_id: case_spec.rendering_id.into(),
+                input_rendering_hash: hash(request.original.as_bytes()),
+                mutation_constraints_hash: hash(request.negative_constraints.join("\n").as_bytes()),
+                input_rendering_provenance: case_spec.provenance.into(),
+                repository_revision: graph.resolved_commit.clone(),
+                graph_hash: hash(graph_json.as_bytes()),
+                packet_hash: hash(packet_json.as_bytes()),
+                prompt_patterns_hash: hash(&patterns_json),
+                model_id: model,
+                repetition,
+                policy_hash: hash(&policy_json),
+                prompt_template_version: PROMPT_TEMPLATE_VERSION.into(),
+                decisions: recorder.decisions().to_vec(),
+                inferences: report.inferences.clone(),
+            };
+            replay.validate()?;
+            let measurements = Measurements {
+                calls: report.calls.len(),
+                rounds: report.rounds,
+                input_tokens: report
+                    .inferences
+                    .iter()
+                    .filter_map(|i| i.input_tokens)
+                    .map(u64::from)
+                    .sum(),
+                output_tokens: report
+                    .inferences
+                    .iter()
+                    .filter_map(|i| i.output_tokens)
+                    .map(u64::from)
+                    .sum(),
+                result_bytes: report.calls.iter().map(|c| c.result_bytes).sum(),
+                elapsed_ms: report.inferences.iter().map(|i| i.elapsed_ms).sum(),
+                duplicate_calls: report.duplicate_calls,
+                stop_reason: report.stop_reason,
+                validation_diagnostics: report.diagnostics.len(),
+                prompt_bytes: rendered.byte_count,
+                intent_preserved: rendered.text.contains(&request.original)
+                    && request
+                        .negative_constraints
+                        .iter()
+                        .all(|c| rendered.text.contains(c)),
+                gap_recall: None,
+                unsupported_claims: None,
+                typed_decision_review_required: true,
+            };
+            let artifact = ExperimentArtifact {
+                replay,
+                measurements,
+            };
+            let json = serde_json::to_string_pretty(&artifact)?;
             std::fs::write(&output, json)?;
             eprintln!("wrote sanitized artifact {}", output.display());
         }
