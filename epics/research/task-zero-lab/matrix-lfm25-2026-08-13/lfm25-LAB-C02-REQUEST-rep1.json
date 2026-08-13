@@ -1,0 +1,166 @@
+{
+  "replay": {
+    "schema_version": "task-zero-helper-replay-v1",
+    "case_id": "LAB-C02-REQUEST",
+    "input_rendering_id": "derived:daftprompt-graph:C02-expert-sanitized:v1",
+    "input_rendering_hash": "5fd2bbac8d82f864",
+    "mutation_constraints_hash": "67ff3ae8266abc5a",
+    "input_rendering_provenance": "Exact sanitized manifest.md §3 C02 expert rendering replayed against the daftprompt Task Zero graph; derived Task 5 helper control, not canonical C02 or Task 6 evidence",
+    "repository_revision": "e34ebc68499cacd18e62903333ed6750cde1c4d1",
+    "graph_hash": "8439ff2642d7c18a",
+    "packet_hash": "a8ac1d9faca53c99",
+    "prompt_patterns_hash": "e86ab65665f2ea5c",
+    "model_id": "LiquidAI/LFM2.5-2.6B-GGUF",
+    "repetition": 1,
+    "policy_hash": "5aabc729988b81c1",
+    "prompt_template_version": "task-zero-baseline-v1",
+    "decisions": [
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "search_graph",
+          "query": "LOG-019 admin filters review queue exporting produces empty file expected filtered rows PRD earlier decisions implementation tests decision"
+        }
+      },
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "search_graph",
+          "query": "LOG-019 admin filters review queue export empty file"
+        }
+      },
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "search_graph",
+          "query": "LOG-019 admin filters review queue export empty file"
+        }
+      },
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "search_graph",
+          "query": "LOG-019 admin filters review queue export empty file"
+        }
+      }
+    ],
+    "inferences": [
+      {
+        "round": 1,
+        "requested_model": "LiquidAI/LFM2.5-2.6B-GGUF",
+        "returned_model": "LiquidAI/LFM2.5-2.6B-GGUF",
+        "upstream_provider": null,
+        "provider_order": [
+          "local"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": false,
+        "data_collection": "none",
+        "zdr": false,
+        "temperature": 0.1,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "d88b840f8b8367fc",
+        "raw_response_hash": "5aaafbba1717970b",
+        "input_tokens": 1837,
+        "output_tokens": 50,
+        "elapsed_ms": 2021,
+        "stop_reason": "stop",
+        "validation_diagnostics": [
+          "llama_cpp output used native tool-call format (converted to JSON before parsing)"
+        ]
+      },
+      {
+        "round": 2,
+        "requested_model": "LiquidAI/LFM2.5-2.6B-GGUF",
+        "returned_model": "LiquidAI/LFM2.5-2.6B-GGUF",
+        "upstream_provider": null,
+        "provider_order": [
+          "local"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": false,
+        "data_collection": "none",
+        "zdr": false,
+        "temperature": 0.1,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "2733cb07afbc64fc",
+        "raw_response_hash": "86664f1c42b14aae",
+        "input_tokens": 2042,
+        "output_tokens": 38,
+        "elapsed_ms": 2028,
+        "stop_reason": "stop",
+        "validation_diagnostics": [
+          "llama_cpp output used native tool-call format (converted to JSON before parsing)"
+        ]
+      },
+      {
+        "round": 3,
+        "requested_model": "LiquidAI/LFM2.5-2.6B-GGUF",
+        "returned_model": "LiquidAI/LFM2.5-2.6B-GGUF",
+        "upstream_provider": null,
+        "provider_order": [
+          "local"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": false,
+        "data_collection": "none",
+        "zdr": false,
+        "temperature": 0.1,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "20ff16d38dc44238",
+        "raw_response_hash": "86664f1c42b14aae",
+        "input_tokens": 2223,
+        "output_tokens": 37,
+        "elapsed_ms": 2171,
+        "stop_reason": "stop",
+        "validation_diagnostics": [
+          "llama_cpp output used native tool-call format (converted to JSON before parsing)"
+        ]
+      },
+      {
+        "round": 4,
+        "requested_model": "LiquidAI/LFM2.5-2.6B-GGUF",
+        "returned_model": "LiquidAI/LFM2.5-2.6B-GGUF",
+        "upstream_provider": null,
+        "provider_order": [
+          "local"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": false,
+        "data_collection": "none",
+        "zdr": false,
+        "temperature": 0.1,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "1862bd6a5093f531",
+        "raw_response_hash": "86664f1c42b14aae",
+        "input_tokens": 2404,
+        "output_tokens": 37,
+        "elapsed_ms": 4640,
+        "stop_reason": "stop",
+        "validation_diagnostics": [
+          "llama_cpp output used native tool-call format (converted to JSON before parsing)"
+        ]
+      }
+    ]
+  },
+  "measurements": {
+    "calls": 4,
+    "rounds": 4,
+    "input_tokens": 8506,
+    "output_tokens": 162,
+    "result_bytes": 2214,
+    "elapsed_ms": 10860,
+    "duplicate_calls": 2,
+    "stop_reason": "low_marginal_yield",
+    "validation_diagnostics": 4,
+    "prompt_bytes": 9009,
+    "intent_preserved": true,
+    "gap_recall": null,
+    "unsupported_claims": null,
+    "typed_decision_review_required": true
+  }
+}

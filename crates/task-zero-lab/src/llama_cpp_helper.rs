@@ -53,6 +53,139 @@ fn strip_markdown_code_fences(content: &str) -> &str {
     trimmed
 }
 
+/// Convert LFM2.5 native tool-call format to JSON.
+///
+/// LFM2.5 models output tool calls as:
+/// `<|tool_call_start|>[operation_name(arg1="value1")]<|tool_call_end|>`
+///
+/// or in a nested schema-mimicking form:
+/// `<|tool_call_start|>[tool_call(step='tool_call', value={'op': '...', ...})]<|tool_call_end|>`
+///
+/// This function detects that format and converts it to the JSON envelope
+/// expected by [`HelperModelResponse`]: `{"step":"tool_call","value":{...}}`.
+///
+/// Returns `None` if the content is not in native tool-call format (falls
+/// through to normal JSON parsing).
+fn convert_lfm_tool_call(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    let after_start = trimmed.strip_prefix("<|tool_call_start|>")?;
+    let after_end = after_start.strip_suffix("<|tool_call_end|>")?;
+    let inner = after_end.trim();
+    // Expected: [operation_name(arg1="value1", arg2="value2")]
+    let inner = inner.strip_prefix('[')?.strip_suffix(']')?;
+    // Split at first '(' to get operation name and args.
+    let paren_pos = inner.find('(')?;
+    let op_name = &inner[..paren_pos];
+    let args_str = inner[paren_pos + 1..].strip_suffix(')')?;
+
+    // Handle the nested schema-mimicking form: tool_call(step='...', value={...})
+    // In this case, the actual operation is inside the value dict.
+    if op_name == "tool_call" {
+        // Try to extract the 'value' dict which contains the real operation.
+        // Look for value= pattern and extract the dict.
+        if let Some(value_start) = args_str.find("value=") {
+            let value_part = args_str[value_start + 6..].trim();
+            // The value is a Python-style dict like {'op': 'search_graph', 'query': '...'}
+            if let Some(dict_inner) = value_part.strip_prefix('{').and_then(|s| {
+                // Find matching closing brace
+                let mut depth = 1;
+                for (i, c) in s.char_indices() {
+                    match c {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                return Some(&s[..i]);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                None
+            }) {
+                return parse_python_dict_to_json(dict_inner);
+            }
+        }
+    }
+
+    // Standard direct format: [operation_name(args)]
+    let mut value = serde_json::json!({"op": op_name});
+    if !args_str.trim().is_empty() {
+        parse_args_into_value(args_str, &mut value);
+    }
+    Some(serde_json::json!({"step": "tool_call", "value": value}).to_string())
+}
+
+/// Parse a Python-style dict body (without braces) into a JSON string
+/// matching the `HelperModelResponse` envelope.
+///
+/// Handles: `{'op': 'search_graph', 'query': '...'}`
+fn parse_python_dict_to_json(dict_body: &str) -> Option<String> {
+    let mut op_name = None;
+    let mut value = serde_json::json!({});
+
+    for part in split_python_dict_entries(dict_body) {
+        let part = part.trim();
+        if let Some(colon_pos) = part.find(':') {
+            let key = part[..colon_pos].trim().trim_matches('\'').trim_matches('"');
+            let val = part[colon_pos + 1..].trim().trim_matches('\'').trim_matches('"');
+            if key == "op" {
+                op_name = Some(val.to_string());
+            } else {
+                value[key] = serde_json::Value::String(val.to_string());
+            }
+        }
+    }
+
+    let op = op_name?;
+    value["op"] = serde_json::Value::String(op);
+    Some(serde_json::json!({"step": "tool_call", "value": value}).to_string())
+}
+
+/// Split a Python dict body by top-level commas (not inside quotes or braces).
+fn split_python_dict_entries(body: &str) -> Vec<&str> {
+    let mut entries = Vec::new();
+    let mut depth = 0;
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut last_start = 0;
+
+    for (i, c) in body.char_indices() {
+        match c {
+            '\'' if !in_double_quote => in_single_quote = !in_single_quote,
+            '"' if !in_single_quote => in_double_quote = !in_double_quote,
+            '{' if !in_single_quote && !in_double_quote => depth += 1,
+            '}' if !in_single_quote && !in_double_quote => depth -= 1,
+            ',' if !in_single_quote && !in_double_quote && depth == 0 => {
+                entries.push(&body[last_start..i]);
+                last_start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if last_start < body.len() {
+        entries.push(&body[last_start..]);
+    }
+    entries
+}
+
+/// Parse comma-separated key=value args into a JSON value.
+fn parse_args_into_value(args_str: &str, value: &mut serde_json::Value) {
+    for arg in args_str.split(',') {
+        let arg = arg.trim();
+        if let Some(eq_pos) = arg.find('=') {
+            let key = arg[..eq_pos].trim();
+            let val = arg[eq_pos + 1..].trim();
+            // Strip surrounding quotes from string values.
+            let val = val
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .unwrap_or(val);
+            value[key] = serde_json::Value::String(val.to_string());
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LlamaCppHelperConfig {
     pub model: String,
@@ -164,11 +297,18 @@ impl HelperModel for LlamaCppHelperModel {
         // (Qwen 3.5) commonly wrap JSON in ```json ... ```.
         let raw_content = choice.message.content.clone().unwrap_or_default();
         let content = strip_markdown_code_fences(&raw_content);
+        // Convert LFM2.5 native tool-call format to JSON if detected.
+        // LFM2.5 models output `<|tool_call_start|>[op(args)]<|tool_call_end|>`
+        // instead of JSON; convert before attempting deserialization.
+        let (content, lfm_converted) = match convert_lfm_tool_call(content) {
+            Some(json) => (json, true),
+            None => (content.to_string(), false),
+        };
         // Parse into HelperModelResponse (no host-only variants).
-        let parsed = serde_json::from_str::<HelperModelResponse>(content);
+        let parsed = serde_json::from_str::<HelperModelResponse>(&content);
         // A response that claimed a host-only step is rejected as invalid.
         let forged_step = if parsed.is_err() {
-            claimed_host_only_step(content)
+            claimed_host_only_step(&content)
         } else {
             None
         };
@@ -197,9 +337,15 @@ impl HelperModel for LlamaCppHelperModel {
             (Ok(_), _) => Vec::new(),
         };
         // Report if fences were stripped (useful diagnostic for model behavior).
-        if raw_content != content {
+        if raw_content != content && !lfm_converted {
             validation_diagnostics.push(format!(
                 "llama_cpp output wrapped in markdown code fences (stripped before parsing)"
+            ));
+        }
+        // Report if native tool-call format was converted.
+        if lfm_converted {
+            validation_diagnostics.push(format!(
+                "llama_cpp output used native tool-call format (converted to JSON before parsing)"
             ));
         }
         self.latest_record = Some(InferenceRecord {
@@ -333,6 +479,50 @@ mod tests {
     fn strip_markdown_code_fences_handles_inline_fence() {
         let inline = "```json\n{\"ok\":true}\n```";
         assert_eq!(strip_markdown_code_fences(inline), "{\"ok\":true}");
+    }
+
+    #[test]
+    fn convert_lfm_tool_call_handles_native_format() {
+        let native = "<|tool_call_start|>[get_coverage()]<|tool_call_end|>";
+        let json = convert_lfm_tool_call(native).unwrap();
+        let parsed: crate::helper::HelperModelResponse = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            parsed,
+            crate::helper::HelperModelResponse::ToolCall(crate::helper::HelperOperation::GetCoverage)
+        ));
+    }
+
+    #[test]
+    fn convert_lfm_tool_call_handles_search_with_args() {
+        let native = "<|tool_call_start|>[search_graph(query=\"Epic 020\")]<|tool_call_end|>";
+        let json = convert_lfm_tool_call(native).unwrap();
+        let parsed: crate::helper::HelperModelResponse = serde_json::from_str(&json).unwrap();
+        match parsed {
+            crate::helper::HelperModelResponse::ToolCall(
+                crate::helper::HelperOperation::SearchGraph { query },
+            ) => assert_eq!(query, "Epic 020"),
+            _ => panic!("expected SearchGraph"),
+        }
+    }
+
+    #[test]
+    fn convert_lfm_tool_call_returns_none_for_json() {
+        let json = r#"{"step":"tool_call","value":{"op":"get_coverage"}}"#;
+        assert!(convert_lfm_tool_call(json).is_none());
+    }
+
+    #[test]
+    fn convert_lfm_tool_call_handles_nested_schema_form() {
+        // LFM2.5 actual output form: tool_call(step='tool_call', value={...})
+        let native = r#"<|tool_call_start|>[tool_call(step='tool_call', value={'op': 'search_graph', 'query': 'Epic 020 analysis'})]<|tool_call_end|>"#;
+        let json = convert_lfm_tool_call(native).unwrap();
+        let parsed: crate::helper::HelperModelResponse = serde_json::from_str(&json).unwrap();
+        match parsed {
+            crate::helper::HelperModelResponse::ToolCall(
+                crate::helper::HelperOperation::SearchGraph { query },
+            ) => assert_eq!(query, "Epic 020 analysis"),
+            _ => panic!("expected SearchGraph, got {:?}", parsed),
+        }
     }
 
     #[test]

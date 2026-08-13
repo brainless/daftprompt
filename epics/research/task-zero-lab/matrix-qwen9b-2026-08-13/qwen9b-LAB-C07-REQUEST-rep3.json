@@ -1,0 +1,138 @@
+{
+  "replay": {
+    "schema_version": "task-zero-helper-replay-v1",
+    "case_id": "LAB-C07-REQUEST",
+    "input_rendering_id": "derived:daftprompt-graph:C07-expert:v1",
+    "input_rendering_hash": "a6e6b48b36842a3f",
+    "mutation_constraints_hash": "edabecc9f065106e",
+    "input_rendering_provenance": "Exact manifest.md §3 C07 expert rendering replayed against the daftprompt Task Zero graph; derived Task 5 helper control, not canonical C07 or Task 6 evidence",
+    "repository_revision": "e34ebc68499cacd18e62903333ed6750cde1c4d1",
+    "graph_hash": "8439ff2642d7c18a",
+    "packet_hash": "a85e4fb5f26d0505",
+    "prompt_patterns_hash": "e86ab65665f2ea5c",
+    "model_id": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+    "repetition": 3,
+    "policy_hash": "5aabc729988b81c1",
+    "prompt_template_version": "task-zero-baseline-v1",
+    "decisions": [
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "search_graph",
+          "query": "email_ranking/mod.rs contains_date Unicode panic"
+        }
+      },
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "search_graph",
+          "query": "email_ranking/mod.rs contains_date"
+        }
+      },
+      {
+        "step": "submit",
+        "value": {
+          "candidate_claims": [],
+          "clarifications": [],
+          "clarified_objective_suggestion": null,
+          "proposed_gap_dispositions": [
+            {
+              "gap_locator": "email_ranking/mod.rs::contains_date",
+              "note": "Requested file and function not found in loaded graph; search results only show epic:011 constraints/tasks, not implementation code",
+              "proposed": "proposed_still_open"
+            }
+          ],
+          "selected_evidence": [],
+          "stop_reason": "evidence_gap"
+        }
+      }
+    ],
+    "inferences": [
+      {
+        "round": 1,
+        "requested_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+        "returned_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+        "upstream_provider": null,
+        "provider_order": [
+          "local"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": false,
+        "data_collection": "none",
+        "zdr": false,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "358c904e481bbaa3",
+        "raw_response_hash": "2ad60a11bf15927b",
+        "input_tokens": 1782,
+        "output_tokens": 119,
+        "elapsed_ms": 7815,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      },
+      {
+        "round": 2,
+        "requested_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+        "returned_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+        "upstream_provider": null,
+        "provider_order": [
+          "local"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": false,
+        "data_collection": "none",
+        "zdr": false,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "5720b84dd97a1a19",
+        "raw_response_hash": "6da98a2cf11a3721",
+        "input_tokens": 1929,
+        "output_tokens": 203,
+        "elapsed_ms": 13115,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      },
+      {
+        "round": 3,
+        "requested_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+        "returned_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+        "upstream_provider": null,
+        "provider_order": [
+          "local"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": false,
+        "data_collection": "none",
+        "zdr": false,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "b85bc9af4e25f496",
+        "raw_response_hash": "6c9f70279d3abb61",
+        "input_tokens": 2083,
+        "output_tokens": 441,
+        "elapsed_ms": 28463,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      }
+    ]
+  },
+  "measurements": {
+    "calls": 2,
+    "rounds": 3,
+    "input_tokens": 5794,
+    "output_tokens": 763,
+    "result_bytes": 824,
+    "elapsed_ms": 49393,
+    "duplicate_calls": 0,
+    "stop_reason": "submitted",
+    "validation_diagnostics": 0,
+    "prompt_bytes": 4858,
+    "intent_preserved": true,
+    "gap_recall": null,
+    "unsupported_claims": null,
+    "typed_decision_review_required": true
+  }
+}

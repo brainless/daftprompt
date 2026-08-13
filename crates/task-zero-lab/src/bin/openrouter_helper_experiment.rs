@@ -58,6 +58,9 @@ enum Command {
         model: String,
         #[arg(long, default_value = "http://localhost:8080")]
         url: String,
+        /// Temperature override; server-side default used if omitted.
+        #[arg(long)]
+        temperature: Option<f32>,
         #[arg(long)]
         case: String,
         #[arg(long)]
@@ -311,6 +314,7 @@ fn main() -> anyhow::Result<()> {
             rev,
             model,
             url,
+            temperature,
             case,
             repetition,
             output,
@@ -324,7 +328,8 @@ fn main() -> anyhow::Result<()> {
             let config = LlamaCppHelperConfig {
                 model: model.clone(),
                 base_url: url,
-                temperature: task_zero_lab::llama_cpp_helper::DEFAULT_TEMPERATURE,
+                temperature: temperature
+                    .unwrap_or(task_zero_lab::llama_cpp_helper::DEFAULT_TEMPERATURE),
                 output_limit: task_zero_lab::llama_cpp_helper::DEFAULT_OUTPUT_LIMIT,
             };
             let inner = LlamaCppHelperModel::new(config)?;

@@ -1,0 +1,110 @@
+{
+  "replay": {
+    "schema_version": "task-zero-helper-replay-v1",
+    "case_id": "LAB-C01-REQUEST",
+    "input_rendering_id": "derived:daftprompt-graph:C01-expert:v1",
+    "input_rendering_hash": "4eba136a1d28e220",
+    "mutation_constraints_hash": "76c5b5fbad71e291",
+    "input_rendering_provenance": "Exact manifest.md §3 C01 expert rendering replayed against the daftprompt Task Zero graph; derived Task 5 helper control, not canonical C01 or Task 6 evidence",
+    "repository_revision": "e34ebc68499cacd18e62903333ed6750cde1c4d1",
+    "graph_hash": "8439ff2642d7c18a",
+    "packet_hash": "757acb230a1fa305",
+    "prompt_patterns_hash": "e86ab65665f2ea5c",
+    "model_id": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+    "repetition": 1,
+    "policy_hash": "5aabc729988b81c1",
+    "prompt_template_version": "task-zero-baseline-v1",
+    "decisions": [
+      {
+        "step": "tool_call",
+        "value": {
+          "op": "search_graph",
+          "query": "Epic 020"
+        }
+      },
+      {
+        "step": "submit",
+        "value": {
+          "candidate_claims": [],
+          "clarifications": [
+            "Epic 020 is not available in the loaded graph scope"
+          ],
+          "clarified_objective_suggestion": "null",
+          "proposed_gap_dispositions": [
+            {
+              "gap_locator": "epic:020",
+              "note": "Requested artifact not found in loaded graph scope (epic:011-014 only)",
+              "proposed": "proposed_still_open"
+            }
+          ],
+          "selected_evidence": [],
+          "stop_reason": "evidence_gap"
+        }
+      }
+    ],
+    "inferences": [
+      {
+        "round": 1,
+        "requested_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+        "returned_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+        "upstream_provider": null,
+        "provider_order": [
+          "local"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": false,
+        "data_collection": "none",
+        "zdr": false,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "77561ec46ea6a1e3",
+        "raw_response_hash": "05f4903ff34744b0",
+        "input_tokens": 1777,
+        "output_tokens": 103,
+        "elapsed_ms": 16247,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      },
+      {
+        "round": 2,
+        "requested_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+        "returned_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+        "upstream_provider": null,
+        "provider_order": [
+          "local"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": false,
+        "data_collection": "none",
+        "zdr": false,
+        "temperature": 0.0,
+        "output_limit": 2048,
+        "protocol_version": "task-zero-helper-v1",
+        "prompt_hash": "33e3fca56df743d5",
+        "raw_response_hash": "e5e0f7d18f38c91d",
+        "input_tokens": 1861,
+        "output_tokens": 316,
+        "elapsed_ms": 27544,
+        "stop_reason": "stop",
+        "validation_diagnostics": []
+      }
+    ]
+  },
+  "measurements": {
+    "calls": 1,
+    "rounds": 2,
+    "input_tokens": 3638,
+    "output_tokens": 419,
+    "result_bytes": 197,
+    "elapsed_ms": 43791,
+    "duplicate_calls": 0,
+    "stop_reason": "submitted",
+    "validation_diagnostics": 0,
+    "prompt_bytes": 9099,
+    "intent_preserved": true,
+    "gap_recall": null,
+    "unsupported_claims": null,
+    "typed_decision_review_required": true
+  }
+}
