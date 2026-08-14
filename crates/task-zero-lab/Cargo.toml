@@ -16,6 +16,10 @@ path = "src/bin/openrouter_model_candidates.rs"
 name = "openrouter_helper_experiment"
 path = "src/bin/openrouter_helper_experiment.rs"
 
+[[bin]]
+name = "eval_runner"
+path = "src/bin/eval_runner.rs"
+
 [dependencies]
 daftprompt-indexer = { path = "../daftprompt-indexer" }
 # The `status` feature (needed for `Repository::is_dirty()`) is enabled only
@@ -42,6 +46,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 llm-sdk = { path = "../../../llm-sdk" }
 dotenvy = "0.15"
+chrono = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

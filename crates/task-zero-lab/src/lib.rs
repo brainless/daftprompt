@@ -48,7 +48,9 @@
 //!   [`llama_cpp_helper`] provides a local adapter via llama-server
 //!   (OpenAI-compatible, no credentials or network required).
 
+pub mod agent;
 pub mod content_identity;
+pub mod eval;
 pub mod git_snapshot;
 pub mod graph;
 pub mod graph_build;
@@ -57,7 +59,9 @@ pub mod index_coverage;
 pub mod llama_cpp_helper;
 pub mod markdown_extract;
 pub mod openrouter_helper;
-pub mod replay;
 pub mod packet;
 pub mod prompt;
+pub mod replay;
 pub mod run;
+pub mod scoring;
+pub mod worktree;

@@ -1,0 +1,12 @@
+[
+  {
+    "response_text": "## Epic 020 Analysis\n\nI've reviewed Epic 020 (akar component migration). Here are my findings:\n\n### Strengths\n- The epic correctly identifies the need to migrate from raw wgpu to akar components\n- Task ordering is logical: core infrastructure first, then UI components\n- Each task has clear acceptance criteria\n\n### Suggested Changes\n\n1. **Task 1 (Core Infrastructure)**: The `glyphon::FamilyOwned` usage needs verification against the current akar API. Consider adding a compatibility check task before the migration begins.\n\n2. **Task 3 (Button Components)**: The `akar_button` C wrapper reference should be updated — the current API uses `AkarButton` as the primary type. The C wrapper is a legacy compatibility layer.\n\n3. **Task 5 (Badge/Navbar)**: Similarly, `akar_badge` and `akar_navbar` wrappers should reference the primary Rust types rather than C FFI layers.\n\n4. **Prerequisites**: Epic 019 is listed as a prerequisite but the dependency relationship is not explicit in the task graph. Recommend adding an explicit `depends_on` edge.\n\n5. **Text Measurement**: The paragraph text-measurement code path needs dedicated testing — it's a known source of rendering edge cases with Unicode text.\n\n### Risk Assessment\n- Medium risk: component API surface may have drifted since the epic was authored\n- Low risk: the migration path is incremental (task-by-task)\n\n### Recommendation\nProceed with implementation after incorporating the suggested API updates above. No structural changes needed to the epic's task breakdown.",
+    "touched_files": [],
+    "diff": null,
+    "input_tokens": 4200,
+    "output_tokens": 380,
+    "elapsed_ms": 3200,
+    "stop_reason": "stop",
+    "diagnostics": ["read-only analysis; no file modifications proposed"]
+  }
+]
