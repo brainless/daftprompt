@@ -335,6 +335,44 @@ pub fn case_c01() -> EvalCase {
     }
 }
 
+/// Build the C02 eval case from manifest §3 (Keystone LOG-019, sanitized).
+/// Note: Keystone is a private repository. This fixture uses sanitized
+/// behavioral content only — no private raw content is included.
+pub fn case_c02() -> EvalCase {
+    EvalCase {
+        id: "C02".into(),
+        // Keystone repo path — may not exist locally; fixture designed for
+        // scripted/deterministic testing when the repo is unavailable.
+        repo_path: std::path::PathBuf::from("/Users/brainless/Projects/Keystone"),
+        revision: "5f4562688fd7dcf2101b88cf05c7d6e4bf0d22a4".into(),
+        expert_request:
+            "Examine LOG-019: when an admin filters the review queue, exporting produces an empty file. \
+             Expected the export to contain the filtered rows. Cross-check the PRD and earlier decisions, \
+             determine relevant implementation and tests, and decide whether to implement."
+                .into(),
+        non_expert_request: Some(
+            "Export doesn't work right on the filtered queue, can you look into LOG-019?".into(),
+        ),
+        negative_constraints: vec![
+            "Read-only investigation; no mutation is authorized until a human/product decision selects an implementation path.".into(),
+        ],
+        mutation_boundary: MutationBoundary::ReadOnly,
+        epics: vec![11, 12, 13, 14],
+        relevance: PracticalRelevanceSet {
+            expected_changes: vec![],
+            prohibited_changes: vec![],
+            verification_commands: vec![],
+            evidence_commits: vec![
+                "91ab196".into(),
+                "c06a7ad".into(),
+                "ce96e3a".into(),
+            ],
+            evidence_source: "011 Experiment 2, Real Keystone LOG-019 replay".into(),
+        },
+        rendering_id: "manifest:C02:expert".into(),
+    }
+}
+
 /// Build the C07 eval case from manifest §3.
 pub fn case_c07() -> EvalCase {
     EvalCase {
@@ -382,7 +420,7 @@ pub fn case_c07() -> EvalCase {
 
 /// All available eval cases.
 pub fn all_cases() -> Vec<EvalCase> {
-    vec![case_c01(), case_c07()]
+    vec![case_c01(), case_c02(), case_c07()]
 }
 
 #[cfg(test)]
@@ -416,6 +454,19 @@ mod tests {
             c.mutation_boundary,
             MutationBoundary::RepositoryChangesOnlyWhenExplicitlyRequested
         );
+    }
+
+    #[test]
+    fn c02_case_fixture_has_required_fields() {
+        let c = case_c02();
+        assert_eq!(c.id, "C02");
+        assert!(!c.expert_request.is_empty());
+        assert!(c.non_expert_request.is_some());
+        assert!(!c.negative_constraints.is_empty());
+        assert_eq!(c.mutation_boundary, MutationBoundary::ReadOnly);
+        // C02 is read-only investigation, no expected changes
+        assert!(c.relevance.expected_changes.is_empty());
+        assert!(!c.relevance.evidence_commits.is_empty());
     }
 
     #[test]

@@ -2504,7 +2504,7 @@ evidence-gap exit guidance as Granite but did not follow it.
 
 ### 2026-08-14 — Task 6 eval harness implementation
 
-- Parent criterion/question: Epic 014 Task 6, all thirteen bullets — build
+- Parent criterion/question: Epic 014 Task 6, all fourteen bullets — build
   the replay, baselines, ablations, and prompt assessment harness that
   compares prompt variants and scores task outcomes independently.
 - Repository and immutable revision: daftprompt `HEAD` (working tree);

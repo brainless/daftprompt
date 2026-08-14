@@ -39,11 +39,14 @@ pub trait CodingAgent {
 // ── Scripted agent for replay/testing ──────────────────────────────────
 
 /// A deterministic, credential-free scripted agent for offline replay.
-/// Returns pre-recorded responses in order.
+/// Returns pre-recorded responses, cycling through them for multi-repetition
+/// replay (e.g., 3 responses for 3 repetitions).
 pub struct ScriptedCodingAgent {
     responses: Vec<AgentResult>,
     adapter_name: String,
     model_name: String,
+    /// Current index for cycling through responses across repetitions.
+    index: std::cell::Cell<usize>,
 }
 
 impl ScriptedCodingAgent {
@@ -56,6 +59,7 @@ impl ScriptedCodingAgent {
             responses,
             adapter_name,
             model_name,
+            index: std::cell::Cell::new(0),
         }
     }
 
@@ -68,14 +72,22 @@ impl ScriptedCodingAgent {
             "scripted".into(),
         ))
     }
+
+    /// Reset the cycling index to 0 (for a new case or run).
+    pub fn reset(&self) {
+        self.index.set(0);
+    }
 }
 
 impl CodingAgent for ScriptedCodingAgent {
     fn execute(&self, _prompt: &str) -> anyhow::Result<AgentResult> {
-        self.responses
-            .first()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("scripted agent has no responses"))
+        if self.responses.is_empty() {
+            return Err(anyhow::anyhow!("scripted agent has no responses"));
+        }
+        let idx = self.index.get();
+        let response = self.responses[idx % self.responses.len()].clone();
+        self.index.set(idx + 1);
+        Ok(response)
     }
 
     fn adapter_name(&self) -> &str {
@@ -383,6 +395,49 @@ mod tests {
         let result = agent.execute("any prompt").unwrap();
         assert_eq!(result.response_text, "done");
         assert_eq!(result.touched_files, vec!["foo.rs"]);
+    }
+
+    #[test]
+    fn scripted_agent_cycles_through_responses() {
+        let agent = ScriptedCodingAgent::new(
+            vec![
+                AgentResult {
+                    response_text: "first".into(),
+                    touched_files: vec!["a.rs".into()],
+                    diff: None,
+                    input_tokens: 10,
+                    output_tokens: 5,
+                    elapsed_ms: 100,
+                    stop_reason: Some("stop".into()),
+                    diagnostics: vec![],
+                },
+                AgentResult {
+                    response_text: "second".into(),
+                    touched_files: vec!["b.rs".into()],
+                    diff: None,
+                    input_tokens: 20,
+                    output_tokens: 10,
+                    elapsed_ms: 200,
+                    stop_reason: Some("stop".into()),
+                    diagnostics: vec![],
+                },
+            ],
+            "test".into(),
+            "test-model".into(),
+        );
+        // First call returns first response
+        let r1 = agent.execute("any").unwrap();
+        assert_eq!(r1.response_text, "first");
+        // Second call returns second response
+        let r2 = agent.execute("any").unwrap();
+        assert_eq!(r2.response_text, "second");
+        // Third call cycles back to first
+        let r3 = agent.execute("any").unwrap();
+        assert_eq!(r3.response_text, "first");
+        // Reset returns to first
+        agent.reset();
+        let r4 = agent.execute("any").unwrap();
+        assert_eq!(r4.response_text, "first");
     }
 
     #[test]

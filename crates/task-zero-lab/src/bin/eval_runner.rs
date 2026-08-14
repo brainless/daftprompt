@@ -30,7 +30,9 @@ use task_zero_lab::eval::{
     PromptVariantKind, EVAL_SCHEMA_VERSION,
 };
 use task_zero_lab::graph_build;
-use task_zero_lab::helper::{self, HelperPolicy};
+use task_zero_lab::helper::{self, HelperModel, HelperPolicy, ScriptedHelperModel};
+use task_zero_lab::llama_cpp_helper::{LlamaCppHelperConfig, LlamaCppHelperModel};
+use task_zero_lab::openrouter_helper::{OpenRouterHelperConfig, OpenRouterHelperModel};
 use task_zero_lab::packet::{self, PacketBudget};
 use task_zero_lab::prompt::{self, PromptBudget, PromptRequest};
 use task_zero_lab::scoring;
@@ -65,6 +67,15 @@ enum Command {
         /// Use the non-expert request rendering.
         #[arg(long)]
         non_expert: bool,
+        /// Helper model for the helper-refined variant (OpenRouter model ID).
+        #[arg(long)]
+        helper_model: Option<String>,
+        /// Helper provider for the helper-refined variant.
+        #[arg(long)]
+        helper_provider: Option<String>,
+        /// Scripted helper fixture for offline helper-refined variant.
+        #[arg(long)]
+        helper_scripted: Option<PathBuf>,
     },
     /// Run live evaluation against a local llama.cpp model.
     RunLlamaCpp {
@@ -84,6 +95,15 @@ enum Command {
         prompt_only: bool,
         #[arg(long)]
         non_expert: bool,
+        /// Helper model for the helper-refined variant (llama.cpp model ID).
+        #[arg(long)]
+        helper_model: Option<String>,
+        /// Helper llama.cpp URL for the helper-refined variant.
+        #[arg(long)]
+        helper_url: Option<String>,
+        /// Scripted helper fixture for offline helper-refined variant.
+        #[arg(long)]
+        helper_scripted: Option<PathBuf>,
     },
     /// Replay from pre-recorded scripted fixtures (offline, no credentials).
     Scripted {
@@ -91,6 +111,9 @@ enum Command {
         fixture: PathBuf,
         #[arg(long)]
         output: PathBuf,
+        /// Scripted helper fixture for offline helper-refined variant.
+        #[arg(long)]
+        helper_scripted: Option<PathBuf>,
     },
     /// Generate prompts for inspection (no agent, no scoring).
     Prompts {
@@ -102,6 +125,9 @@ enum Command {
         case: String,
         #[arg(long)]
         non_expert: bool,
+        /// Scripted helper fixture for offline helper-refined variant.
+        #[arg(long)]
+        helper_scripted: Option<PathBuf>,
     },
 }
 
@@ -118,6 +144,8 @@ fn build_prompt_variants(
     repo: &std::path::Path,
     rev: &str,
     non_expert: bool,
+    helper_model: Option<&mut Box<dyn HelperModel>>,
+    helper_adapter_name: &str,
 ) -> anyhow::Result<PromptVariants> {
     let request_text = if non_expert {
         case.non_expert_request.as_deref().unwrap_or(&case.expert_request)
@@ -169,16 +197,15 @@ fn build_prompt_variants(
             eprintln!("prompt-pattern diagnostics: {}", diagnostics.join("; "));
         }
         let policy = HelperPolicy::default();
-        // Try to run with the Granite 8B model (or use scripted if unavailable)
         let (rendered_h, report) = helper::refine_prompt(
             &graph,
             &pkt,
             &prompt_request,
             PromptBudget::default(),
             &policy,
-            None, // disabled helper for deterministic prompt-only mode
+            helper_model.map(|m| m.as_mut() as &mut dyn HelperModel),
             &patterns,
-            "disabled",
+            helper_adapter_name,
         )?;
         Some(PromptVariant {
             kind: PromptVariantKind::HelperRefined,
@@ -315,6 +342,9 @@ fn main() -> anyhow::Result<()> {
             output,
             prompt_only,
             non_expert,
+            helper_model,
+            helper_provider,
+            helper_scripted,
         } => {
             let _ = dotenvy::dotenv();
             let api_key = std::env::var("OPENROUTER_API_KEY").map_err(|_| {
@@ -326,8 +356,24 @@ fn main() -> anyhow::Result<()> {
                 temperature: 0.0,
                 max_tokens: 4096,
             };
-            let agent = OpenRouterCodingAgent::new(api_key, config);
-            run_and_report(&repo, &rev, &agent, repetitions, &output, prompt_only, non_expert)?;
+            let agent = OpenRouterCodingAgent::new(api_key.clone(), config);
+
+            // Build helper model for the helper-refined variant
+            let mut helper: Option<Box<dyn HelperModel>> = if let Some(path) = helper_scripted {
+                Some(Box::new(ScriptedHelperModel::from_fixture_file(&path)?))
+            } else if let (Some(hm), Some(hp)) = (helper_model, helper_provider) {
+                let h_config = OpenRouterHelperConfig {
+                    model: hm,
+                    provider_order: vec![hp],
+                    temperature: 0.0,
+                    output_limit: 2048,
+                };
+                Some(Box::new(OpenRouterHelperModel::new(api_key, h_config)?))
+            } else {
+                None
+            };
+            let helper_name = helper.as_ref().map(|_| "openrouter").unwrap_or("disabled").to_string();
+            run_and_report(&repo, &rev, &agent, repetitions, &output, prompt_only, non_expert, helper.as_mut(), &helper_name)?;
         }
         Command::RunLlamaCpp {
             repo,
@@ -338,6 +384,9 @@ fn main() -> anyhow::Result<()> {
             output,
             prompt_only,
             non_expert,
+            helper_model,
+            helper_url,
+            helper_scripted,
         } => {
             let config = LlamaCppAgentConfig {
                 model,
@@ -346,14 +395,37 @@ fn main() -> anyhow::Result<()> {
                 max_tokens: 4096,
             };
             let agent = LlamaCppCodingAgent::new(config);
-            run_and_report(&repo, &rev, &agent, repetitions, &output, prompt_only, non_expert)?;
+
+            // Build helper model for the helper-refined variant
+            let mut helper: Option<Box<dyn HelperModel>> = if let Some(path) = helper_scripted {
+                Some(Box::new(ScriptedHelperModel::from_fixture_file(&path)?))
+            } else if let Some(hm) = helper_model {
+                let h_url = helper_url.unwrap_or_else(|| "http://localhost:8080".into());
+                let h_config = LlamaCppHelperConfig {
+                    model: hm,
+                    base_url: h_url,
+                    temperature: 0.0,
+                    output_limit: 2048,
+                };
+                Some(Box::new(LlamaCppHelperModel::new(h_config)?))
+            } else {
+                None
+            };
+            let helper_name = helper.as_ref().map(|_| "llama_cpp").unwrap_or("disabled").to_string();
+            run_and_report(&repo, &rev, &agent, repetitions, &output, prompt_only, non_expert, helper.as_mut(), &helper_name)?;
         }
-        Command::Scripted { fixture, output } => {
+        Command::Scripted { fixture, output, helper_scripted } => {
             let agent = ScriptedCodingAgent::from_fixture(&fixture)?;
+            let mut helper: Option<Box<dyn HelperModel>> = if let Some(path) = helper_scripted {
+                Some(Box::new(ScriptedHelperModel::from_fixture_file(&path)?))
+            } else {
+                None
+            };
+            let helper_name = helper.as_ref().map(|_| "scripted").unwrap_or("disabled").to_string();
             let cases = all_cases();
             let mut case_reports = Vec::new();
             for case in &cases {
-                let variants = build_prompt_variants(case, &case.repo_path, &case.revision, false)?;
+                let variants = build_prompt_variants(case, &case.repo_path, &case.revision, false, helper.as_mut(), &helper_name)?;
                 let report = run_eval(case, &variants, &agent, 1, false)?;
                 case_reports.push(report);
             }
@@ -374,13 +446,20 @@ fn main() -> anyhow::Result<()> {
             rev,
             case,
             non_expert,
+            helper_scripted,
         } => {
             let cases = all_cases();
             let eval_case = cases
                 .iter()
                 .find(|c| c.id.eq_ignore_ascii_case(&case))
                 .ok_or_else(|| anyhow::anyhow!("unknown case: {case}"))?;
-            let variants = build_prompt_variants(eval_case, &repo, &rev, non_expert)?;
+            let mut helper: Option<Box<dyn HelperModel>> = if let Some(path) = helper_scripted {
+                Some(Box::new(ScriptedHelperModel::from_fixture_file(&path)?))
+            } else {
+                None
+            };
+            let helper_name = helper.as_ref().map(|_| "scripted").unwrap_or("disabled").to_string();
+            let variants = build_prompt_variants(eval_case, &repo, &rev, non_expert, helper.as_mut(), &helper_name)?;
             println!("graph_hash: {}", variants.graph_hash);
             println!("packet_hash: {}", variants.packet_hash);
             println!();
@@ -402,13 +481,33 @@ fn run_and_report(
     output: &std::path::Path,
     prompt_only: bool,
     non_expert: bool,
+    mut helper_model: Option<&mut Box<dyn HelperModel>>,
+    helper_adapter_name: &str,
 ) -> anyhow::Result<()> {
     let cases = all_cases();
     let mut case_reports = Vec::new();
 
     for case in &cases {
+        // Enforce case repository/revision identity: warn if CLI args drift
+        // from the case's pinned values. The case's pinned values take precedence.
+        if case.repo_path != repo {
+            eprintln!(
+                "warning: case {} pinned repo {} differs from CLI --repo {}; using case pinned repo",
+                case.id,
+                case.repo_path.display(),
+                repo.display()
+            );
+        }
+        if case.revision != rev {
+            eprintln!(
+                "warning: case {} pinned revision {} differs from CLI --rev {}; using case pinned revision",
+                case.id, case.revision, rev
+            );
+        }
+
         eprintln!("evaluating case {}", case.id);
-        let variants = build_prompt_variants(case, repo, rev, non_expert)?;
+        // Always use the case's pinned repo_path and revision, not the CLI args
+        let variants = build_prompt_variants(case, &case.repo_path, &case.revision, non_expert, helper_model.as_deref_mut(), helper_adapter_name)?;
         let report = run_eval(case, &variants, agent, repetitions, !prompt_only)?;
         case_reports.push(report);
     }
@@ -463,7 +562,7 @@ mod tests {
         if !case.repo_path.join(".git").exists() {
             return;
         }
-        let variants = build_prompt_variants(&case, &case.repo_path, "HEAD", false);
+        let variants = build_prompt_variants(&case, &case.repo_path, "HEAD", false, None, "disabled");
         // May fail if the repo isn't set up correctly, so just check it doesn't panic
         match variants {
             Ok(v) => assert!(v.variants.len() >= 2, "expected at least raw + deterministic"),
