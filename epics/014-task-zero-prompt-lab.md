@@ -3035,3 +3035,49 @@ evidence-gap exit guidance as Granite but did not follow it.
   `epics/research/task-zero-lab/live-2026-08-15/c07-report.json`,
   `epics/research/task-zero-lab/live-2026-08-15/c01-report.json`,
   `crates/task-zero-lab/src/eval.rs`, `src/worktree.rs`.
+
+### 2026-08-15 — Review of Task 6 worktree/patch-apply implementation
+
+- Parent criterion/question: review the latest Task 6 implementation and live
+  reports before accepting their task-outcome conclusions. No Task 6 checkbox
+  is changed by this review note; each item below remains pending until its
+  implementation, tests, and interpretation are reviewed separately.
+- Repository and immutable revision: daftprompt at `bc5e45b`; reviewed commits
+  `baef7d2` (worktree/patch-apply/scoring implementation) and `bc5e45b`
+  (fixture corrections and live-run record).
+- Review findings:
+  - **T6-R01 — C01 read-only/outcome contradiction (open):** `case_c01()`
+    declares a read-only request and mutation boundary, while its practical
+    relevance set requires `epics/020-*.md` to change. The patch adapter also
+    correctly tells the model not to emit a diff for read-only analysis. Split
+    the review and explicitly authorized revision phases, or otherwise make
+    the request, mutation boundary, and expected outcome internally
+    consistent before using C01 artifact recall as Task 6 evidence.
+  - **T6-R02 — untracked files absent from worktree ground truth (open):**
+    `EvalWorktree::capture_diff()` and `changed_files()` use `git diff HEAD`,
+    which omits untracked files. A model-created regression-test file can be
+    applied successfully yet disappear from the recorded diff, touched-file
+    list, precision/recall, and prohibition checks. Capture untracked files in
+    the task-outcome ground truth and add a regression test.
+  - **T6-R03 — worktree path is not repository-read capability (open):** the
+    `CodingAgent` boundary receives `worktree_path`, but the single-shot
+    `PatchApplyCodingAgent` sends only the rendered prompt to its model and
+    uses the path afterward solely as `git apply`'s working directory. Tighten
+    the API/docs/report language so this adapter is not described as able to
+    inspect the checkout; retain C07's zero-patch result as evidence of a
+    packet source-content gap, not coding-agent repository access.
+  - **T6-R04 — unsafe stale-worktree deletion (open):**
+    `EvalWorktree::create()` recursively deletes any existing sibling path
+    derived from its label without proving that the path belongs to this
+    harness, checking its type/link status, or confirming Git worktree
+    registration. Replace this with validated, non-destructive collision
+    handling and cover it with tests.
+- Validation: `RUSTC_WRAPPER= cargo test -p task-zero-lab --lib` built and ran
+  170 tests: 158 passed, including the new end-to-end patch/scoring test; 12
+  mocked HTTP transport tests failed because sandboxed socket binding returned
+  `Operation not permitted`. No failure implicated the reviewed patch path.
+- User decision: address the four review items sequentially with one delegated
+  implementation at a time; review, update this note/task status, and commit
+  each item before starting the next. Keep Task 6 acceptance checkboxes
+  unchanged unless the completed evidence satisfies their full wording.
+- Next iteration: T6-R01, then T6-R02, T6-R03, and T6-R04.
