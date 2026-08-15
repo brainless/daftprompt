@@ -1,0 +1,373 @@
+{
+  "schema_version": "task-zero-eval-v2",
+  "agent_adapter": "patch_apply_llama_cpp",
+  "agent_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+  "cases": [
+    {
+      "case_id": "C01",
+      "runs": [
+        {
+          "schema_version": "task-zero-eval-v2",
+          "case_id": "C01",
+          "rendering_id": "manifest:C01:expert",
+          "variant": {
+            "kind": "raw_human",
+            "text": "Analyze Epic 020 and suggest changes before implementation.",
+            "byte_count": 59,
+            "token_estimate": 14,
+            "helper_report_json": null
+          },
+          "agent_adapter": "patch_apply_llama_cpp",
+          "agent_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+          "repetition": 1,
+          "worktree_commit": "febfa42e747ee6f5b64f7c2f0549f9b82d1babaa",
+          "worktree_path": "/Users/brainless/Projects/akar-eval-C01-RawHuman-rep1",
+          "worktree_diff": "",
+          "worktree_changed_files": [],
+          "agent_result": {
+            "response_text": "I cannot analyze \"Epic 020\" or suggest changes because you have not provided the code, requirements, or context for this epic. Additionally, the instruction to respond with a unified diff conflicts with the requirement to perform an analysis first; a diff is only valid if there is specific code to modify.\n\nPlease provide:\n1. The source code or file content related to Epic 020.\n2. The specific goals or issues you want to address.\n3. The file paths involved.\n\nOnce you provide this information, I will perform the analysis and generate the requested unified diff.",
+            "touched_files": [],
+            "diff": null,
+            "input_tokens": 174,
+            "output_tokens": 125,
+            "elapsed_ms": 9295,
+            "stop_reason": "stop",
+            "diagnostics": [
+              "[no diff extracted] model response contained no fenced or bare unified diff"
+            ]
+          },
+          "score": {
+            "prompt_quality": {
+              "intent_preserved": true,
+              "constraints_preserved": false,
+              "has_provenance_labels": false,
+              "has_gap_disclosure": false,
+              "prompt_bytes": 59,
+              "token_estimate": 14,
+              "omitted_context": []
+            },
+            "task_outcome": {
+              "artifact_recall": 0.0,
+              "artifact_precision": 1.0,
+              "violated_prohibitions": [],
+              "verification_passed": true,
+              "verification_commands_run": [
+                "cargo check --workspace"
+              ],
+              "verification_diagnostics": [
+                "[stderr] cargo check --workspace:    Compiling proc-macro2 v1.0.106\n   Compiling quote v1.0.46\n   Compiling unicode-ident v1.0.24\n   Compiling libm v0.2.16\n   Compiling cfg_aliases v0.2.1\n    Checking bitflags v2.13.0\n    Checking objc2-encode v4.1.0\n   Compiling libc v0.2.186\n    Checking cfg-if v1.0.4\n   Compiling serde_core v1.0.228\n   Compiling autocfg v1.5.1\n   Compiling objc2 v0.6.4\n   Compiling zerocopy v0.8.52\n    Checking log v0.4.33\n   Compiling serde v1.0.228\n   Compiling num-traits v0.2.19\n   Compiling thiserror v2.0..."
+              ],
+              "unsupported_claims": 0,
+              "negative_constraints_respected": true
+            }
+          },
+          "graph_hash": "0bd5a73824247bfb",
+          "packet_hash": "f1dfa4dcf6f04190",
+          "prompt_template_version": "task-zero-baseline-v1",
+          "eval_timestamp": "2026-08-15T00:27:35.218470+00:00"
+        },
+        {
+          "schema_version": "task-zero-eval-v2",
+          "case_id": "C01",
+          "rendering_id": "manifest:C01:expert",
+          "variant": {
+            "kind": "deterministic_baseline",
+            "text": "# Coding-agent handoff\n\nTemplate: `task-zero-baseline-v1`\n\n## Immutable intent and boundaries\n\nThe text below is immutable human input. Do not rewrite it or infer additional authority.\n\n### Original request (verbatim)\n\n```text\nAnalyze Epic 020 and suggest changes before implementation.\n```\n\n### Negative constraints (verbatim)\n\n- `Review phase is read-only; revision phase is explicitly authorized by a follow-up request, not implied by the review.`\n\n### Mutation boundary\n\nRead-only: do not modify repository files or external state.\n\n## Clarified objective\n\nAnalyze Epic 020 and suggest changes before implementation.\n\nVerify this interpretation against the immutable request before acting.\n\n## Repository snapshot and coverage\n\n- [RUN] Repository: packet-bound snapshot (canonical path is intentionally not re-read by the renderer).\n- [RUN] Resolved commit: `febfa42e747ee6f5b64f7c2f0549f9b82d1babaa`.\n- [RUN] Lab version: `0.1.0`; prompt template: `task-zero-baseline-v1`.\n- [RUN] Index available: `false`; canonical identifiers considered: `0`.\n- [RUN] Queried source categories: `[Instructions, EpicsAndResearch, Documents, Code, Commits]`.\n- [RUN] Unavailable source categories: `[]`.\n- Coverage warning: no index was available; indexed code/document coverage is missing.\n\n## Relevant epic, task, and shared constraints\n\nThe established evidence below is the bounded packet selection. Checked state is shown when recorded; absence from this packet is not evidence of irrelevance.\n\n\n## Candidate context (not established)\n\nThe following are retrieval candidates, not repository facts. Verify them at the pinned revision before relying on them.\n\n- **[C1] epics/011-overlay-stack.md @ 4231ff13fc7377a59de5ff858ae6888a20bf2edd (epic:011)** suggestion/candidate only — label \"Epic 011: Overlay Stack\"; excerpt \"Epic 011: Overlay Stack\"\n- **[C2] epics/012-form-controls-and-text-input.md @ d7908adc5e385574b457f732dbe1f88f809d6749 (epic:012)** suggestion/candidate only — label \"Epic 012: Form Controls and Text Input\"; excerpt \"Epic 012: Form Controls and Text Input\"\n- **[C3] epics/013-screenshot-utility.md @ e7af255152d3076d3beef0ef23e3cc21dcaeab89 (epic:013)** suggestion/candidate only — label \"Epic 013: Screenshot Utility\"; excerpt \"Epic 013: Screenshot Utility\"\n- **[C4] epics/014-screenshot-enhancements.md @ 56b3d3d61f724617cd38185b3b49b6e6c144afee (epic:014)** suggestion/candidate only — label \"Epic 014: Screenshot Utility Enhancements for Agent-Led Development\"; excerpt \"Epic 014: Screenshot Utility Enhancements for Agent-Led Development\"\n- **[C5] epics/020-component-webpage-sample.md @ cff16996884d251b8d4ddc3bbae54b1cc75d506e (file:epics/020-component-webpage-sample.md)** suggestion/candidate only — label \"epics/020-component-webpage-sample.md\"; excerpt \"epics/020-component-webpage-sample.md\"\n- **[C6] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#before-starting-any-task)** suggestion/candidate only — label \"Before starting any task\"; excerpt \"Before starting any task\\n\\n\\n1. Confirm which epic is active (`epics/` — lowest-numbered without `Status: Done`). Pick the next epic from the roadmap or open a new one; do not rely on this or any other doc for epic status — read the epic files directly.\\n2. Read the full epic before touching any file.\\n3. Cross-reference `DEVELOP.md` for local dependency paths and architectural constraints.\\n\"\n- **[C7] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#canvas-and-portal-guidance)** suggestion/candidate only — label \"Canvas and portal guidance\"; excerpt \"Canvas and portal guidance\\n\\n\\nWhen working with canvas changes, verify at one overview level and one interactive-portal level using screenshots. Use `--component` or `--screenshot` with `examples/canvas-basic-rust/`.\\n\\nLow-detail canvas interaction is group-level only — hover/press/click on the whole object, not child widgets. `CanvasInput` operates on `WorldRect` bounds.\\n\\nCanvas text is display-only. It never creates focus, w\"\n- **[C8] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#component-contract-(for-`akar-components`-contributors))** suggestion/candidate only — label \"Component contract (for `akar-components` contributors)\"; excerpt \"Component contract (for `akar-components` contributors)\\n\\n\\nEach component function:\\n1. Calls `akar-layout` to query resolved pixel bounds for its node ID.\\n2. Checks hit-test from the input state to determine hover/active/focus/click.\\n3. If clicked, mutates any caller-owned state (`*checked`, `*selected`, etc.) immediately — before submitting draw calls. Drawing must always reflect the post-click value, never the pre-click one. A component that draws firs\"\n- **[C9] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#draw-list-contract-(for-`akar-core`-contributors))** suggestion/candidate only — label \"Draw list contract (for `akar-core` contributors)\"; excerpt \"Draw list contract (for `akar-core` contributors)\\n\\n\\nThe draw list is the internal rendering queue. Agents extending the renderer must follow:\\n\\n1. All draw calls are submitted via `DrawList::push(DrawCall)` during `begin_frame` → `end_frame`.\\n2. Before GPU upload, `DrawList::flush()` culls calls whose AABB does not intersect the active scissor rect. This is automatic and invisible to component authors.\\n3. Scissor rects are pushed/popped in a stack \"\n- **[C10] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#virtualization-contract)** suggestion/candidate only — label \"Virtualization contract\"; excerpt \"Virtualization contract\\n\\n\\nFor scroll containers and list components:\\n- Always push a scissor rect before rendering children; pop it after.\\n- Expose `list_clip(total, item_height, scroll_y)` so developers can avoid submitting off-screen items entirely.\\n- Do not call `glyphon::Buffer::shape_until_scroll` for items outside the scissor rect.\\n\"\n\n## Unresolved Task 0 criteria, gaps, and human decisions\n\n- No host-recorded reachable gaps; this does not prove completeness.\n\n## Suggested actions and dependencies\n\nThese are bounded suggestions, not repository claims or expanded authorization:\n\n1. Re-open cited sources at the resolved commit and verify every assumption.\n2. Address unchecked criteria in dependency order while preserving the immutable constraints.\n3. Stop and ask the human when evidence leaves a product or authorization decision unresolved.\n\n## Likely change surface\n\n- No evidence-backed change surface was identified. Do not invent file ownership.\n\n## Required artifacts and output contract\n\nReturn a focused result that maps work to the requested criteria, reports files changed, lists verification performed and failures, and separates completed work from remaining gaps. Prompt quality is not task-outcome evidence; downstream correctness must be assessed independently.\n\n## Project-derived verification\n\n- No exact verification command survived in packet evidence. Do not guess from the language; inspect repository instructions/configuration and report this gap.\n\n## Omissions, stale sources, and unsupported capabilities\n\n- None recorded.\n- No model, credentials, network, semantic retrieval, repository mutation, or coding-agent dispatch was used by this renderer.\n\nPrompt budget: at most 24000 bytes; token estimate uses 4 bytes/token.\n",
+            "byte_count": 7412,
+            "token_estimate": 1853,
+            "helper_report_json": null
+          },
+          "agent_adapter": "patch_apply_llama_cpp",
+          "agent_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+          "repetition": 1,
+          "worktree_commit": "febfa42e747ee6f5b64f7c2f0549f9b82d1babaa",
+          "worktree_path": "/Users/brainless/Projects/akar-eval-C01-DeterministicBaseline-rep1",
+          "worktree_diff": "",
+          "worktree_changed_files": [],
+          "agent_result": {
+            "response_text": "The request is to **analyze** Epic 020 and **suggest changes** before implementation.\n\nPer the **Negative constraints**:\n> `Review phase is read-only; revision phase is explicitly authorized by a follow-up request, not implied by the review.`\n\nPer the **Mutation boundary**:\n> Read-only: do not modify repository files or external state.\n\nSince the current task is strictly **read-only analysis** and no explicit authorization for code modification (revision phase) has been provided, I cannot generate a unified diff. I must perform the analysis and present the suggestions in prose.\n\n### Analysis of Epic 020: Component Webpage Sample\n\n**Context & Constraints:**\nBased on the available context (specifically `AGENTS.md` sections C6, C8, and C9), the implementation of Epic 020 must adhere to the following architectural contracts:\n1.  **Component Contract (C8):** Components must call `akar-layout` to query resolved pixel bounds. They must check hit-test states (hover/active/focus/click) from input state. Crucially, if clicked, state mutation (`*checked`, `*selected`) must happen **immediately** before submitting draw calls. The drawing must reflect the post-click value.\n2.  **Draw List Contract (C9):** All draw calls are submitted via `DrawList::push(DrawCall)` during `begin_frame` → `end_frame`. `DrawList::flush()` handles culling based on scissor rects.\n3.  **Virtualization (C10):** Scroll containers must push/pop scissor rects. Off-screen items should be avoided via `list_clip`.\n\n**Current State of Epic 020:**\nThe file `epics/020-component-webpage-sample.md` (Candidate C5) exists. However, the packet snapshot indicates that the **content of the file is not fully resolved** in the provided context excerpts (only the filename and label are visible). Without the full text of the epic, I cannot identify specific implementation details to critique.\n\n**Suggested Changes & Recommendations:**\n\nSince the full content of Epic 020 is not available in the current packet to verify against the contracts, the following steps are required before any code implementation can be suggested:\n\n1.  **Retrieve Full Epic Content:** The analysis cannot proceed to specific code suggestions without reading the full `epics/020-component-webpage-sample.md` at the resolved commit (`febfa42e747ee6f5b64f7c2f0549f9b82d1babaa`).\n2.  **Verify Dependency Paths:** Once the content is read, cross-reference `DEVELOP.md` (as per C6) to ensure the suggested implementation paths align with local dependency constraints.\n3.  **Contract Compliance Check:** Upon retrieving the content, verify that the proposed implementation plan explicitly includes:\n    *   Calls to `akar-layout` for bounds.\n    *   Immediate state mutation prior to draw calls (C8).\n    *   Proper scissor rect management for any list/scroll components (C10).\n\n**Conclusion:**\nNo code changes can be generated at this stage because the **review phase is read-only** and the **full source text of Epic 020 is not provided** in the current context packet to perform a specific analysis.\n\n**Action Required:**\nPlease provide the full text of `epics/020-component-webpage-sample.md` or authorize the retrieval of this specific file to proceed with the detailed analysis and suggestion of changes.",
+            "touched_files": [],
+            "diff": null,
+            "input_tokens": 2180,
+            "output_tokens": 753,
+            "elapsed_ms": 58703,
+            "stop_reason": "stop",
+            "diagnostics": [
+              "[no diff extracted] model response contained no fenced or bare unified diff"
+            ]
+          },
+          "score": {
+            "prompt_quality": {
+              "intent_preserved": true,
+              "constraints_preserved": true,
+              "has_provenance_labels": true,
+              "has_gap_disclosure": true,
+              "prompt_bytes": 7412,
+              "token_estimate": 1853,
+              "omitted_context": []
+            },
+            "task_outcome": {
+              "artifact_recall": 0.0,
+              "artifact_precision": 1.0,
+              "violated_prohibitions": [],
+              "verification_passed": true,
+              "verification_commands_run": [
+                "cargo check --workspace"
+              ],
+              "verification_diagnostics": [
+                "[stderr] cargo check --workspace:    Compiling proc-macro2 v1.0.106\n   Compiling quote v1.0.46\n   Compiling unicode-ident v1.0.24\n   Compiling libm v0.2.16\n   Compiling cfg_aliases v0.2.1\n    Checking bitflags v2.13.0\n    Checking objc2-encode v4.1.0\n   Compiling libc v0.2.186\n   Compiling serde_core v1.0.228\n    Checking cfg-if v1.0.4\n   Compiling autocfg v1.5.1\n   Compiling objc2 v0.6.4\n   Compiling zerocopy v0.8.52\n    Checking log v0.4.33\n   Compiling serde v1.0.228\n   Compiling num-traits v0.2.19\n   Compiling thiserror v2.0..."
+              ],
+              "unsupported_claims": 0,
+              "negative_constraints_respected": true
+            }
+          },
+          "graph_hash": "0bd5a73824247bfb",
+          "packet_hash": "f1dfa4dcf6f04190",
+          "prompt_template_version": "task-zero-baseline-v1",
+          "eval_timestamp": "2026-08-15T00:28:49.024919+00:00"
+        },
+        {
+          "schema_version": "task-zero-eval-v2",
+          "case_id": "C01",
+          "rendering_id": "manifest:C01:expert",
+          "variant": {
+            "kind": "helper_refined",
+            "text": "# Coding-agent handoff\n\nTemplate: `task-zero-baseline-v1`\n\n## Immutable intent and boundaries\n\nThe text below is immutable human input. Do not rewrite it or infer additional authority.\n\n### Original request (verbatim)\n\n```text\nAnalyze Epic 020 and suggest changes before implementation.\n```\n\n### Negative constraints (verbatim)\n\n- `Review phase is read-only; revision phase is explicitly authorized by a follow-up request, not implied by the review.`\n\n### Mutation boundary\n\nRead-only: do not modify repository files or external state.\n\n## Clarified objective\n\nAnalyze Epic 020 and suggest changes before implementation.\n\nVerify this interpretation against the immutable request before acting.\n\n## Repository snapshot and coverage\n\n- [RUN] Repository: packet-bound snapshot (canonical path is intentionally not re-read by the renderer).\n- [RUN] Resolved commit: `febfa42e747ee6f5b64f7c2f0549f9b82d1babaa`.\n- [RUN] Lab version: `0.1.0`; prompt template: `task-zero-baseline-v1`.\n- [RUN] Index available: `false`; canonical identifiers considered: `0`.\n- [RUN] Queried source categories: `[Instructions, EpicsAndResearch, Documents, Code, Commits]`.\n- [RUN] Unavailable source categories: `[]`.\n- Coverage warning: no index was available; indexed code/document coverage is missing.\n\n## Relevant epic, task, and shared constraints\n\nThe established evidence below is the bounded packet selection. Checked state is shown when recorded; absence from this packet is not evidence of irrelevance.\n\n\n## Candidate context (not established)\n\nThe following are retrieval candidates, not repository facts. Verify them at the pinned revision before relying on them.\n\n- **[C1] epics/011-overlay-stack.md @ 4231ff13fc7377a59de5ff858ae6888a20bf2edd (epic:011)** suggestion/candidate only — label \"Epic 011: Overlay Stack\"; excerpt \"Epic 011: Overlay Stack\"\n- **[C2] epics/012-form-controls-and-text-input.md @ d7908adc5e385574b457f732dbe1f88f809d6749 (epic:012)** suggestion/candidate only — label \"Epic 012: Form Controls and Text Input\"; excerpt \"Epic 012: Form Controls and Text Input\"\n- **[C3] epics/013-screenshot-utility.md @ e7af255152d3076d3beef0ef23e3cc21dcaeab89 (epic:013)** suggestion/candidate only — label \"Epic 013: Screenshot Utility\"; excerpt \"Epic 013: Screenshot Utility\"\n- **[C4] epics/014-screenshot-enhancements.md @ 56b3d3d61f724617cd38185b3b49b6e6c144afee (epic:014)** suggestion/candidate only — label \"Epic 014: Screenshot Utility Enhancements for Agent-Led Development\"; excerpt \"Epic 014: Screenshot Utility Enhancements for Agent-Led Development\"\n- **[C5] epics/020-component-webpage-sample.md @ cff16996884d251b8d4ddc3bbae54b1cc75d506e (file:epics/020-component-webpage-sample.md)** suggestion/candidate only — label \"epics/020-component-webpage-sample.md\"; excerpt \"epics/020-component-webpage-sample.md\"\n- **[C6] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#before-starting-any-task)** suggestion/candidate only — label \"Before starting any task\"; excerpt \"Before starting any task\\n\\n\\n1. Confirm which epic is active (`epics/` — lowest-numbered without `Status: Done`). Pick the next epic from the roadmap or open a new one; do not rely on this or any other doc for epic status — read the epic files directly.\\n2. Read the full epic before touching any file.\\n3. Cross-reference `DEVELOP.md` for local dependency paths and architectural constraints.\\n\"\n- **[C7] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#canvas-and-portal-guidance)** suggestion/candidate only — label \"Canvas and portal guidance\"; excerpt \"Canvas and portal guidance\\n\\n\\nWhen working with canvas changes, verify at one overview level and one interactive-portal level using screenshots. Use `--component` or `--screenshot` with `examples/canvas-basic-rust/`.\\n\\nLow-detail canvas interaction is group-level only — hover/press/click on the whole object, not child widgets. `CanvasInput` operates on `WorldRect` bounds.\\n\\nCanvas text is display-only. It never creates focus, w\"\n- **[C8] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#component-contract-(for-`akar-components`-contributors))** suggestion/candidate only — label \"Component contract (for `akar-components` contributors)\"; excerpt \"Component contract (for `akar-components` contributors)\\n\\n\\nEach component function:\\n1. Calls `akar-layout` to query resolved pixel bounds for its node ID.\\n2. Checks hit-test from the input state to determine hover/active/focus/click.\\n3. If clicked, mutates any caller-owned state (`*checked`, `*selected`, etc.) immediately — before submitting draw calls. Drawing must always reflect the post-click value, never the pre-click one. A component that draws firs\"\n- **[C9] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#draw-list-contract-(for-`akar-core`-contributors))** suggestion/candidate only — label \"Draw list contract (for `akar-core` contributors)\"; excerpt \"Draw list contract (for `akar-core` contributors)\\n\\n\\nThe draw list is the internal rendering queue. Agents extending the renderer must follow:\\n\\n1. All draw calls are submitted via `DrawList::push(DrawCall)` during `begin_frame` → `end_frame`.\\n2. Before GPU upload, `DrawList::flush()` culls calls whose AABB does not intersect the active scissor rect. This is automatic and invisible to component authors.\\n3. Scissor rects are pushed/popped in a stack \"\n- **[C10] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#virtualization-contract)** suggestion/candidate only — label \"Virtualization contract\"; excerpt \"Virtualization contract\\n\\n\\nFor scroll containers and list components:\\n- Always push a scissor rect before rendering children; pop it after.\\n- Expose `list_clip(total, item_height, scroll_y)` so developers can avoid submitting off-screen items entirely.\\n- Do not call `glyphon::Buffer::shape_until_scroll` for items outside the scissor rect.\\n\"\n\n## Unresolved Task 0 criteria, gaps, and human decisions\n\n- No host-recorded reachable gaps; this does not prove completeness.\n\n## Suggested actions and dependencies\n\nThese are bounded suggestions, not repository claims or expanded authorization:\n\n1. Re-open cited sources at the resolved commit and verify every assumption.\n2. Address unchecked criteria in dependency order while preserving the immutable constraints.\n3. Stop and ask the human when evidence leaves a product or authorization decision unresolved.\n\n## Likely change surface\n\n- No evidence-backed change surface was identified. Do not invent file ownership.\n\n## Required artifacts and output contract\n\nReturn a focused result that maps work to the requested criteria, reports files changed, lists verification performed and failures, and separates completed work from remaining gaps. Prompt quality is not task-outcome evidence; downstream correctness must be assessed independently.\n\n## Project-derived verification\n\n- No exact verification command survived in packet evidence. Do not guess from the language; inspect repository instructions/configuration and report this gap.\n\n## Omissions, stale sources, and unsupported capabilities\n\n- None recorded.\n- No model, credentials, network, semantic retrieval, repository mutation, or coding-agent dispatch was used by this renderer.\n\nPrompt budget: at most 24000 bytes; token estimate uses 4 bytes/token.\n",
+            "byte_count": 7412,
+            "token_estimate": 1853,
+            "helper_report_json": "{\"adapter\":\"llama_cpp\",\"rounds\":2,\"calls\":[{\"round\":1,\"operation\":\"search_graph\",\"result_bytes\":197,\"is_duplicate\":false,\"is_zero_result\":true,\"truncated\":false},{\"round\":2,\"operation\":\"search_graph\",\"result_bytes\":197,\"is_duplicate\":true,\"is_zero_result\":true,\"truncated\":false}],\"duplicate_calls\":1,\"malformed_outputs\":0,\"truncated_outputs\":0,\"stop_reason\":\"low_marginal_yield\",\"submission\":null,\"diagnostics\":[],\"inferences\":[{\"round\":1,\"requested_model\":\"unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL\",\"returned_model\":\"unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL\",\"upstream_provider\":null,\"provider_order\":[\"local\"],\"allow_fallbacks\":false,\"require_parameters\":false,\"data_collection\":\"none\",\"zdr\":false,\"temperature\":0.0,\"output_limit\":2048,\"protocol_version\":\"task-zero-helper-v1\",\"prompt_hash\":\"77561ec46ea6a1e3\",\"raw_response_hash\":\"05f4903ff34744b0\",\"input_tokens\":1779,\"output_tokens\":23,\"elapsed_ms\":8066,\"stop_reason\":\"stop\",\"validation_diagnostics\":[]},{\"round\":2,\"requested_model\":\"unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL\",\"returned_model\":\"unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL\",\"upstream_provider\":null,\"provider_order\":[\"local\"],\"allow_fallbacks\":false,\"require_parameters\":false,\"data_collection\":\"none\",\"zdr\":false,\"temperature\":0.0,\"output_limit\":2048,\"protocol_version\":\"task-zero-helper-v1\",\"prompt_hash\":\"33e3fca56df743d5\",\"raw_response_hash\":\"fc5a5e106cc22f7f\",\"input_tokens\":1863,\"output_tokens\":23,\"elapsed_ms\":8459,\"stop_reason\":\"stop\",\"validation_diagnostics\":[]}]}"
+          },
+          "agent_adapter": "patch_apply_llama_cpp",
+          "agent_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+          "repetition": 1,
+          "worktree_commit": "febfa42e747ee6f5b64f7c2f0549f9b82d1babaa",
+          "worktree_path": "/Users/brainless/Projects/akar-eval-C01-HelperRefined-rep1",
+          "worktree_diff": "",
+          "worktree_changed_files": [],
+          "agent_result": {
+            "response_text": "The request is to **analyze** Epic 020 and **suggest changes** before implementation.\n\nPer the **Negative constraints**:\n> `Review phase is read-only; revision phase is explicitly authorized by a follow-up request, not implied by the review.`\n\nPer the **Mutation boundary**:\n> Read-only: do not modify repository files or external state.\n\nSince the current task is strictly **read-only analysis** and no explicit authorization for code modification (revision phase) has been provided, I cannot generate a unified diff. I must perform the analysis and present the suggestions in prose.\n\n### Analysis of Epic 020: Component Webpage Sample\n\n**Context & Constraints:**\nBased on the available context (specifically `AGENTS.md` sections C6, C8, and C9), the implementation of Epic 020 must adhere to the following architectural contracts:\n1.  **Component Contract (C8):** Components must call `akar-layout` to query resolved pixel bounds. They must check hit-test states (hover/active/focus/click) from input state. Crucially, if clicked, state mutation (`*checked`, `*selected`) must happen **immediately** before submitting draw calls. The drawing must reflect the post-click value.\n2.  **Draw List Contract (C9):** All draw calls are submitted via `DrawList::push(DrawCall)` during `begin_frame` → `end_frame`. `DrawList::flush()` handles culling based on scissor rects.\n3.  **Virtualization (C10):** Scroll containers must push/pop scissor rects. Off-screen items should be avoided via `list_clip`.\n\n**Current State of Epic 020:**\nThe file `epics/020-component-webpage-sample.md` (Candidate C5) exists. However, the packet snapshot indicates that the **content of the file is not fully resolved** in the provided context excerpts (only the filename and label are visible). Without the full text of the epic, I cannot identify specific implementation details to critique.\n\n**Suggested Changes & Recommendations:**\n\nSince the full content of Epic 020 is not available in the current packet to verify against the contracts, the following steps are required before any code implementation can be suggested:\n\n1.  **Retrieve Full Epic Content:** The analysis cannot proceed to specific code suggestions without reading the full `epics/020-component-webpage-sample.md` at the resolved commit (`febfa42e747ee6f5b64f7c2f0549f9b82d1babaa`).\n2.  **Verify Dependency Paths:** Once the content is read, cross-reference `DEVELOP.md` (as per C6) to ensure the suggested implementation paths align with local dependency constraints.\n3.  **Contract Compliance Check:** Upon retrieving the content, verify that the proposed implementation plan explicitly includes:\n    *   Calls to `akar-layout` for bounds.\n    *   Immediate state mutation prior to draw calls (C8).\n    *   Proper scissor rect management for any list/scroll components (C10).\n\n**Conclusion:**\nNo code changes can be generated at this stage because the **review phase is read-only** and the **full source text of Epic 020 is not provided** in the current context packet to perform a specific analysis.\n\n**Action Required:**\nPlease provide the full text of `epics/020-component-webpage-sample.md` or authorize the retrieval of this specific file to proceed with the detailed analysis and suggestion of changes.",
+            "touched_files": [],
+            "diff": null,
+            "input_tokens": 2180,
+            "output_tokens": 753,
+            "elapsed_ms": 48456,
+            "stop_reason": "stop",
+            "diagnostics": [
+              "[no diff extracted] model response contained no fenced or bare unified diff"
+            ]
+          },
+          "score": {
+            "prompt_quality": {
+              "intent_preserved": true,
+              "constraints_preserved": true,
+              "has_provenance_labels": true,
+              "has_gap_disclosure": true,
+              "prompt_bytes": 7412,
+              "token_estimate": 1853,
+              "omitted_context": []
+            },
+            "task_outcome": {
+              "artifact_recall": 0.0,
+              "artifact_precision": 1.0,
+              "violated_prohibitions": [],
+              "verification_passed": true,
+              "verification_commands_run": [
+                "cargo check --workspace"
+              ],
+              "verification_diagnostics": [
+                "[stderr] cargo check --workspace:    Compiling proc-macro2 v1.0.106\n   Compiling quote v1.0.46\n   Compiling unicode-ident v1.0.24\n   Compiling libm v0.2.16\n   Compiling cfg_aliases v0.2.1\n    Checking bitflags v2.13.0\n    Checking objc2-encode v4.1.0\n   Compiling libc v0.2.186\n    Checking cfg-if v1.0.4\n   Compiling serde_core v1.0.228\n   Compiling autocfg v1.5.1\n   Compiling objc2 v0.6.4\n   Compiling zerocopy v0.8.52\n    Checking log v0.4.33\n   Compiling serde v1.0.228\n   Compiling num-traits v0.2.19\n   Compiling thiserror v2.0..."
+              ],
+              "unsupported_claims": 0,
+              "negative_constraints_respected": true
+            }
+          },
+          "graph_hash": "0bd5a73824247bfb",
+          "packet_hash": "f1dfa4dcf6f04190",
+          "prompt_template_version": "task-zero-baseline-v1",
+          "eval_timestamp": "2026-08-15T00:29:51.009794+00:00"
+        },
+        {
+          "schema_version": "task-zero-eval-v2",
+          "case_id": "C01",
+          "rendering_id": "manifest:C01:expert",
+          "variant": {
+            "kind": "raw_human",
+            "text": "Analyze Epic 020 and suggest changes before implementation.",
+            "byte_count": 59,
+            "token_estimate": 14,
+            "helper_report_json": null
+          },
+          "agent_adapter": "patch_apply_llama_cpp",
+          "agent_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+          "repetition": 2,
+          "worktree_commit": "febfa42e747ee6f5b64f7c2f0549f9b82d1babaa",
+          "worktree_path": "/Users/brainless/Projects/akar-eval-C01-RawHuman-rep2",
+          "worktree_diff": "",
+          "worktree_changed_files": [],
+          "agent_result": {
+            "response_text": "I cannot analyze \"Epic 020\" or suggest changes because you have not provided the code, requirements, or context for this epic. Additionally, the instruction to respond with a unified diff conflicts with the requirement to perform an analysis first; a diff is only valid if there is specific code to modify.\n\nPlease provide:\n1. The source code or file content related to Epic 020.\n2. The specific goals or issues you want to address.\n3. The file paths involved.\n\nOnce you provide this information, I will perform the analysis and generate the requested unified diff.",
+            "touched_files": [],
+            "diff": null,
+            "input_tokens": 174,
+            "output_tokens": 125,
+            "elapsed_ms": 8056,
+            "stop_reason": "stop",
+            "diagnostics": [
+              "[no diff extracted] model response contained no fenced or bare unified diff"
+            ]
+          },
+          "score": {
+            "prompt_quality": {
+              "intent_preserved": true,
+              "constraints_preserved": false,
+              "has_provenance_labels": false,
+              "has_gap_disclosure": false,
+              "prompt_bytes": 59,
+              "token_estimate": 14,
+              "omitted_context": []
+            },
+            "task_outcome": {
+              "artifact_recall": 0.0,
+              "artifact_precision": 1.0,
+              "violated_prohibitions": [],
+              "verification_passed": true,
+              "verification_commands_run": [
+                "cargo check --workspace"
+              ],
+              "verification_diagnostics": [
+                "[stderr] cargo check --workspace:    Compiling proc-macro2 v1.0.106\n   Compiling quote v1.0.46\n   Compiling unicode-ident v1.0.24\n   Compiling libm v0.2.16\n   Compiling cfg_aliases v0.2.1\n    Checking bitflags v2.13.0\n    Checking objc2-encode v4.1.0\n   Compiling libc v0.2.186\n    Checking cfg-if v1.0.4\n   Compiling serde_core v1.0.228\n   Compiling autocfg v1.5.1\n   Compiling objc2 v0.6.4\n   Compiling serde v1.0.228\n   Compiling thiserror v2.0.18\n   Compiling zerocopy v0.8.52\n   Compiling num-traits v0.2.19\n    Checking log v0.4..."
+              ],
+              "unsupported_claims": 0,
+              "negative_constraints_respected": true
+            }
+          },
+          "graph_hash": "0bd5a73824247bfb",
+          "packet_hash": "f1dfa4dcf6f04190",
+          "prompt_template_version": "task-zero-baseline-v1",
+          "eval_timestamp": "2026-08-15T00:30:11.294265+00:00"
+        },
+        {
+          "schema_version": "task-zero-eval-v2",
+          "case_id": "C01",
+          "rendering_id": "manifest:C01:expert",
+          "variant": {
+            "kind": "deterministic_baseline",
+            "text": "# Coding-agent handoff\n\nTemplate: `task-zero-baseline-v1`\n\n## Immutable intent and boundaries\n\nThe text below is immutable human input. Do not rewrite it or infer additional authority.\n\n### Original request (verbatim)\n\n```text\nAnalyze Epic 020 and suggest changes before implementation.\n```\n\n### Negative constraints (verbatim)\n\n- `Review phase is read-only; revision phase is explicitly authorized by a follow-up request, not implied by the review.`\n\n### Mutation boundary\n\nRead-only: do not modify repository files or external state.\n\n## Clarified objective\n\nAnalyze Epic 020 and suggest changes before implementation.\n\nVerify this interpretation against the immutable request before acting.\n\n## Repository snapshot and coverage\n\n- [RUN] Repository: packet-bound snapshot (canonical path is intentionally not re-read by the renderer).\n- [RUN] Resolved commit: `febfa42e747ee6f5b64f7c2f0549f9b82d1babaa`.\n- [RUN] Lab version: `0.1.0`; prompt template: `task-zero-baseline-v1`.\n- [RUN] Index available: `false`; canonical identifiers considered: `0`.\n- [RUN] Queried source categories: `[Instructions, EpicsAndResearch, Documents, Code, Commits]`.\n- [RUN] Unavailable source categories: `[]`.\n- Coverage warning: no index was available; indexed code/document coverage is missing.\n\n## Relevant epic, task, and shared constraints\n\nThe established evidence below is the bounded packet selection. Checked state is shown when recorded; absence from this packet is not evidence of irrelevance.\n\n\n## Candidate context (not established)\n\nThe following are retrieval candidates, not repository facts. Verify them at the pinned revision before relying on them.\n\n- **[C1] epics/011-overlay-stack.md @ 4231ff13fc7377a59de5ff858ae6888a20bf2edd (epic:011)** suggestion/candidate only — label \"Epic 011: Overlay Stack\"; excerpt \"Epic 011: Overlay Stack\"\n- **[C2] epics/012-form-controls-and-text-input.md @ d7908adc5e385574b457f732dbe1f88f809d6749 (epic:012)** suggestion/candidate only — label \"Epic 012: Form Controls and Text Input\"; excerpt \"Epic 012: Form Controls and Text Input\"\n- **[C3] epics/013-screenshot-utility.md @ e7af255152d3076d3beef0ef23e3cc21dcaeab89 (epic:013)** suggestion/candidate only — label \"Epic 013: Screenshot Utility\"; excerpt \"Epic 013: Screenshot Utility\"\n- **[C4] epics/014-screenshot-enhancements.md @ 56b3d3d61f724617cd38185b3b49b6e6c144afee (epic:014)** suggestion/candidate only — label \"Epic 014: Screenshot Utility Enhancements for Agent-Led Development\"; excerpt \"Epic 014: Screenshot Utility Enhancements for Agent-Led Development\"\n- **[C5] epics/020-component-webpage-sample.md @ cff16996884d251b8d4ddc3bbae54b1cc75d506e (file:epics/020-component-webpage-sample.md)** suggestion/candidate only — label \"epics/020-component-webpage-sample.md\"; excerpt \"epics/020-component-webpage-sample.md\"\n- **[C6] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#before-starting-any-task)** suggestion/candidate only — label \"Before starting any task\"; excerpt \"Before starting any task\\n\\n\\n1. Confirm which epic is active (`epics/` — lowest-numbered without `Status: Done`). Pick the next epic from the roadmap or open a new one; do not rely on this or any other doc for epic status — read the epic files directly.\\n2. Read the full epic before touching any file.\\n3. Cross-reference `DEVELOP.md` for local dependency paths and architectural constraints.\\n\"\n- **[C7] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#canvas-and-portal-guidance)** suggestion/candidate only — label \"Canvas and portal guidance\"; excerpt \"Canvas and portal guidance\\n\\n\\nWhen working with canvas changes, verify at one overview level and one interactive-portal level using screenshots. Use `--component` or `--screenshot` with `examples/canvas-basic-rust/`.\\n\\nLow-detail canvas interaction is group-level only — hover/press/click on the whole object, not child widgets. `CanvasInput` operates on `WorldRect` bounds.\\n\\nCanvas text is display-only. It never creates focus, w\"\n- **[C8] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#component-contract-(for-`akar-components`-contributors))** suggestion/candidate only — label \"Component contract (for `akar-components` contributors)\"; excerpt \"Component contract (for `akar-components` contributors)\\n\\n\\nEach component function:\\n1. Calls `akar-layout` to query resolved pixel bounds for its node ID.\\n2. Checks hit-test from the input state to determine hover/active/focus/click.\\n3. If clicked, mutates any caller-owned state (`*checked`, `*selected`, etc.) immediately — before submitting draw calls. Drawing must always reflect the post-click value, never the pre-click one. A component that draws firs\"\n- **[C9] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#draw-list-contract-(for-`akar-core`-contributors))** suggestion/candidate only — label \"Draw list contract (for `akar-core` contributors)\"; excerpt \"Draw list contract (for `akar-core` contributors)\\n\\n\\nThe draw list is the internal rendering queue. Agents extending the renderer must follow:\\n\\n1. All draw calls are submitted via `DrawList::push(DrawCall)` during `begin_frame` → `end_frame`.\\n2. Before GPU upload, `DrawList::flush()` culls calls whose AABB does not intersect the active scissor rect. This is automatic and invisible to component authors.\\n3. Scissor rects are pushed/popped in a stack \"\n- **[C10] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#virtualization-contract)** suggestion/candidate only — label \"Virtualization contract\"; excerpt \"Virtualization contract\\n\\n\\nFor scroll containers and list components:\\n- Always push a scissor rect before rendering children; pop it after.\\n- Expose `list_clip(total, item_height, scroll_y)` so developers can avoid submitting off-screen items entirely.\\n- Do not call `glyphon::Buffer::shape_until_scroll` for items outside the scissor rect.\\n\"\n\n## Unresolved Task 0 criteria, gaps, and human decisions\n\n- No host-recorded reachable gaps; this does not prove completeness.\n\n## Suggested actions and dependencies\n\nThese are bounded suggestions, not repository claims or expanded authorization:\n\n1. Re-open cited sources at the resolved commit and verify every assumption.\n2. Address unchecked criteria in dependency order while preserving the immutable constraints.\n3. Stop and ask the human when evidence leaves a product or authorization decision unresolved.\n\n## Likely change surface\n\n- No evidence-backed change surface was identified. Do not invent file ownership.\n\n## Required artifacts and output contract\n\nReturn a focused result that maps work to the requested criteria, reports files changed, lists verification performed and failures, and separates completed work from remaining gaps. Prompt quality is not task-outcome evidence; downstream correctness must be assessed independently.\n\n## Project-derived verification\n\n- No exact verification command survived in packet evidence. Do not guess from the language; inspect repository instructions/configuration and report this gap.\n\n## Omissions, stale sources, and unsupported capabilities\n\n- None recorded.\n- No model, credentials, network, semantic retrieval, repository mutation, or coding-agent dispatch was used by this renderer.\n\nPrompt budget: at most 24000 bytes; token estimate uses 4 bytes/token.\n",
+            "byte_count": 7412,
+            "token_estimate": 1853,
+            "helper_report_json": null
+          },
+          "agent_adapter": "patch_apply_llama_cpp",
+          "agent_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+          "repetition": 2,
+          "worktree_commit": "febfa42e747ee6f5b64f7c2f0549f9b82d1babaa",
+          "worktree_path": "/Users/brainless/Projects/akar-eval-C01-DeterministicBaseline-rep2",
+          "worktree_diff": "",
+          "worktree_changed_files": [],
+          "agent_result": {
+            "response_text": "The request is to **analyze** Epic 020 and **suggest changes** before implementation.\n\nPer the **Negative constraints**:\n> `Review phase is read-only; revision phase is explicitly authorized by a follow-up request, not implied by the review.`\n\nPer the **Mutation boundary**:\n> Read-only: do not modify repository files or external state.\n\nSince the current task is strictly **read-only analysis** and no explicit authorization for code modification (revision phase) has been provided, I cannot generate a unified diff. I must perform the analysis and present the suggestions in prose.\n\n### Analysis of Epic 020: Component Webpage Sample\n\n**Context & Constraints:**\nBased on the available context (specifically `AGENTS.md` sections C6, C8, and C9), the implementation of Epic 020 must adhere to the following architectural contracts:\n1.  **Component Contract (C8):** Components must call `akar-layout` to query resolved pixel bounds. They must check hit-test states (hover/active/focus/click) from input state. Crucially, if clicked, state mutation (`*checked`, `*selected`) must happen **immediately** before submitting draw calls. The drawing must reflect the post-click value.\n2.  **Draw List Contract (C9):** All draw calls are submitted via `DrawList::push(DrawCall)` during `begin_frame` → `end_frame`. `DrawList::flush()` handles culling based on scissor rects.\n3.  **Virtualization (C10):** Scroll containers must push/pop scissor rects. Off-screen items should be avoided via `list_clip`.\n\n**Current State of Epic 020:**\nThe file `epics/020-component-webpage-sample.md` (Candidate C5) exists. However, the packet snapshot indicates that the **content of the file is not fully resolved** in the provided context excerpts (only the filename and label are visible). Without the full text of the epic, I cannot identify specific implementation details to critique.\n\n**Suggested Changes & Recommendations:**\n\nSince the full content of Epic 020 is not available in the current packet to verify against the contracts, the following steps are required before any code implementation can be suggested:\n\n1.  **Retrieve Full Epic Content:** The analysis cannot proceed to specific code suggestions without reading the full `epics/020-component-webpage-sample.md` at the resolved commit (`febfa42e747ee6f5b64f7c2f0549f9b82d1babaa`).\n2.  **Verify Dependency Paths:** Once the content is read, cross-reference `DEVELOP.md` (as per C6) to ensure the suggested implementation paths align with local dependency constraints.\n3.  **Contract Compliance Check:** Upon retrieving the content, verify that the proposed implementation plan explicitly includes:\n    *   Calls to `akar-layout` for bounds.\n    *   Immediate state mutation prior to draw calls (C8).\n    *   Proper scissor rect management for any list/scroll components (C10).\n\n**Conclusion:**\nNo code changes can be generated at this stage because the **review phase is read-only** and the **full source text of Epic 020 is not provided** in the current context packet to perform a specific analysis.\n\n**Action Required:**\nPlease provide the full text of `epics/020-component-webpage-sample.md` or authorize the retrieval of this specific file to proceed with the detailed analysis and suggestion of changes.",
+            "touched_files": [],
+            "diff": null,
+            "input_tokens": 2180,
+            "output_tokens": 753,
+            "elapsed_ms": 47886,
+            "stop_reason": "stop",
+            "diagnostics": [
+              "[no diff extracted] model response contained no fenced or bare unified diff"
+            ]
+          },
+          "score": {
+            "prompt_quality": {
+              "intent_preserved": true,
+              "constraints_preserved": true,
+              "has_provenance_labels": true,
+              "has_gap_disclosure": true,
+              "prompt_bytes": 7412,
+              "token_estimate": 1853,
+              "omitted_context": []
+            },
+            "task_outcome": {
+              "artifact_recall": 0.0,
+              "artifact_precision": 1.0,
+              "violated_prohibitions": [],
+              "verification_passed": true,
+              "verification_commands_run": [
+                "cargo check --workspace"
+              ],
+              "verification_diagnostics": [
+                "[stderr] cargo check --workspace:    Compiling proc-macro2 v1.0.106\n   Compiling quote v1.0.46\n   Compiling unicode-ident v1.0.24\n   Compiling libm v0.2.16\n   Compiling cfg_aliases v0.2.1\n    Checking bitflags v2.13.0\n    Checking objc2-encode v4.1.0\n   Compiling libc v0.2.186\n   Compiling serde_core v1.0.228\n    Checking cfg-if v1.0.4\n   Compiling autocfg v1.5.1\n   Compiling objc2 v0.6.4\n   Compiling zerocopy v0.8.52\n    Checking log v0.4.33\n   Compiling serde v1.0.228\n   Compiling num-traits v0.2.19\n   Compiling thiserror v2.0..."
+              ],
+              "unsupported_claims": 0,
+              "negative_constraints_respected": true
+            }
+          },
+          "graph_hash": "0bd5a73824247bfb",
+          "packet_hash": "f1dfa4dcf6f04190",
+          "prompt_template_version": "task-zero-baseline-v1",
+          "eval_timestamp": "2026-08-15T00:31:13.255856+00:00"
+        },
+        {
+          "schema_version": "task-zero-eval-v2",
+          "case_id": "C01",
+          "rendering_id": "manifest:C01:expert",
+          "variant": {
+            "kind": "helper_refined",
+            "text": "# Coding-agent handoff\n\nTemplate: `task-zero-baseline-v1`\n\n## Immutable intent and boundaries\n\nThe text below is immutable human input. Do not rewrite it or infer additional authority.\n\n### Original request (verbatim)\n\n```text\nAnalyze Epic 020 and suggest changes before implementation.\n```\n\n### Negative constraints (verbatim)\n\n- `Review phase is read-only; revision phase is explicitly authorized by a follow-up request, not implied by the review.`\n\n### Mutation boundary\n\nRead-only: do not modify repository files or external state.\n\n## Clarified objective\n\nAnalyze Epic 020 and suggest changes before implementation.\n\nVerify this interpretation against the immutable request before acting.\n\n## Repository snapshot and coverage\n\n- [RUN] Repository: packet-bound snapshot (canonical path is intentionally not re-read by the renderer).\n- [RUN] Resolved commit: `febfa42e747ee6f5b64f7c2f0549f9b82d1babaa`.\n- [RUN] Lab version: `0.1.0`; prompt template: `task-zero-baseline-v1`.\n- [RUN] Index available: `false`; canonical identifiers considered: `0`.\n- [RUN] Queried source categories: `[Instructions, EpicsAndResearch, Documents, Code, Commits]`.\n- [RUN] Unavailable source categories: `[]`.\n- Coverage warning: no index was available; indexed code/document coverage is missing.\n\n## Relevant epic, task, and shared constraints\n\nThe established evidence below is the bounded packet selection. Checked state is shown when recorded; absence from this packet is not evidence of irrelevance.\n\n\n## Candidate context (not established)\n\nThe following are retrieval candidates, not repository facts. Verify them at the pinned revision before relying on them.\n\n- **[C1] epics/011-overlay-stack.md @ 4231ff13fc7377a59de5ff858ae6888a20bf2edd (epic:011)** suggestion/candidate only — label \"Epic 011: Overlay Stack\"; excerpt \"Epic 011: Overlay Stack\"\n- **[C2] epics/012-form-controls-and-text-input.md @ d7908adc5e385574b457f732dbe1f88f809d6749 (epic:012)** suggestion/candidate only — label \"Epic 012: Form Controls and Text Input\"; excerpt \"Epic 012: Form Controls and Text Input\"\n- **[C3] epics/013-screenshot-utility.md @ e7af255152d3076d3beef0ef23e3cc21dcaeab89 (epic:013)** suggestion/candidate only — label \"Epic 013: Screenshot Utility\"; excerpt \"Epic 013: Screenshot Utility\"\n- **[C4] epics/014-screenshot-enhancements.md @ 56b3d3d61f724617cd38185b3b49b6e6c144afee (epic:014)** suggestion/candidate only — label \"Epic 014: Screenshot Utility Enhancements for Agent-Led Development\"; excerpt \"Epic 014: Screenshot Utility Enhancements for Agent-Led Development\"\n- **[C5] epics/020-component-webpage-sample.md @ cff16996884d251b8d4ddc3bbae54b1cc75d506e (file:epics/020-component-webpage-sample.md)** suggestion/candidate only — label \"epics/020-component-webpage-sample.md\"; excerpt \"epics/020-component-webpage-sample.md\"\n- **[C6] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#before-starting-any-task)** suggestion/candidate only — label \"Before starting any task\"; excerpt \"Before starting any task\\n\\n\\n1. Confirm which epic is active (`epics/` — lowest-numbered without `Status: Done`). Pick the next epic from the roadmap or open a new one; do not rely on this or any other doc for epic status — read the epic files directly.\\n2. Read the full epic before touching any file.\\n3. Cross-reference `DEVELOP.md` for local dependency paths and architectural constraints.\\n\"\n- **[C7] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#canvas-and-portal-guidance)** suggestion/candidate only — label \"Canvas and portal guidance\"; excerpt \"Canvas and portal guidance\\n\\n\\nWhen working with canvas changes, verify at one overview level and one interactive-portal level using screenshots. Use `--component` or `--screenshot` with `examples/canvas-basic-rust/`.\\n\\nLow-detail canvas interaction is group-level only — hover/press/click on the whole object, not child widgets. `CanvasInput` operates on `WorldRect` bounds.\\n\\nCanvas text is display-only. It never creates focus, w\"\n- **[C8] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#component-contract-(for-`akar-components`-contributors))** suggestion/candidate only — label \"Component contract (for `akar-components` contributors)\"; excerpt \"Component contract (for `akar-components` contributors)\\n\\n\\nEach component function:\\n1. Calls `akar-layout` to query resolved pixel bounds for its node ID.\\n2. Checks hit-test from the input state to determine hover/active/focus/click.\\n3. If clicked, mutates any caller-owned state (`*checked`, `*selected`, etc.) immediately — before submitting draw calls. Drawing must always reflect the post-click value, never the pre-click one. A component that draws firs\"\n- **[C9] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#draw-list-contract-(for-`akar-core`-contributors))** suggestion/candidate only — label \"Draw list contract (for `akar-core` contributors)\"; excerpt \"Draw list contract (for `akar-core` contributors)\\n\\n\\nThe draw list is the internal rendering queue. Agents extending the renderer must follow:\\n\\n1. All draw calls are submitted via `DrawList::push(DrawCall)` during `begin_frame` → `end_frame`.\\n2. Before GPU upload, `DrawList::flush()` culls calls whose AABB does not intersect the active scissor rect. This is automatic and invisible to component authors.\\n3. Scissor rects are pushed/popped in a stack \"\n- **[C10] AGENTS.md @ 42f62be548edba96472f605ea6e5c2dd9aa1f771 (instruction:AGENTS.md#virtualization-contract)** suggestion/candidate only — label \"Virtualization contract\"; excerpt \"Virtualization contract\\n\\n\\nFor scroll containers and list components:\\n- Always push a scissor rect before rendering children; pop it after.\\n- Expose `list_clip(total, item_height, scroll_y)` so developers can avoid submitting off-screen items entirely.\\n- Do not call `glyphon::Buffer::shape_until_scroll` for items outside the scissor rect.\\n\"\n\n## Unresolved Task 0 criteria, gaps, and human decisions\n\n- No host-recorded reachable gaps; this does not prove completeness.\n\n## Suggested actions and dependencies\n\nThese are bounded suggestions, not repository claims or expanded authorization:\n\n1. Re-open cited sources at the resolved commit and verify every assumption.\n2. Address unchecked criteria in dependency order while preserving the immutable constraints.\n3. Stop and ask the human when evidence leaves a product or authorization decision unresolved.\n\n## Likely change surface\n\n- No evidence-backed change surface was identified. Do not invent file ownership.\n\n## Required artifacts and output contract\n\nReturn a focused result that maps work to the requested criteria, reports files changed, lists verification performed and failures, and separates completed work from remaining gaps. Prompt quality is not task-outcome evidence; downstream correctness must be assessed independently.\n\n## Project-derived verification\n\n- No exact verification command survived in packet evidence. Do not guess from the language; inspect repository instructions/configuration and report this gap.\n\n## Omissions, stale sources, and unsupported capabilities\n\n- None recorded.\n- No model, credentials, network, semantic retrieval, repository mutation, or coding-agent dispatch was used by this renderer.\n\nPrompt budget: at most 24000 bytes; token estimate uses 4 bytes/token.\n",
+            "byte_count": 7412,
+            "token_estimate": 1853,
+            "helper_report_json": "{\"adapter\":\"llama_cpp\",\"rounds\":2,\"calls\":[{\"round\":1,\"operation\":\"search_graph\",\"result_bytes\":197,\"is_duplicate\":false,\"is_zero_result\":true,\"truncated\":false},{\"round\":2,\"operation\":\"search_graph\",\"result_bytes\":197,\"is_duplicate\":true,\"is_zero_result\":true,\"truncated\":false}],\"duplicate_calls\":1,\"malformed_outputs\":0,\"truncated_outputs\":0,\"stop_reason\":\"low_marginal_yield\",\"submission\":null,\"diagnostics\":[],\"inferences\":[{\"round\":1,\"requested_model\":\"unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL\",\"returned_model\":\"unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL\",\"upstream_provider\":null,\"provider_order\":[\"local\"],\"allow_fallbacks\":false,\"require_parameters\":false,\"data_collection\":\"none\",\"zdr\":false,\"temperature\":0.0,\"output_limit\":2048,\"protocol_version\":\"task-zero-helper-v1\",\"prompt_hash\":\"77561ec46ea6a1e3\",\"raw_response_hash\":\"05f4903ff34744b0\",\"input_tokens\":1779,\"output_tokens\":23,\"elapsed_ms\":8066,\"stop_reason\":\"stop\",\"validation_diagnostics\":[]},{\"round\":2,\"requested_model\":\"unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL\",\"returned_model\":\"unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL\",\"upstream_provider\":null,\"provider_order\":[\"local\"],\"allow_fallbacks\":false,\"require_parameters\":false,\"data_collection\":\"none\",\"zdr\":false,\"temperature\":0.0,\"output_limit\":2048,\"protocol_version\":\"task-zero-helper-v1\",\"prompt_hash\":\"33e3fca56df743d5\",\"raw_response_hash\":\"fc5a5e106cc22f7f\",\"input_tokens\":1863,\"output_tokens\":23,\"elapsed_ms\":8459,\"stop_reason\":\"stop\",\"validation_diagnostics\":[]}]}"
+          },
+          "agent_adapter": "patch_apply_llama_cpp",
+          "agent_model": "unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL",
+          "repetition": 2,
+          "worktree_commit": "febfa42e747ee6f5b64f7c2f0549f9b82d1babaa",
+          "worktree_path": "/Users/brainless/Projects/akar-eval-C01-HelperRefined-rep2",
+          "worktree_diff": "",
+          "worktree_changed_files": [],
+          "agent_result": {
+            "response_text": "The request is to **analyze** Epic 020 and **suggest changes** before implementation.\n\nPer the **Negative constraints**:\n> `Review phase is read-only; revision phase is explicitly authorized by a follow-up request, not implied by the review.`\n\nPer the **Mutation boundary**:\n> Read-only: do not modify repository files or external state.\n\nSince the current task is strictly **read-only analysis** and no explicit authorization for code modification (revision phase) has been provided, I cannot generate a unified diff. I must perform the analysis and present the suggestions in prose.\n\n### Analysis of Epic 020: Component Webpage Sample\n\n**Context & Constraints:**\nBased on the available context (specifically `AGENTS.md` sections C6, C8, and C9), the implementation of Epic 020 must adhere to the following architectural contracts:\n1.  **Component Contract (C8):** Components must call `akar-layout` to query resolved pixel bounds. They must check hit-test states (hover/active/focus/click) from input state. Crucially, if clicked, state mutation (`*checked`, `*selected`) must happen **immediately** before submitting draw calls. The drawing must reflect the post-click value.\n2.  **Draw List Contract (C9):** All draw calls are submitted via `DrawList::push(DrawCall)` during `begin_frame` → `end_frame`. `DrawList::flush()` handles culling based on scissor rects.\n3.  **Virtualization (C10):** Scroll containers must push/pop scissor rects. Off-screen items should be avoided via `list_clip`.\n\n**Current State of Epic 020:**\nThe file `epics/020-component-webpage-sample.md` (Candidate C5) exists. However, the packet snapshot indicates that the **content of the file is not fully resolved** in the provided context excerpts (only the filename and label are visible). Without the full text of the epic, I cannot identify specific implementation details to critique.\n\n**Suggested Changes & Recommendations:**\n\nSince the full content of Epic 020 is not available in the current packet to verify against the contracts, the following steps are required before any code implementation can be suggested:\n\n1.  **Retrieve Full Epic Content:** The analysis cannot proceed to specific code suggestions without reading the full `epics/020-component-webpage-sample.md` at the resolved commit (`febfa42e747ee6f5b64f7c2f0549f9b82d1babaa`).\n2.  **Verify Dependency Paths:** Once the content is read, cross-reference `DEVELOP.md` (as per C6) to ensure the suggested implementation paths align with local dependency constraints.\n3.  **Contract Compliance Check:** Upon retrieving the content, verify that the proposed implementation plan explicitly includes:\n    *   Calls to `akar-layout` for bounds.\n    *   Immediate state mutation prior to draw calls (C8).\n    *   Proper scissor rect management for any list/scroll components (C10).\n\n**Conclusion:**\nNo code changes can be generated at this stage because the **review phase is read-only** and the **full source text of Epic 020 is not provided** in the current context packet to perform a specific analysis.\n\n**Action Required:**\nPlease provide the full text of `epics/020-component-webpage-sample.md` or authorize the retrieval of this specific file to proceed with the detailed analysis and suggestion of changes.",
+            "touched_files": [],
+            "diff": null,
+            "input_tokens": 2180,
+            "output_tokens": 753,
+            "elapsed_ms": 48111,
+            "stop_reason": "stop",
+            "diagnostics": [
+              "[no diff extracted] model response contained no fenced or bare unified diff"
+            ]
+          },
+          "score": {
+            "prompt_quality": {
+              "intent_preserved": true,
+              "constraints_preserved": true,
+              "has_provenance_labels": true,
+              "has_gap_disclosure": true,
+              "prompt_bytes": 7412,
+              "token_estimate": 1853,
+              "omitted_context": []
+            },
+            "task_outcome": {
+              "artifact_recall": 0.0,
+              "artifact_precision": 1.0,
+              "violated_prohibitions": [],
+              "verification_passed": true,
+              "verification_commands_run": [
+                "cargo check --workspace"
+              ],
+              "verification_diagnostics": [
+                "[stderr] cargo check --workspace:    Compiling proc-macro2 v1.0.106\n   Compiling quote v1.0.46\n   Compiling unicode-ident v1.0.24\n   Compiling libm v0.2.16\n   Compiling cfg_aliases v0.2.1\n    Checking bitflags v2.13.0\n    Checking objc2-encode v4.1.0\n   Compiling libc v0.2.186\n   Compiling serde_core v1.0.228\n    Checking cfg-if v1.0.4\n   Compiling autocfg v1.5.1\n   Compiling objc2 v0.6.4\n   Compiling zerocopy v0.8.52\n    Checking log v0.4.33\n   Compiling serde v1.0.228\n   Compiling thiserror v2.0.18\n   Compiling num-traits v0.2..."
+              ],
+              "unsupported_claims": 0,
+              "negative_constraints_respected": true
+            }
+          },
+          "graph_hash": "0bd5a73824247bfb",
+          "packet_hash": "f1dfa4dcf6f04190",
+          "prompt_template_version": "task-zero-baseline-v1",
+          "eval_timestamp": "2026-08-15T00:32:14.747104+00:00"
+        }
+      ]
+    }
+  ],
+  "generated_at": "2026-08-15T00:32:14.747442+00:00"
+}

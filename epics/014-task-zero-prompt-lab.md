@@ -2584,3 +2584,454 @@ evidence-gap exit guidance as Granite but did not follow it.
 - Detailed artifacts: `crates/task-zero-lab/src/eval.rs`,
   `src/scoring.rs`, `src/worktree.rs`, `src/agent.rs`,
   `src/bin/eval_runner.rs`, `fixtures/eval/scripted-agent-c01.json`.
+
+### 2026-08-14 — Task 6 worktree/agent boundary is unwired; patch-apply adapter chosen
+
+- Parent criterion/question: Epic 014 Task 6's disposable-worktree bullet
+  ("... resulting diff, build/verification result, and touched artifacts are
+  captured") and its scoring bullets. Follow-up review of the 2026-08-14 Task 6
+  eval-harness implementation note above, before any live agent run.
+- Repository and immutable revision: daftprompt `HEAD` (working tree). No
+  case revision or live agent run involved; this is a code-reading review of
+  the harness added in the prior note, plus a design decision.
+- Fixture and input request: none; no new fixture or case was run.
+- Harness/detector/prompt/policy/model versions: `task-zero-lab` v0.1.0,
+  unchanged. No detector, prompt, or model version changed.
+- Harness change: none yet — this note records findings and a decision only.
+- Observed result and measurements: reading `crates/task-zero-lab/src/
+  eval.rs`, `src/worktree.rs`, `src/agent.rs`, and `src/bin/eval_runner.rs`
+  confirms the worktree/agent boundary described as built in the prior note
+  is not actually wired end to end. `run_eval` in `eval_runner.rs` creates an
+  `EvalWorktree` and calls `agent.execute(&variant.text)`, but `CodingAgent::
+  execute` (`agent.rs`) takes only the prompt string — the worktree path is
+  never passed to any adapter, so no adapter can read or edit files inside
+  it. `scoring::score_task_outcome` (`scoring.rs:44`) scores artifact
+  recall/precision against `agent.touched_files`, which is populated only by
+  `extract_touched_files` — a heuristic regex over the model's free-form
+  response text (diff headers, `File:`/`Modified:` lines) — never against
+  `EvalWorktree::capture_diff()` or `changed_files()`. The worktree is
+  dropped (and `git worktree remove`d) at the end of each run without those
+  methods ever being called from `eval_runner.rs`. So today a model could
+  describe an edit it never made, or make an edit it never described, and
+  the score would not reflect the actual worktree state.
+- Validated findings: the RAII worktree lifecycle itself (create, resolve
+  commit, remove on drop) is correct and tested (`worktree.rs` tests). The
+  gap is specifically that nothing in the run loop reads worktree state
+  before the guard drops, and nothing gives the agent a way to act on the
+  worktree in the first place.
+- Rejected or unsupported interpretations: the prior note's claim that
+  "worktree isolation works" is accurate for lifecycle management but should
+  not be read as "task outcome is measured from the worktree" — it currently
+  is not. This is a correction, not a reversal, of that note.
+- User decision: agreed to close this gap with a **patch-apply adapter**
+  first, not a fully tool-enabled (multi-turn, read/list/edit) agent loop.
+  The coding-agent boundary (`CodingAgent::execute`) will receive the
+  worktree path; the model is prompted for a single unified diff; the host
+  applies it with `git apply` inside that worktree only, under the same
+  closed/validated-host-action posture Task 5 uses for the helper boundary
+  (no arbitrary shell, no path outside the worktree); the actual post-apply
+  worktree diff and changed-file list (not model-reported paths) become the
+  scoring input; exit status and diff are captured before the `EvalWorktree`
+  guard removes the worktree. Rationale: Design Constraint 1 favors the
+  smallest harness change per iteration, and Task 6 is measuring the effect
+  of prompt variants on outcome, not evaluating agent tool-use architecture;
+  a full tool-enabled loop is a larger, separately-motivated experiment to
+  revisit later if patch-apply turns out to bias results (e.g., models that
+  want to explore the worktree before proposing an edit).
+- Next iteration: (1) change `CodingAgent::execute` to receive the worktree
+  path; (2) add a patch-apply adapter that requests a unified diff and
+  applies it via `git apply` scoped to that worktree, or safely rejects a
+  malformed/out-of-scope patch; (3) replace `agent.touched_files`-based
+  scoring with `EvalWorktree::capture_diff()`/`changed_files()`; (4) capture
+  exit status and diff before the worktree is dropped; (5) add an end-to-end
+  test with a tiny fixture repo where a scripted patch both fixes the target
+  and makes an extraneous edit, asserting verification catches both; (6) only
+  then run C07 live across raw/deterministic/helper-refined variants, at
+  least twice per variant, with C01 run separately as the read-only planning
+  comparison (no mutation expected, so a clean worktree is the correct
+  outcome there rather than a scoring gap).
+- Detailed artifacts: `crates/task-zero-lab/src/agent.rs`,
+  `src/worktree.rs`, `src/scoring.rs`, `src/bin/eval_runner.rs`.
+
+### 2026-08-14 — Worktree/patch-apply boundary wired; scoring now reads ground truth
+
+- Parent criterion/question: closing steps 1-5 of the "Next iteration" list
+  in the prior note ("Task 6 worktree/agent boundary is unwired;
+  patch-apply adapter chosen"), i.e. the mechanical prerequisites for Task
+  6's disposable-worktree and ground-truth-scoring acceptance bullets.
+- Repository and immutable revision: daftprompt working tree (branch
+  `docs/helper-orchestrator-prompt-patterns`). No case revision or live
+  agent run involved — this iteration is harness/infrastructure work only,
+  executed via five sequential delegated subagent changes, each reviewed
+  before the next started.
+- Fixture and input request: none from the Task 0 corpus. A new synthetic
+  fixture was added for step 5's end-to-end test: a throwaway two-file git
+  repo (`calc.txt` with a one-line bug, `notes.txt` as a must-not-touch
+  file), created and torn down inside the test itself, not committed.
+- Harness/detector/prompt/policy/model versions: `task-zero-lab` v0.1.0;
+  eval report schema bumped `task-zero-eval-v1` → `task-zero-eval-v2`
+  (`EvalRun` gained `worktree_diff`/`worktree_changed_files`). No detector,
+  prompt-template, or model version changed.
+- Harness change, in order:
+  1. `CodingAgent::execute` (`agent.rs`) now takes `(prompt: &str,
+     worktree_path: &Path)` instead of just the prompt; all three existing
+     adapters (`Scripted`, `OpenRouter`, `LlamaCpp`) updated to accept and
+     (for now) ignore the path; `eval_runner.rs`'s sole call site updated.
+  2. Added `PatchApplyCodingAgent` (`agent.rs`, `OpenRouter`/`LlamaCpp`
+     backend), the adapter this iteration was for: it appends a
+     ```` ```diff ```` fenced-response instruction to the prompt, extracts a
+     unified diff from the model's response (fenced, loosely-fenced, or
+     bare, in that preference order), validates every path in the diff
+     header rejects absolute paths and `..` traversal *before* ever invoking
+     `git apply`, then applies it via `git apply --whitespace=nowarn` with
+     `current_dir` scoped to the worktree. A rejected or unparseable
+     response returns `Ok(AgentResult{..})` with the reason in
+     `diagnostics`, never a panic or silent success (AGENTS.md "failures
+     degrade, never panic").
+  3. `scoring::score_task_outcome`/`score_run` (`scoring.rs`) now take a
+     `changed_files: &[String]` ground-truth parameter and compute artifact
+     recall/precision/prohibited-change detection from it, never from
+     `agent.touched_files`. `count_unsupported_claims` was extended to also
+     flag when the model's self-reported `touched_files` disagrees with
+     `changed_files` — a direct claim-vs-reality check, only possible now
+     that ground truth is threaded through.
+  4. `eval_runner.rs`'s `run_eval` now reads `wt.changed_files()` and
+     `wt.capture_diff()` — and `score_run`'s `run_verification` still runs
+     against the live `wt_path` — strictly before the `EvalWorktree` local
+     goes out of scope and its `Drop` impl removes the worktree; the
+     captured diff/changed-files are stored on `EvalRun` so they survive
+     after the worktree is gone.
+  5. Added `agent::tests::
+     end_to_end_worktree_patch_apply_and_scoring_catches_extraneous_edit`: a
+     real (non-mocked past the model-call boundary) `EvalWorktree::create`
+     against a throwaway repo, a real `apply_patch` call (the exact private
+     function `PatchApplyCodingAgent::execute` uses) applying one diff that
+     both fixes the target file and makes an extraneous edit to a second
+     file, then a real `scoring::score_task_outcome` call whose
+     `PracticalRelevanceSet` marks the first file expected and the second
+     prohibited. The agent's self-reported `touched_files` in this test
+     deliberately names neither real file, to prove scoring follows the
+     worktree, not the self-report.
+- Observed result and measurements: `cargo check --workspace` clean (only
+  pre-existing unrelated warnings from `gix`/`llm-sdk`/`akar-components`/
+  `wgpu`). `cargo test --workspace` green throughout every step; `task-zero-lab`
+  lib tests grew from 154 → 166 over the five changes. The new end-to-end
+  test asserts, and passes: `artifact_recall == 1.0` (intended fix
+  detected), `artifact_precision == 0.5` (penalized for the extraneous
+  file), `violated_prohibitions == ["notes.txt"]`,
+  `negative_constraints_respected == false`, `verification_passed ==
+  Some(true)` (a `grep` check on the fixed content), and
+  `unsupported_claims > 0` (the self-report mismatch was caught).
+- Validated findings: the mechanical gap identified in the prior note is
+  closed — a coding agent's worktree edits (via the new patch-apply
+  adapter) are now what task-outcome scoring actually measures, not a
+  regex over free-form text. The end-to-end test demonstrates this with a
+  real worktree and a real scoring call, not a unit-level mock of either.
+  Path-traversal and absolute-path rejection in the patch-apply adapter are
+  covered by dedicated tests and run before any subprocess is spawned.
+- Rejected or unsupported interpretations: none of this is evidence about
+  prompt quality, model behavior, or task outcome for any real Task 0 case
+  — it is harness plumbing. No Task 6 acceptance-criteria checkbox is
+  marked from this note; that requires the live runs in the next
+  iteration.
+- User decision or pending decision: pending — whether/how to run step 6
+  (C07 live across raw/deterministic/helper-refined variants, ≥2 runs each,
+  same fixed capable-agent config, using the new `PatchApplyCodingAgent`;
+  C01 run separately as the read-only planning comparison). This requires
+  live credentials (`OPENROUTER_API_KEY`) or a running local llama.cpp
+  server and will make real, possibly billed, external calls — explicit
+  go-ahead needed before executing.
+- Next iteration: confirm model/provider and credential availability, then
+  run C07 live (≥2 reps × 3 variants) and C01 live (read-only case,
+  separately) with `eval_runner.rs`'s `run` or `run-llama-cpp` subcommands
+  using `PatchApplyCodingAgent`; record results per Task 6's acceptance
+  criteria before touching any checkbox.
+- Detailed artifacts: `crates/task-zero-lab/src/agent.rs`,
+  `src/scoring.rs`, `src/eval.rs`, `src/bin/eval_runner.rs`.
+
+### 2026-08-14 — C07 fixture corrected; first live patch-apply run; C01 blocked by the same fixture bug
+
+- Parent criterion/question: Task 6's live-comparison bullets (fixed
+  capable-agent config across variants; disposable worktree per variant
+  capturing diff/verification/touched artifacts; task outcome scored
+  against the practical relevance set). This iteration's goal was the first
+  live execution of the patch-apply adapter built in the prior note, not to
+  satisfy any Task 6 checkbox outright.
+- Repository and immutable revision: `case_c07()` was corrected (see below)
+  and then run live against `~/Projects/dwata` at `11d98e0`
+  (`11d98e0ebe604dfff58f9943a562f7f568ccd552`), the direct parent of the
+  known fix commit `8165cd2`. `case_c01()` was attempted against daftprompt
+  at `febfa42e747ee6f5b64f7c2f0549f9b82d1babaa` and failed before any run
+  (see below).
+- Fixture and input request: C07 expert request ("Fix the Unicode
+  byte-boundary panic in email ranking..."), 3 rendered variants
+  (raw human, deterministic baseline, helper-refined), 2 repetitions each
+  (6 runs total). No C01 runs were produced.
+- Harness/detector/prompt/policy/model versions: `task-zero-lab` v0.1.0;
+  `task-zero-eval-v2` schema; capable-agent model
+  `unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL` via a local llama.cpp server
+  (`http://localhost:8080`), `PatchApplyCodingAgent`, temperature 0.0, used
+  as both the capable agent and the helper model (same local model in two
+  roles — a resource constraint of this iteration, not a Task 5/6
+  requirement that they differ).
+- Harness change, in order:
+  1. Fixed `case_c07()` (`eval.rs`): `repo_path` was hardcoded to daftprompt
+     itself with a comment admitting the real repo might be elsewhere;
+     changed to `~/Projects/dwata` (already locally cloned). `revision` was
+     `8165cd2` — verified (via `git show`/`rev-parse` against the real
+     dwata clone) to be the fix commit itself, leaving nothing for a live
+     agent to fix; changed to its parent `11d98e0`. `expected_changes`'
+     path was `email_ranking/mod.rs`; the real path is
+     `dwata-api/src/email_ranking/mod.rs` — confirmed this was a real
+     scoring defect, not cosmetic: `scoring.rs`'s `path_matches_any` requires
+     an exact match (or explicit glob) for non-`/`-suffixed patterns, so the
+     old path could never have matched a real `changed_files` entry.
+  2. Added `--case <ID>` (comma-separated filter) to `RunLlamaCpp`/`Run` in
+     `eval_runner.rs`, since `all_cases()` unconditionally includes
+     `case_c02()` (a private repo most machines don't have cloned) and would
+     abort partway through an unfiltered run.
+  3. Added `--patch-apply` to `RunLlamaCpp`, selecting `PatchApplyCodingAgent`
+     over the free-form `LlamaCppCodingAgent`.
+  4. Ran `eval_runner run-llama-cpp --case C07 --patch-apply --helper-model
+     <same model> --repetitions 2`, then attempted the same for `--case
+     C01`.
+- Observed result and measurements: C07 completed in ~85s wall clock (6
+  runs; 92.1s summed model-call time, 10-22s/call — consistent with real
+  local inference). Full per-run scores (identical across both
+  repetitions):
+
+  | variant | recall | precision | violated_prohibitions | verification_passed | unsupported_claims |
+  |---|---|---|---|---|---|
+  | raw_human | 0.0 | 1.0 | [] | false | 0 |
+  | deterministic_baseline | 0.0 | 1.0 | [] | false | 2 |
+  | helper_refined | 0.0 | 1.0 | [] | false | 2 |
+
+  Every run's `agent_result.diagnostics` was `["[no diff extracted] model
+  response contained no fenced or bare unified diff"]` and
+  `worktree_changed_files` was empty in all six — the model never attempted
+  a patch; its own response text said the source of
+  `email_ranking/mod.rs` was not present in what it was given. Recall is
+  therefore genuinely 0.0 (nothing touched), and precision is a vacuous 1.0
+  (no extraneous touches only because nothing was touched at all) — not
+  evidence of correct, scoped work. `worktree_commit` matched the pinned
+  `11d98e0` on every run, confirming no snapshot drift. `verification_passed`
+  was `false` on every run, but independently confirmed (via the recorded
+  `verification_diagnostics`) to be a harness defect, not a model or patch
+  failure: `EvalWorktree::create` checks the worktree out under the OS temp
+  directory (e.g. `/private/var/folders/.../T/daftprompt-eval-C07-.../`),
+  and dwata's `Cargo.toml` workspace uses relative path dependencies
+  (`../../llm-sdk`) that resolve correctly from `~/Projects/dwata` but not
+  from that temp location, so `cargo check --workspace` fails with a
+  manifest-resolution error regardless of patch quality. C01 failed before
+  producing any output: `failed to resolve revision
+  'febfa42e747ee6f5b64f7c2f0549f9b82d1babaa': couldn't parse revision`.
+  Independently verified: that commit does not exist in daftprompt but does
+  exist in `~/Projects/akar` (`git cat-file -t` → `commit`); the case's
+  expected artifact `epics/020-*.md` does not exist in daftprompt's `epics/`
+  directory (daftprompt has no Epic 020) but does exist in akar's. The
+  manifest (`epics/research/task-zero-lab/manifest.md`, "C01 — akar:
+  cross-model review of Epic 020") independently confirms C01 is an akar
+  case. `case_c01()`'s `repo_path` has the same class of bug `case_c07()`
+  had before this iteration's fix: hardcoded to daftprompt instead of the
+  case's real target repository.
+- Validated findings: the full worktree → patch-apply → ground-truth-scoring
+  pipeline built in the prior note executes correctly end to end against a
+  real local model and a real external repository — this is now proven
+  beyond the synthetic e2e test, not just plausible from code review. The
+  `helper_refined` variant used a genuinely live, non-disabled helper (two
+  real inference rounds per run, populated `raw_response_hash`s and token
+  counts) — the old "helper=None collapses silently to the baseline"
+  failure mode did not recur. However a *new*, distinct way to reach the
+  same observable symptom appeared: the helper's `stop_reason` was
+  `"low_marginal_yield"` with `submission: null` on every round, so the
+  rendered `helper_refined` text was still byte-identical (4465 bytes) to
+  `deterministic_baseline` — a live helper correctly declining to submit a
+  low-value refinement, not a wiring defect, but the same "variant 3 didn't
+  actually differ" observation the user asked to watch for.
+- Rejected or unsupported interpretations: this run does not show the
+  patch-apply adapter, the worktree wiring, or the scoring fix are broken —
+  every diagnostic traces to (a) the model choosing not to fabricate a
+  patch without source content it wasn't given, which is a prompt/context
+  coverage question for Tasks 3-4's packet selection, not this iteration's
+  code, and (b) a worktree-placement design gap this iteration did not
+  attempt to fix. Zero-recall-because-no-patch-attempted is not equivalent
+  to "the agent tried and failed" and must not be reported as the harness
+  or model failing at the coding task; it is evidence the prompt did not
+  give the model enough to act on. No Task 6 acceptance-criteria checkbox
+  is touched by this note.
+- User decision or pending decision: pending. Two concrete fixes were
+  identified and NOT applied without review, per this epic's rule that
+  material design conclusions get human review before code changes: (1)
+  correct `case_c01()`'s `repo_path` to `~/Projects/akar` (mirroring the
+  `case_c07()` fix); (2) decide how `EvalWorktree` should place disposable
+  worktrees so relative path-dependencies in a checked-out repo (dwata's
+  `../../llm-sdk`, and potentially other cases) resolve correctly — options
+  include creating the worktree as a sibling directory of the real
+  repository clone instead of the OS temp directory, or another mechanism.
+  A separate, lower-priority observation: the packet/prompt pipeline may
+  need to surface actual target-file source content (not just evidence
+  references) for a capable agent to have any chance of producing a real
+  patch on a case like C07.
+- Next iteration: fix `case_c01()`'s repo path; resolve the worktree
+  path-dependency placement issue; re-run C07 and run C01 for the first
+  time; then examine why the model received insufficient context to attempt
+  a patch at all (a packet/prompt content question, likely relevant to
+  Epic 012/013's context-sufficiency criteria as well as this epic's Task
+  6).
+- Detailed artifacts:
+  `epics/research/task-zero-lab/live-2026-08-14/c07-report.json`,
+  `crates/task-zero-lab/src/eval.rs`, `src/bin/eval_runner.rs`.
+
+### 2026-08-15 — case_c01() fixed, worktree sibling placement fixed, nightly toolchain fixed; second live run
+
+- Parent criterion/question: closing the three follow-ups from the prior
+  note before drawing any Task 6 conclusion: `case_c01()`'s repo-path bug,
+  the worktree path-dependency placement gap, and (newly discovered while
+  fixing placement) a nightly-toolchain gap in C07's verification command.
+- Repository and immutable revision: `~/Projects/akar` at
+  `febfa42e747ee6f5b64f7c2f0549f9b82d1babaa` (C01, historical, 27 commits
+  behind akar's `010dcbb` HEAD as of this note) and `~/Projects/dwata` at
+  `11d98e0` (C07, unchanged from the prior note). daftprompt working tree
+  unchanged (still `docs/helper-orchestrator-prompt-patterns`).
+- Fixture and input request: same C01/C07 expert requests as before, 3
+  variants × 2 repetitions each (12 runs total, 6 per case).
+- Harness/detector/prompt/policy/model versions: `task-zero-lab` v0.1.0,
+  `task-zero-eval-v2` schema, `unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL` (local
+  llama.cpp, `http://localhost:8080`) as both capable agent and helper,
+  temperature 0.0, `PatchApplyCodingAgent`.
+- Harness change, in order (each independently verified before being
+  applied, not just proposed):
+  1. `case_c01()` (`eval.rs`): `repo_path` corrected from the daftprompt
+     self-reference to `~/Projects/akar`. Independently verified: the
+     pinned revision resolves there (`git cat-file -t` → `commit`,
+     `git log -1` → "epic(020): component-based webpage sample"), and
+     `epics/020-component-webpage-sample.md` exists at that revision.
+  2. `EvalWorktree::create` (`worktree.rs`): worktree placement changed from
+     `std::env::temp_dir()` to a sibling of the real repo clone (e.g.
+     `~/Projects/dwata-eval-<label>`), with a no-parent temp-dir fallback
+     that degrades rather than panics. Root cause independently confirmed:
+     dwata's `dwata-agents/Cargo.toml` depends on `llm-sdk` via
+     `../../llm-sdk`, which resolves to `~/Projects/llm-sdk` only when the
+     checkout is a direct sibling of `dwata` inside `~/Projects/` — verified
+     directly with `git worktree add --detach ~/Projects/dwata-eval-verify-check
+     11d98e0` followed by `cargo tree -p llm-sdk`, which resolved correctly
+     (previously failed with "failed to read .../T/llm-sdk/Cargo.toml").
+  3. C07's `verification_commands` (`eval.rs`) changed from
+     `"cargo check --workspace"` to `"cargo +nightly check --workspace"`.
+     Root cause independently confirmed: `~/Projects/dwata/rust-toolchain.toml`
+     is **untracked** (`git status --porcelain` shows `??`) — a machine-local
+     file, not part of the repo history at any revision, so no git worktree
+     of dwata, at any commit, ever inherits it. The host's global
+     `~/.cargo/config.toml` sets `codegen-backend = "cranelift"` (unstable,
+     nightly-only), so plain `cargo check --workspace` fails in any dwata
+     worktree regardless of patch quality. Verified directly: a fresh
+     sibling worktree at `11d98e0` failed with `feature 'codegen-backend' is
+     required` under default (stable, 1.97.1) cargo, and succeeded cleanly
+     under `cargo +nightly check --workspace` (rustc 1.99.0-nightly, the
+     same version the real `~/Projects/dwata` clone uses).
+  4. Re-ran C07 (`--case C07 --patch-apply --helper-model ... --repetitions
+     2`) and ran C01 for the first time (`--case C01`, same flags),
+     sequentially, via `eval_runner run-llama-cpp`.
+- Observed result and measurements (both cases, 2 identical repetitions
+  each — see caveat below):
+
+  **C07** (dwata, mutation case):
+
+  | variant | recall | precision | violated_prohibitions | verification_passed | unsupported_claims |
+  |---|---|---|---|---|---|
+  | raw_human | 0.0 | 1.0 | [] | true | 0 |
+  | deterministic_baseline | 0.0 | 1.0 | [] | true | 2 |
+  | helper_refined | 0.0 | 1.0 | [] | true | 2 |
+
+  **C01** (akar, read-only case):
+
+  | variant | recall | precision | violated_prohibitions | verification_passed | unsupported_claims |
+  |---|---|---|---|---|---|
+  | raw_human | 0.0 | 1.0 | [] | true | 0 |
+  | deterministic_baseline | 0.0 | 1.0 | [] | true | 0 |
+  | helper_refined | 0.0 | 1.0 | [] | true | 0 |
+
+  Independently spot-verified (not just trusting the executing agent):
+  both output JSON files parse as valid JSON; `worktree_commit` on every
+  C07 run is exactly `11d98e0ebe604dfff58f9943a562f7f568ccd552` (matches
+  the pinned revision, no drift); a sampled C07 `verification_diagnostics`
+  entry shows a real `cargo +nightly check --workspace` invocation
+  (dependency resolution and package list in stderr, not a stub);
+  `git -C ~/Projects/dwata worktree list` and `git -C ~/Projects/akar
+  worktree list` each show only their own `[main]` entry after the run
+  (the executing agent found 6 stale-but-already-removed worktree admin
+  records per repo left over from the *prior* run's temp-dir-era worktrees
+  and pruned them with `git worktree prune -v`; independently confirmed
+  clean afterward).
+
+  `verification_passed` is now `true` (was `false` in the 2026-08-14 run) —
+  a real signal, not a harness artifact: it passes because the pre-fix
+  dwata/akar checkouts genuinely compile clean under nightly, not because
+  the check was skipped or a patch happened to be correct.
+
+  **Zero diffs were extracted in any of the 12 runs** (`diagnostics:
+  ["[no diff extracted] model response contained no fenced or bare unified
+  diff"]`, `worktree_changed_files: []` throughout). For C07 this persists
+  unchanged from the prior run despite the repo/revision/toolchain fixes;
+  the model's own response text explicitly states the packet told it "no
+  index was available" / "No evidence-backed change surface was
+  identified" and that it cannot inspect the target file's actual source.
+  For C01 (read-only), a clean worktree is the *correct* outcome, and the
+  model's response text confirms it is behaving correctly rather than
+  merely finding nothing: the deterministic/helper variants explicitly
+  cite the prompt's stated read-only negative constraint as the reason for
+  producing prose analysis instead of a diff.
+
+  The `helper_refined` variant was byte-identical to
+  `deterministic_baseline` in every one of the 12 runs (C07: 4469 bytes
+  both; C01: matching sizes), with `stop_reason: "low_marginal_yield"` and
+  `submission: null` on every round in both cases — the same convergence
+  pattern from the prior note, now reproduced a second time rather than
+  observed once.
+- Validated findings: all three fixes are independently confirmed correct
+  and load-bearing, not just plausible — C01 now runs at all, C07's
+  `worktree_commit` never drifts from the pinned revision, and
+  `verification_passed` now reflects a real compile check instead of an
+  unwinnable path-resolution failure. The worktree/patch-apply/scoring
+  pipeline built across the last two notes is confirmed working against
+  two different real external repositories, not just synthetic fixtures or
+  a single lucky case.
+- Rejected or unsupported interpretations: fixing the repo/revision/
+  toolchain plumbing did **not** fix, and was never expected to fix, the
+  zero-diff-extraction outcome for C07 — that is a distinct, still-open gap
+  in what the packet/prompt actually gives the model to work with (likely
+  a Task 3/4 packet-selection question: does the packet surface real
+  source-file content for the identified change surface, or only
+  evidence/candidate references to it?), not a worktree or patch-apply
+  defect. Do not read C07's "verification_passed: true" as evidence the
+  task was completed — it passed because nothing was changed, on a
+  revision that already compiles. The `helper_refined ==
+  deterministic_baseline` convergence is now a twice-reproduced pattern,
+  not a fluke, but two total observations (across two live-run sessions,
+  4 case-variant pairs each showing the same collapse) is still a small
+  sample for a harness-level conclusion about this particular helper
+  model's behavior. No Task 6 (or any other) acceptance-criteria checkbox
+  is touched by this note.
+- User decision or pending decision: pending. Two concrete follow-ups were
+  surfaced and not yet acted on: (1) investigate why the deterministic/
+  helper packet for C07 does not surface `dwata-api/src/email_ranking/mod.rs`'s
+  actual source content, which blocks the model from ever having a
+  realistic chance to produce a patch on this case — this is upstream of
+  Task 6, likely a Task 3/4 packet-selection gap; (2) `EvalWorktree`'s
+  cleanup leaves stale `git worktree` administrative records (directory
+  removed, but not deregistered/pruned) — a minor but real gap worth a
+  small follow-up fix so future runs don't need manual `git worktree
+  prune`.
+- Next iteration: decide whether to pursue the packet-content gap (likely
+  the highest-leverage next step, since it blocks C07 from ever producing
+  a scoreable patch regardless of prompt variant) before adding more
+  repetitions or cases; fix `EvalWorktree`'s stale-admin-record cleanup;
+  once C07 can produce at least some patches, run enough repetitions to
+  distinguish a stable result from single-run variance per Task 6's own
+  acceptance bar ("each case-variant pair runs more than once... distinguishes
+  a stable result from single-run variance") — 2 repetitions twice-observed
+  is suggestive but not yet that bar.
+- Detailed artifacts:
+  `epics/research/task-zero-lab/live-2026-08-15/c07-report.json`,
+  `epics/research/task-zero-lab/live-2026-08-15/c01-report.json`,
+  `crates/task-zero-lab/src/eval.rs`, `src/worktree.rs`.
