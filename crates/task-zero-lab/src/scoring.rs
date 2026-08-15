@@ -39,15 +39,27 @@ pub fn score_prompt_quality(
 
 // ── Task outcome scoring ───────────────────────────────────────────────
 
-/// Score task outcome by comparing the agent's touched files against the
+/// Score task outcome by comparing the actual worktree diff against the
 /// practical relevance set.
+///
+/// `changed_files` is the ground truth: it must come from
+/// `EvalWorktree::changed_files()`, read from the real worktree state after
+/// the agent ran and before the worktree guard removes it — never from
+/// `agent.touched_files`, which is at best a model self-report (and empty
+/// for the patch-apply adapter). Artifact recall/precision and prohibited-
+/// change detection are computed from `changed_files`. `agent.touched_files`
+/// is still consulted by `count_unsupported_claims` as a secondary,
+/// diagnostic signal (see that function's doc comment) — a mismatch between
+/// what the model claimed and what actually changed is itself informative,
+/// not evidence to score outcome against.
 pub fn score_task_outcome(
     agent: &AgentResult,
+    changed_files: &[String],
     relevance: &PracticalRelevanceSet,
     worktree_root: &Path,
     prompt_text: &str,
 ) -> TaskOutcomeScore {
-    let touched: HashSet<&str> = agent.touched_files.iter().map(|s| s.as_str()).collect();
+    let touched: HashSet<&str> = changed_files.iter().map(|s| s.as_str()).collect();
 
     // Artifact recall: fraction of expected changes actually touched.
     let expected_changed: Vec<&ExpectedArtifact> = relevance
@@ -95,8 +107,15 @@ pub fn score_task_outcome(
         run_verification(worktree_root, &relevance.verification_commands);
 
     // Unsupported claims: heuristic scan of agent response for file paths
-    // and identifiers not traceable to the prompt context.
-    let unsupported = count_unsupported_claims(&agent.response_text, prompt_text, &touched);
+    // and identifiers not traceable to the prompt context or the real diff,
+    // plus a check of the model's own touched_files self-report against the
+    // real diff.
+    let unsupported = count_unsupported_claims(
+        &agent.response_text,
+        prompt_text,
+        &touched,
+        &agent.touched_files,
+    );
 
     // Negative constraints: check if the diff violates them.
     // For now, check whether prohibited files appear in the diff.
@@ -114,10 +133,13 @@ pub fn score_task_outcome(
     }
 }
 
-/// Score both prompt quality and task outcome.
+/// Score both prompt quality and task outcome. `changed_files` must be the
+/// ground-truth list from `EvalWorktree::changed_files()` — see
+/// [`score_task_outcome`].
 pub fn score_run(
     variant: &PromptVariant,
     agent: &AgentResult,
+    changed_files: &[String],
     original_request: &str,
     negative_constraints: &[String],
     relevance: &PracticalRelevanceSet,
@@ -125,7 +147,13 @@ pub fn score_run(
 ) -> EvalScore {
     EvalScore {
         prompt_quality: score_prompt_quality(variant, original_request, negative_constraints),
-        task_outcome: score_task_outcome(agent, relevance, worktree_root, &variant.text),
+        task_outcome: score_task_outcome(
+            agent,
+            changed_files,
+            relevance,
+            worktree_root,
+            &variant.text,
+        ),
     }
 }
 
@@ -189,16 +217,37 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 
 /// Heuristic unsupported-claims counter: scans the agent's response for
 /// file paths and backtick-quoted identifiers not present in the prompt
-/// context or touched-files set. This is a heuristic, not a model — it
-/// catches file paths, function names, and factual assertions that don't
-/// appear in the prompt text.
+/// context or `changed_files` (the ground-truth worktree diff). This is a
+/// heuristic, not a model — it catches file paths, function names, and
+/// factual assertions that don't appear in the prompt text.
+///
+/// Because `changed_files` is ground truth (not the model's self-report),
+/// this doubles as a "model describes an edit it never made" check: a path
+/// the response mentions that isn't in the prompt and isn't actually in the
+/// diff is flagged.
+///
+/// `claimed_files` is `agent.touched_files` — the model/adapter's own
+/// self-reported touched-files list (empty for the patch-apply adapter,
+/// regex-extracted for the free-form adapters). Any entry there that is not
+/// actually in `changed_files` is also counted: it is a "model claims to
+/// have touched X but the real diff shows otherwise" case, symmetric to the
+/// response-text scan above but checking the structured self-report rather
+/// than prose. This is a small, cheap addition now that ground truth is
+/// available — it is not a full claim-by-claim verifier of response prose.
 fn count_unsupported_claims(
     response: &str,
     prompt: &str,
-    touched: &HashSet<&str>,
+    changed_files: &HashSet<&str>,
+    claimed_files: &[String],
 ) -> usize {
     let prompt_lower = prompt.to_lowercase();
     let mut unsupported = 0usize;
+
+    for claimed in claimed_files {
+        if !changed_files.contains(claimed.as_str()) {
+            unsupported += 1;
+        }
+    }
 
     for line in response.lines() {
         let trimmed = line.trim();
@@ -211,7 +260,7 @@ fn count_unsupported_claims(
         for p in &paths {
             let p_lower = p.to_lowercase();
             if !prompt_lower.contains(&p_lower)
-                && !touched.iter().any(|t| t.to_lowercase() == p_lower)
+                && !changed_files.iter().any(|t| t.to_lowercase() == p_lower)
                 && !p.starts_with("http")
             {
                 unsupported += 1;
@@ -464,7 +513,8 @@ mod tests {
     fn artifact_recall_full_when_all_touched() {
         let agent = make_agent(vec!["src/foo.rs", "src/bar.rs"]);
         let rel = make_relevance(vec![("src/foo.rs", true), ("src/bar.rs", true)], vec![]);
-        let score = score_task_outcome(&agent, &rel, Path::new("/tmp"), "analyze foo and bar");
+        let changed = agent.touched_files.clone();
+        let score = score_task_outcome(&agent, &changed, &rel, Path::new("/tmp"), "analyze foo and bar");
         assert!((score.artifact_recall - 1.0).abs() < f64::EPSILON);
     }
 
@@ -472,7 +522,8 @@ mod tests {
     fn artifact_recall_partial_when_subset_touched() {
         let agent = make_agent(vec!["src/foo.rs"]);
         let rel = make_relevance(vec![("src/foo.rs", true), ("src/bar.rs", true)], vec![]);
-        let score = score_task_outcome(&agent, &rel, Path::new("/tmp"), "analyze foo and bar");
+        let changed = agent.touched_files.clone();
+        let score = score_task_outcome(&agent, &changed, &rel, Path::new("/tmp"), "analyze foo and bar");
         assert!((score.artifact_recall - 0.5).abs() < f64::EPSILON);
     }
 
@@ -480,7 +531,8 @@ mod tests {
     fn artifact_precision_penalizes_extraneous_touches() {
         let agent = make_agent(vec!["src/foo.rs", "src/unrelated.rs"]);
         let rel = make_relevance(vec![("src/foo.rs", true)], vec![]);
-        let score = score_task_outcome(&agent, &rel, Path::new("/tmp"), "analyze foo");
+        let changed = agent.touched_files.clone();
+        let score = score_task_outcome(&agent, &changed, &rel, Path::new("/tmp"), "analyze foo");
         assert!((score.artifact_precision - 0.5).abs() < f64::EPSILON);
     }
 
@@ -491,7 +543,8 @@ mod tests {
             vec![("src/foo.rs", true)],
             vec![("gui/", false)],
         );
-        let score = score_task_outcome(&agent, &rel, Path::new("/tmp"), "analyze foo");
+        let changed = agent.touched_files.clone();
+        let score = score_task_outcome(&agent, &changed, &rel, Path::new("/tmp"), "analyze foo");
         assert!(!score.violated_prohibitions.is_empty());
         assert!(!score.negative_constraints_respected);
     }
@@ -503,7 +556,8 @@ mod tests {
             vec![("src/foo.rs", true)],
             vec![("gui/", false)],
         );
-        let score = score_task_outcome(&agent, &rel, Path::new("/tmp"), "analyze foo");
+        let changed = agent.touched_files.clone();
+        let score = score_task_outcome(&agent, &changed, &rel, Path::new("/tmp"), "analyze foo");
         assert!(score.violated_prohibitions.is_empty());
         assert!(score.negative_constraints_respected);
     }
@@ -512,7 +566,8 @@ mod tests {
     fn directory_prefix_matching_works() {
         let agent = make_agent(vec!["gui/pages/Home.tsx"]);
         let rel = make_relevance(vec![], vec![("gui/", false)]);
-        let score = score_task_outcome(&agent, &rel, Path::new("/tmp"), "no gui changes");
+        let changed = agent.touched_files.clone();
+        let score = score_task_outcome(&agent, &changed, &rel, Path::new("/tmp"), "no gui changes");
         assert!(!score.violated_prohibitions.is_empty());
     }
 
@@ -528,7 +583,8 @@ mod tests {
     fn empty_relevance_set_scores_perfectly() {
         let agent = make_agent(vec!["something.rs"]);
         let rel = make_relevance(vec![], vec![]);
-        let score = score_task_outcome(&agent, &rel, Path::new("/tmp"), "do something");
+        let changed = agent.touched_files.clone();
+        let score = score_task_outcome(&agent, &changed, &rel, Path::new("/tmp"), "do something");
         assert!((score.artifact_recall - 1.0).abs() < f64::EPSILON);
         assert!(score.violated_prohibitions.is_empty());
     }
@@ -548,6 +604,7 @@ mod tests {
         let rel = make_relevance(vec![], vec![]);
         let score = score_task_outcome(
             &agent,
+            &[],
             &rel,
             Path::new("/tmp"),
             "analyze the epic file",
@@ -571,6 +628,7 @@ mod tests {
         let rel = make_relevance(vec![], vec![]);
         let score = score_task_outcome(
             &agent,
+            &[],
             &rel,
             Path::new("/tmp"),
             "look at src/foo.rs and tell me about it",
@@ -594,6 +652,7 @@ mod tests {
         let rel = make_relevance(vec![], vec![]);
         let score = score_task_outcome(
             &agent,
+            &[],
             &rel,
             Path::new("/tmp"),
             "analyze the epic",
@@ -605,6 +664,7 @@ mod tests {
     fn verification_captures_diagnostics() {
         let score = score_task_outcome(
             &make_agent(vec![]),
+            &[],
             &PracticalRelevanceSet {
                 expected_changes: vec![],
                 prohibited_changes: vec![],
@@ -623,6 +683,7 @@ mod tests {
     fn verification_handles_nonexistent_command() {
         let score = score_task_outcome(
             &make_agent(vec![]),
+            &[],
             &PracticalRelevanceSet {
                 expected_changes: vec![],
                 prohibited_changes: vec![],
@@ -635,5 +696,83 @@ mod tests {
         );
         assert_eq!(score.verification_passed, Some(false));
         assert!(!score.verification_diagnostics.is_empty());
+    }
+
+    // ── Ground-truth vs self-report ────────────────────────────────────────
+
+    #[test]
+    fn scoring_uses_ground_truth_not_agent_self_report_for_recall_precision() {
+        // The model claims (touched_files self-report) it edited an
+        // unrelated file and says nothing about the file that actually
+        // changed. Ground truth (changed_files, as if read from
+        // EvalWorktree::changed_files()) shows the opposite: only the
+        // expected file was actually touched. Scoring must follow ground
+        // truth, not the self-report.
+        let agent = AgentResult {
+            response_text: "done".into(),
+            touched_files: vec!["src/decoy.rs".into()],
+            diff: None,
+            input_tokens: 100,
+            output_tokens: 50,
+            elapsed_ms: 1000,
+            stop_reason: Some("stop".into()),
+            diagnostics: vec![],
+        };
+        let changed_files = vec!["src/foo.rs".to_string()];
+        let rel = make_relevance(vec![("src/foo.rs", true)], vec![]);
+
+        let score = score_task_outcome(&agent, &changed_files, &rel, Path::new("/tmp"), "fix foo");
+
+        // Recall is full: the real diff touched the expected file, even
+        // though the agent's self-report never mentioned it.
+        assert!((score.artifact_recall - 1.0).abs() < f64::EPSILON);
+        // Precision is full too: the real diff touched only the expected
+        // file. If precision were (wrongly) computed from touched_files, it
+        // would be 0.0 because "src/decoy.rs" is not in the expected set.
+        assert!((score.artifact_precision - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn scoring_uses_ground_truth_not_agent_self_report_for_prohibited_changes() {
+        // The model's self-report claims it only touched the allowed file,
+        // but the real diff shows it also touched a prohibited path.
+        // Scoring must catch the real violation, not trust the self-report.
+        let agent = AgentResult {
+            response_text: "done".into(),
+            touched_files: vec!["src/foo.rs".into()],
+            diff: None,
+            input_tokens: 100,
+            output_tokens: 50,
+            elapsed_ms: 1000,
+            stop_reason: Some("stop".into()),
+            diagnostics: vec![],
+        };
+        let changed_files = vec!["src/foo.rs".to_string(), "gui/other.rs".to_string()];
+        let rel = make_relevance(vec![("src/foo.rs", true)], vec![("gui/", false)]);
+
+        let score = score_task_outcome(&agent, &changed_files, &rel, Path::new("/tmp"), "fix foo");
+
+        assert!(!score.violated_prohibitions.is_empty());
+        assert!(!score.negative_constraints_respected);
+    }
+
+    #[test]
+    fn unsupported_claims_flags_self_reported_file_not_in_real_diff() {
+        // The response text doesn't mention any paths, but the agent's
+        // structured touched_files self-report claims a file that the real
+        // diff (changed_files) does not contain. This must be flagged.
+        let agent = AgentResult {
+            response_text: "I made the requested change.".into(),
+            touched_files: vec!["src/phantom.rs".into()],
+            diff: None,
+            input_tokens: 100,
+            output_tokens: 50,
+            elapsed_ms: 1000,
+            stop_reason: Some("stop".into()),
+            diagnostics: vec![],
+        };
+        let rel = make_relevance(vec![], vec![]);
+        let score = score_task_outcome(&agent, &[], &rel, Path::new("/tmp"), "do something");
+        assert!(score.unsupported_claims > 0);
     }
 }

@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::prompt::MutationBoundary;
 
-pub const EVAL_SCHEMA_VERSION: &str = "task-zero-eval-v1";
+pub const EVAL_SCHEMA_VERSION: &str = "task-zero-eval-v2";
 
 // ── Practical relevance set ────────────────────────────────────────────
 
@@ -203,6 +203,18 @@ pub struct EvalRun {
     pub repetition: u32,
     pub worktree_commit: String,
     pub worktree_path: Option<PathBuf>,
+    /// Ground-truth unified diff read from the worktree via
+    /// `EvalWorktree::capture_diff()` before the worktree guard removed it.
+    /// `None` in prompt-only mode (no worktree was created) or if the diff
+    /// capture itself failed. This is the diff actually on disk, not the
+    /// model's self-reported `agent_result.diff`.
+    pub worktree_diff: Option<String>,
+    /// Ground-truth changed-file list read from the worktree via
+    /// `EvalWorktree::changed_files()` before the worktree guard removed it.
+    /// Empty in prompt-only mode. This is what `score.task_outcome`'s
+    /// artifact recall/precision/violated_prohibitions are computed from —
+    /// not `agent_result.touched_files`, which is a model self-report.
+    pub worktree_changed_files: Vec<String>,
     pub agent_result: AgentResult,
     pub score: EvalScore,
     pub graph_hash: String,
@@ -306,7 +318,12 @@ pub struct EvalSummary {
 pub fn case_c01() -> EvalCase {
     EvalCase {
         id: "C01".into(),
-        repo_path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."),
+        // akar repo path — the case's pinned revision and expected artifact
+        // (Epic 020) live in akar, not daftprompt; see manifest.md "C01 —
+        // akar: cross-model review of Epic 020" and the 2026-08-14
+        // Experiment Note for the corrected class of this bug (mirrors the
+        // case_c07() fix).
+        repo_path: std::path::PathBuf::from("/Users/brainless/Projects/akar"),
         revision: "febfa42e747ee6f5b64f7c2f0549f9b82d1babaa".into(),
         expert_request: "Analyze Epic 020 and suggest changes before implementation.".into(),
         non_expert_request: Some("Can someone check epic 020 is okay before we build it?".into()),
@@ -377,11 +394,17 @@ pub fn case_c02() -> EvalCase {
 pub fn case_c07() -> EvalCase {
     EvalCase {
         id: "C07".into(),
-        repo_path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."),
-        // dwata has no single "the" revision — we use a reconstructed
-        // pre-session state. The actual repo may not be at this path; this
-        // fixture is designed for scripted/deterministic testing.
-        revision: "8165cd2".into(),
+        // dwata repo path — may not exist locally; fixture designed for
+        // scripted/deterministic testing when the repo is unavailable.
+        repo_path: std::path::PathBuf::from("/Users/brainless/Projects/dwata"),
+        // dwata has no single recorded "pre-session" checkout SHA (manifest
+        // §2: reconstructed pre-session state), so `11d98e0` — the direct
+        // parent of fix commit `8165cd2` — is used as the pre-fix revision
+        // to check the worktree out at. It is a reasonable reconstruction,
+        // not a uniquely canonical one: it is simply the last commit before
+        // the fix landed. `8165cd2` itself is the fix and must not be used
+        // as the checkout revision, or there would be nothing left to fix.
+        revision: "11d98e0".into(),
         expert_request:
             "Fix the Unicode byte-boundary panic in email ranking at `email_ranking/mod.rs::contains_date`."
                 .into(),
@@ -396,7 +419,7 @@ pub fn case_c07() -> EvalCase {
         relevance: PracticalRelevanceSet {
             expected_changes: vec![
                 ExpectedArtifact {
-                    path: "email_ranking/mod.rs".into(),
+                    path: "dwata-api/src/email_ranking/mod.rs".into(),
                     should_change: true,
                     expected_blob_hash: None,
                     note: "Replace byte slicing with character iteration at reported byte offsets".into(),
@@ -410,7 +433,17 @@ pub fn case_c07() -> EvalCase {
                     note: "Unrelated GUI date-request change in the same commit must not be touched".into(),
                 },
             ],
-            verification_commands: vec!["cargo check --workspace".into()],
+            // dwata's nightly pin (`rust-toolchain.toml`) is an untracked
+            // local file on the machine this fixture was authored on — git
+            // worktrees never inherit untracked files, so any disposable
+            // worktree of dwata needs nightly requested explicitly or the
+            // machine's global `~/.cargo/config.toml` (`codegen-backend =
+            // "cranelift"`, an unstable/nightly-only feature) fails the
+            // build regardless of patch quality. Verified directly: `cargo
+            // +nightly check --workspace` succeeds cleanly at `11d98e0` in a
+            // real sibling worktree; plain `cargo check --workspace` does
+            // not.
+            verification_commands: vec!["cargo +nightly check --workspace".into()],
             evidence_commits: vec!["8165cd2".into()],
             evidence_source: "011 Experiment 4D".into(),
         },
@@ -429,7 +462,7 @@ mod tests {
 
     #[test]
     fn eval_schema_version_is_set() {
-        assert_eq!(EVAL_SCHEMA_VERSION, "task-zero-eval-v1");
+        assert_eq!(EVAL_SCHEMA_VERSION, "task-zero-eval-v2");
     }
 
     #[test]

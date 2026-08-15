@@ -76,6 +76,10 @@ enum Command {
         /// Scripted helper fixture for offline helper-refined variant.
         #[arg(long)]
         helper_scripted: Option<PathBuf>,
+        /// Restrict the run to specific case IDs (comma-separated, e.g.
+        /// "C01,C07"). Defaults to all cases from `all_cases()` when omitted.
+        #[arg(long, value_delimiter = ',')]
+        case: Vec<String>,
     },
     /// Run live evaluation against a local llama.cpp model.
     RunLlamaCpp {
@@ -104,6 +108,17 @@ enum Command {
         /// Scripted helper fixture for offline helper-refined variant.
         #[arg(long)]
         helper_scripted: Option<PathBuf>,
+        /// Restrict the run to specific case IDs (comma-separated, e.g.
+        /// "C01,C07"). Defaults to all cases from `all_cases()` when omitted.
+        /// Useful because `all_cases()` includes cases pinned to private
+        /// repos (e.g. C02) that will not exist on most machines.
+        #[arg(long, value_delimiter = ',')]
+        case: Vec<String>,
+        /// Use `PatchApplyCodingAgent` (single unified-diff request, applied
+        /// via `git apply` in the worktree) instead of the free-form
+        /// `LlamaCppCodingAgent`.
+        #[arg(long)]
+        patch_apply: bool,
     },
     /// Replay from pre-recorded scripted fixtures (offline, no credentials).
     Scripted {
@@ -250,27 +265,46 @@ fn run_eval(
                 agent.model_name()
             );
 
-            let (worktree_commit, worktree_path, agent_result, score) = if create_worktrees {
+            let (worktree_commit, worktree_path, worktree_diff, worktree_changed_files, agent_result, score) = if create_worktrees {
                 let label = format!("{}-{:?}-rep{}", case.id, variant.kind, rep);
                 let wt = EvalWorktree::create(&case.repo_path, &case.revision, &label)?;
 
                 let commit = wt.resolved_commit().to_string();
                 let wt_path = wt.path().to_path_buf();
 
-                // Execute the agent in the worktree
-                let result = agent.execute(&variant.text)?;
+                // Execute the agent in the worktree. For the patch-apply
+                // adapter this applies a model-returned diff via `git apply`
+                // scoped to `wt_path`; other adapters may act on the
+                // worktree or ignore it (free-form/analysis responses).
+                let result = agent.execute(&variant.text, &wt_path)?;
 
-                // Score the result
+                // Read the ground-truth diff and changed-file list from the
+                // worktree now, before `wt` goes out of scope and its Drop
+                // impl runs `git worktree remove`. This must happen before
+                // the guard drops (Task 6 acceptance criterion: "the
+                // resulting diff, build/verification result, and touched
+                // artifacts are captured"). `run_verification` inside
+                // `score_run`/`score_task_outcome` also runs against
+                // `wt_path` on disk, which is still valid here for the same
+                // reason.
+                let changed_files = wt.changed_files()?;
+                let diff_text = wt.capture_diff().ok();
+
+                // Score the result against ground truth, not the agent's
+                // self-reported touched_files.
                 let score = scoring::score_run(
                     variant,
                     &result,
+                    &changed_files,
                     &case.expert_request,
                     &case.negative_constraints,
                     &case.relevance,
                     &wt_path,
                 );
 
-                (commit, Some(wt_path), result, score)
+                // `wt` drops here (worktree removed) after everything above
+                // that needed the live worktree has already run.
+                (commit, Some(wt_path), diff_text, changed_files, result, score)
             } else {
                 // Prompt-only mode: score prompt quality only.
                 // Task outcome is not applicable (no agent execution).
@@ -302,7 +336,7 @@ fn run_eval(
                     stop_reason: Some("prompt_only".into()),
                     diagnostics: vec!["prompt-only mode: no agent execution".into()],
                 };
-                (case.revision.clone(), None, result, score)
+                (case.revision.clone(), None, None, vec![], result, score)
             };
 
             runs.push(EvalRun {
@@ -314,6 +348,8 @@ fn run_eval(
                 agent_model: agent.model_name().to_string(),
                 repetition: rep,
                 worktree_commit,
+                worktree_diff,
+                worktree_changed_files,
                 worktree_path,
                 agent_result,
                 score,
@@ -345,6 +381,7 @@ fn main() -> anyhow::Result<()> {
             helper_model,
             helper_provider,
             helper_scripted,
+            case,
         } => {
             let _ = dotenvy::dotenv();
             let api_key = std::env::var("OPENROUTER_API_KEY").map_err(|_| {
@@ -373,7 +410,7 @@ fn main() -> anyhow::Result<()> {
                 None
             };
             let helper_name = helper.as_ref().map(|_| "openrouter").unwrap_or("disabled").to_string();
-            run_and_report(&repo, &rev, &agent, repetitions, &output, prompt_only, non_expert, helper.as_mut(), &helper_name)?;
+            run_and_report(&repo, &rev, &agent, repetitions, &output, prompt_only, non_expert, helper.as_mut(), &helper_name, &case)?;
         }
         Command::RunLlamaCpp {
             repo,
@@ -387,6 +424,8 @@ fn main() -> anyhow::Result<()> {
             helper_model,
             helper_url,
             helper_scripted,
+            case,
+            patch_apply,
         } => {
             let config = LlamaCppAgentConfig {
                 model,
@@ -394,7 +433,15 @@ fn main() -> anyhow::Result<()> {
                 temperature: 0.0,
                 max_tokens: 4096,
             };
-            let agent = LlamaCppCodingAgent::new(config);
+            let free_form_agent;
+            let patch_apply_agent;
+            let agent: &dyn CodingAgent = if patch_apply {
+                patch_apply_agent = task_zero_lab::agent::PatchApplyCodingAgent::new_llama_cpp(config);
+                &patch_apply_agent
+            } else {
+                free_form_agent = LlamaCppCodingAgent::new(config);
+                &free_form_agent
+            };
 
             // Build helper model for the helper-refined variant
             let mut helper: Option<Box<dyn HelperModel>> = if let Some(path) = helper_scripted {
@@ -412,7 +459,7 @@ fn main() -> anyhow::Result<()> {
                 None
             };
             let helper_name = helper.as_ref().map(|_| "llama_cpp").unwrap_or("disabled").to_string();
-            run_and_report(&repo, &rev, &agent, repetitions, &output, prompt_only, non_expert, helper.as_mut(), &helper_name)?;
+            run_and_report(&repo, &rev, agent, repetitions, &output, prompt_only, non_expert, helper.as_mut(), &helper_name, &case)?;
         }
         Command::Scripted { fixture, output, helper_scripted } => {
             let agent = ScriptedCodingAgent::from_fixture(&fixture)?;
@@ -483,11 +530,24 @@ fn run_and_report(
     non_expert: bool,
     mut helper_model: Option<&mut Box<dyn HelperModel>>,
     helper_adapter_name: &str,
+    case_filter: &[String],
 ) -> anyhow::Result<()> {
-    let cases = all_cases();
+    let all = all_cases();
+    let cases: Vec<&EvalCase> = if case_filter.is_empty() {
+        all.iter().collect()
+    } else {
+        case_filter
+            .iter()
+            .map(|id| {
+                all.iter()
+                    .find(|c| c.id.eq_ignore_ascii_case(id))
+                    .ok_or_else(|| anyhow::anyhow!("unknown case: {id}"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?
+    };
     let mut case_reports = Vec::new();
 
-    for case in &cases {
+    for case in cases.iter().copied() {
         // Enforce case repository/revision identity: warn if CLI args drift
         // from the case's pinned values. The case's pinned values take precedence.
         if case.repo_path != repo {
