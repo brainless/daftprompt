@@ -1,8 +1,9 @@
 //! Coding agent trait and adapters for Task 6 evaluation.
 //!
 //! A [`CodingAgent`] takes a prompt and produces an [`AgentResult`] with the
-//! model's response. The agent is a capable model (larger than the Task 5
-//! helpers) that receives the generated prompt and produces code changes.
+//! model's response. Adapters declare their model-visible capabilities via
+//! [`CodingAgentCapabilities`]; receiving a host worktree path does not by
+//! itself give the model repository-read access.
 //!
 //! ## Design
 //!
@@ -26,17 +27,51 @@ use crate::eval::AgentResult;
 
 /// A coding agent that receives a prompt and produces a result.
 pub trait CodingAgent {
-    /// Execute the prompt against the disposable worktree and return the
-    /// agent result. `worktree_path` is the path of the `EvalWorktree` the
-    /// caller created for this run; adapters that do not yet act on the
-    /// worktree (patch-apply support lands separately) may ignore it.
-    fn execute(&self, prompt: &str, worktree_path: &std::path::Path) -> anyhow::Result<AgentResult>;
+    /// Execute the prompt and return the agent result.
+    ///
+    /// `host_worktree_path` is host-side execution context, not model input.
+    /// An adapter may use it after completion (for example, as `git apply`'s
+    /// working directory) or ignore it. Whether the model can inspect the
+    /// checkout is stated separately by [`Self::capabilities`].
+    fn execute(
+        &self,
+        prompt: &str,
+        host_worktree_path: &std::path::Path,
+    ) -> anyhow::Result<AgentResult>;
+
+    /// Machine-readable description of what this adapter exposes to its model
+    /// and which mutation mechanism the host provides.
+    fn capabilities(&self) -> CodingAgentCapabilities;
 
     /// Adapter name for reporting.
     fn adapter_name(&self) -> &str;
 
     /// Model name for reporting.
     fn model_name(&self) -> &str;
+}
+
+/// Capabilities relevant to interpreting a coding-agent evaluation result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodingAgentCapabilities {
+    /// The model receives the rendered prompt as its only repository context.
+    pub prompt_only_model_input: bool,
+    /// The model can read/list/search files in the disposable checkout.
+    pub repository_read: bool,
+    /// The host extracts a unified diff and applies it after model completion.
+    pub host_patch_apply: bool,
+}
+
+impl CodingAgentCapabilities {
+    const PROMPT_ONLY: Self = Self {
+        prompt_only_model_input: true,
+        repository_read: false,
+        host_patch_apply: false,
+    };
+
+    const PROMPT_ONLY_WITH_HOST_PATCH_APPLY: Self = Self {
+        host_patch_apply: true,
+        ..Self::PROMPT_ONLY
+    };
 }
 
 // ── Scripted agent for replay/testing ──────────────────────────────────
@@ -83,7 +118,11 @@ impl ScriptedCodingAgent {
 }
 
 impl CodingAgent for ScriptedCodingAgent {
-    fn execute(&self, _prompt: &str, _worktree_path: &std::path::Path) -> anyhow::Result<AgentResult> {
+    fn execute(
+        &self,
+        _prompt: &str,
+        _worktree_path: &std::path::Path,
+    ) -> anyhow::Result<AgentResult> {
         if self.responses.is_empty() {
             return Err(anyhow::anyhow!("scripted agent has no responses"));
         }
@@ -91,6 +130,10 @@ impl CodingAgent for ScriptedCodingAgent {
         let response = self.responses[idx % self.responses.len()].clone();
         self.index.set(idx + 1);
         Ok(response)
+    }
+
+    fn capabilities(&self) -> CodingAgentCapabilities {
+        CodingAgentCapabilities::PROMPT_ONLY
     }
 
     fn adapter_name(&self) -> &str {
@@ -137,7 +180,11 @@ impl OpenRouterCodingAgent {
 }
 
 impl CodingAgent for OpenRouterCodingAgent {
-    fn execute(&self, prompt: &str, _worktree_path: &std::path::Path) -> anyhow::Result<AgentResult> {
+    fn execute(
+        &self,
+        prompt: &str,
+        _worktree_path: &std::path::Path,
+    ) -> anyhow::Result<AgentResult> {
         use llm_sdk::openrouter::{
             OpenRouterChatCompletionRequest, OpenRouterClient, OpenRouterDataCollection,
             OpenRouterMessage, OpenRouterProviderPreferences, OpenRouterRole,
@@ -211,6 +258,10 @@ impl CodingAgent for OpenRouterCodingAgent {
         })
     }
 
+    fn capabilities(&self) -> CodingAgentCapabilities {
+        CodingAgentCapabilities::PROMPT_ONLY
+    }
+
     fn adapter_name(&self) -> &str {
         "openrouter"
     }
@@ -254,7 +305,11 @@ impl LlamaCppCodingAgent {
 }
 
 impl CodingAgent for LlamaCppCodingAgent {
-    fn execute(&self, prompt: &str, _worktree_path: &std::path::Path) -> anyhow::Result<AgentResult> {
+    fn execute(
+        &self,
+        prompt: &str,
+        _worktree_path: &std::path::Path,
+    ) -> anyhow::Result<AgentResult> {
         use llm_sdk::llama_cpp::{
             LlamaCppChatCompletionRequest, LlamaCppClient, LlamaCppMessage, LlamaCppRole,
         };
@@ -311,6 +366,10 @@ impl CodingAgent for LlamaCppCodingAgent {
         })
     }
 
+    fn capabilities(&self) -> CodingAgentCapabilities {
+        CodingAgentCapabilities::PROMPT_ONLY
+    }
+
     fn adapter_name(&self) -> &str {
         "llama_cpp"
     }
@@ -326,9 +385,9 @@ impl CodingAgent for LlamaCppCodingAgent {
 // is unwired; patch-apply adapter chosen" experiment note in
 // `epics/014-task-zero-prompt-lab.md`: close the worktree/agent gap with a
 // single-shot patch-apply adapter, not a fully tool-enabled (multi-turn,
-// read/list/edit) agent loop. The model gets one prompt, replies with one
-// diff, and the host applies or rejects it. A larger tool-enabled experiment
-// is deliberately deferred.
+// read/list/edit) agent loop. The model gets one prompt and no checkout
+// access, replies with one diff, and the host applies or rejects it. A larger
+// tool-enabled experiment is deliberately deferred.
 
 /// Instruction appended to the user-facing prompt telling the model to
 /// respond with a single unified diff and nothing else that would break
@@ -374,13 +433,14 @@ pub enum PatchApplyBackend {
 /// A coding agent that requests a single unified diff from the model and
 /// applies it to the disposable worktree via `git apply`, instead of
 /// interpreting free-form prose or running a multi-turn tool loop.
+/// The model receives only the rendered prompt: it cannot read, list, or
+/// search `worktree_path`. The path is used only by the host after completion.
 ///
 /// ## Validation and scope
 ///
 /// Before invoking `git apply`, [`validate_diff_paths`] rejects any diff
 /// whose headers reference an absolute path or a `..` path segment, so the
-/// model (or a prompt-injection attempt inside repository content the model
-/// read) cannot make the patch escape `worktree_path`. `git apply` itself is
+/// model cannot make the patch escape `worktree_path`. `git apply` itself is
 /// then run with `current_dir(worktree_path)`. This mirrors the closed,
 /// host-validated posture `helper.rs`'s `HelperToolExecutor` uses for the
 /// Task 5 helper's operation catalog: the model proposes, the host validates
@@ -415,7 +475,11 @@ impl PatchApplyCodingAgent {
 }
 
 impl CodingAgent for PatchApplyCodingAgent {
-    fn execute(&self, prompt: &str, worktree_path: &std::path::Path) -> anyhow::Result<AgentResult> {
+    fn execute(
+        &self,
+        prompt: &str,
+        host_worktree_path: &std::path::Path,
+    ) -> anyhow::Result<AgentResult> {
         let augmented_prompt = format!("{prompt}{PATCH_APPLY_INSTRUCTION}");
 
         let (text, input_tokens, output_tokens, elapsed_ms, stop_reason) = match &self.backend {
@@ -439,7 +503,7 @@ impl CodingAgent for PatchApplyCodingAgent {
                 None
             }
             Some(diff) => {
-                let (applied, apply_diagnostics) = apply_patch(diff, worktree_path);
+                let (applied, apply_diagnostics) = apply_patch(diff, host_worktree_path);
                 diagnostics.extend(apply_diagnostics);
                 diagnostics.push(format!(
                     "[patch apply {}]",
@@ -459,6 +523,10 @@ impl CodingAgent for PatchApplyCodingAgent {
             stop_reason,
             diagnostics,
         })
+    }
+
+    fn capabilities(&self) -> CodingAgentCapabilities {
+        CodingAgentCapabilities::PROMPT_ONLY_WITH_HOST_PATCH_APPLY
     }
 
     fn adapter_name(&self) -> &str {
@@ -1056,6 +1124,14 @@ Let me know if you'd like anything else.";
         let agent = PatchApplyCodingAgent::new_llama_cpp(LlamaCppAgentConfig::default());
         assert_eq!(agent.adapter_name(), "patch_apply_llama_cpp");
         assert_eq!(agent.model_name(), "qwen3.5-9b");
+        assert_eq!(
+            agent.capabilities(),
+            CodingAgentCapabilities {
+                prompt_only_model_input: true,
+                repository_read: false,
+                host_patch_apply: true,
+            }
+        );
 
         let agent = PatchApplyCodingAgent::new_openrouter(
             "unused-key".into(),
@@ -1063,6 +1139,7 @@ Let me know if you'd like anything else.";
         );
         assert_eq!(agent.adapter_name(), "patch_apply_openrouter");
         assert_eq!(agent.model_name(), "ibm-granite/granite-4.1-8b");
+        assert!(!agent.capabilities().repository_read);
     }
 
     // ── End-to-end: worktree + patch-apply + scoring ──────────────────────

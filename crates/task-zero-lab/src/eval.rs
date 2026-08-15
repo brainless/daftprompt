@@ -24,9 +24,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent::CodingAgentCapabilities;
 use crate::prompt::MutationBoundary;
 
-pub const EVAL_SCHEMA_VERSION: &str = "task-zero-eval-v2";
+pub const EVAL_SCHEMA_VERSION: &str = "task-zero-eval-v3";
 
 // ── Practical relevance set ────────────────────────────────────────────
 
@@ -200,6 +201,8 @@ pub struct EvalRun {
     pub variant: PromptVariant,
     pub agent_adapter: String,
     pub agent_model: String,
+    /// Model-visible and host-side capabilities of the selected adapter.
+    pub agent_capabilities: CodingAgentCapabilities,
     pub repetition: u32,
     pub worktree_commit: String,
     pub worktree_path: Option<PathBuf>,
@@ -238,6 +241,8 @@ pub struct EvalReport {
     pub schema_version: String,
     pub agent_adapter: String,
     pub agent_model: String,
+    /// Model-visible and host-side capabilities of the selected adapter.
+    pub agent_capabilities: CodingAgentCapabilities,
     pub cases: Vec<CaseReport>,
     pub generated_at: String,
 }
@@ -467,7 +472,7 @@ mod tests {
 
     #[test]
     fn eval_schema_version_is_set() {
-        assert_eq!(EVAL_SCHEMA_VERSION, "task-zero-eval-v2");
+        assert_eq!(EVAL_SCHEMA_VERSION, "task-zero-eval-v3");
     }
 
     #[test]
@@ -530,6 +535,11 @@ mod tests {
             schema_version: EVAL_SCHEMA_VERSION.into(),
             agent_adapter: "test".into(),
             agent_model: "test".into(),
+            agent_capabilities: CodingAgentCapabilities {
+                prompt_only_model_input: true,
+                repository_read: false,
+                host_patch_apply: false,
+            },
             cases: vec![],
             generated_at: "2026-01-01T00:00:00Z".into(),
         };

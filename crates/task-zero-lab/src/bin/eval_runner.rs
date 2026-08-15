@@ -114,9 +114,9 @@ enum Command {
         /// repos (e.g. C02) that will not exist on most machines.
         #[arg(long, value_delimiter = ',')]
         case: Vec<String>,
-        /// Use `PatchApplyCodingAgent` (single unified-diff request, applied
-        /// via `git apply` in the worktree) instead of the free-form
-        /// `LlamaCppCodingAgent`.
+        /// Use `PatchApplyCodingAgent`: the model receives only the prompt,
+        /// then the host applies its returned unified diff via `git apply`.
+        /// This does not give the model read/list/search access to the checkout.
         #[arg(long)]
         patch_apply: bool,
     },
@@ -272,10 +272,9 @@ fn run_eval(
                 let commit = wt.resolved_commit().to_string();
                 let wt_path = wt.path().to_path_buf();
 
-                // Execute the agent in the worktree. For the patch-apply
-                // adapter this applies a model-returned diff via `git apply`
-                // scoped to `wt_path`; other adapters may act on the
-                // worktree or ignore it (free-form/analysis responses).
+                // The path is host-side context, not implicitly model-visible.
+                // The patch-apply adapter sends only `variant.text` to the
+                // model, then uses `wt_path` as `git apply`'s working directory.
                 let result = agent.execute(&variant.text, &wt_path)?;
 
                 // Read the ground-truth diff and changed-file list from the
@@ -346,6 +345,7 @@ fn run_eval(
                 variant: variant.clone(),
                 agent_adapter: agent.adapter_name().to_string(),
                 agent_model: agent.model_name().to_string(),
+                agent_capabilities: agent.capabilities(),
                 repetition: rep,
                 worktree_commit,
                 worktree_diff,
@@ -480,6 +480,7 @@ fn main() -> anyhow::Result<()> {
                 schema_version: EVAL_SCHEMA_VERSION.into(),
                 agent_adapter: agent.adapter_name().to_string(),
                 agent_model: agent.model_name().to_string(),
+                agent_capabilities: agent.capabilities(),
                 cases: case_reports,
                 generated_at: chrono::Utc::now().to_rfc3339(),
             };
@@ -576,6 +577,7 @@ fn run_and_report(
         schema_version: EVAL_SCHEMA_VERSION.into(),
         agent_adapter: agent.adapter_name().to_string(),
         agent_model: agent.model_name().to_string(),
+        agent_capabilities: agent.capabilities(),
         cases: case_reports,
         generated_at: chrono::Utc::now().to_rfc3339(),
     };
@@ -590,6 +592,12 @@ fn run_and_report(
 fn print_summary(report: &EvalReport) {
     let summary = report.summary();
     eprintln!("\n=== Eval Summary ===");
+    eprintln!(
+        "agent capabilities: prompt_only_model_input={} repository_read={} host_patch_apply={}",
+        report.agent_capabilities.prompt_only_model_input,
+        report.agent_capabilities.repository_read,
+        report.agent_capabilities.host_patch_apply
+    );
     eprintln!("total runs: {}", summary.total_runs);
     eprintln!("avg artifact recall: {:.2}", summary.avg_artifact_recall);
     eprintln!("avg artifact precision: {:.2}", summary.avg_artifact_precision);

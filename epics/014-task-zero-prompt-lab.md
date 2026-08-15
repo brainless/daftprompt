@@ -3073,13 +3073,21 @@ evidence-gap exit guidance as Granite but did not follow it.
     end-to-end test applies a patch creating a regression-test file and proves
     it appears in both outputs. This repairs the capture/scoring primitive but
     does not retroactively add omitted files to earlier stored reports.
-  - **T6-R03 — worktree path is not repository-read capability (open):** the
+  - **T6-R03 — worktree path is not repository-read capability (resolved 2026-08-15):** the
     `CodingAgent` boundary receives `worktree_path`, but the single-shot
     `PatchApplyCodingAgent` sends only the rendered prompt to its model and
     uses the path afterward solely as `git apply`'s working directory. Tighten
     the API/docs/report language so this adapter is not described as able to
     inspect the checkout; retain C07's zero-patch result as evidence of a
     packet source-content gap, not coding-agent repository access.
+    Resolution: coding-agent adapters now publish machine-readable capabilities
+    distinguishing prompt-only model input, repository-read access, and
+    host-side patch application. Every current adapter explicitly reports no
+    repository-read capability; patch-apply reports only host-side apply.
+    Runs and reports persist this metadata under evaluation schema v3, and the
+    trait docs, CLI help, runner comments, and summary output use the same
+    distinction. No repository-reading tool was added, so C07 remains evidence
+    that its prompt/packet lacked required source content.
   - **T6-R04 — unsafe stale-worktree deletion (open):**
     `EvalWorktree::create()` recursively deletes any existing sibling path
     derived from its label without proving that the path belongs to this
@@ -3094,4 +3102,4 @@ evidence-gap exit guidance as Granite but did not follow it.
   implementation at a time; review, update this note/task status, and commit
   each item before starting the next. Keep Task 6 acceptance checkboxes
   unchanged unless the completed evidence satisfies their full wording.
-- Next iteration: T6-R03, then T6-R04.
+- Next iteration: T6-R04.
