@@ -590,6 +590,45 @@ mod tests {
     }
 
     #[test]
+    fn c01_read_only_review_rewards_clean_worktree() {
+        let agent = make_agent(vec![]);
+        let mut relevance = crate::eval::case_c01().relevance;
+        relevance.verification_commands.clear();
+        let score = score_task_outcome(
+            &agent,
+            &[],
+            &relevance,
+            Path::new("/tmp"),
+            "Analyze Epic 020; review phase is read-only.",
+        );
+
+        assert_eq!(score.artifact_recall, 1.0);
+        assert_eq!(score.artifact_precision, 1.0);
+        assert!(score.violated_prohibitions.is_empty());
+        assert!(score.negative_constraints_respected);
+    }
+
+    #[test]
+    fn c01_read_only_review_rejects_revision_without_follow_up_authority() {
+        let agent = make_agent(vec![]);
+        let mut relevance = crate::eval::case_c01().relevance;
+        relevance.verification_commands.clear();
+        let changed = vec!["epics/020-component-webpage-sample.md".into()];
+        let score = score_task_outcome(
+            &agent,
+            &changed,
+            &relevance,
+            Path::new("/tmp"),
+            "Analyze Epic 020; review phase is read-only.",
+        );
+
+        assert_eq!(score.artifact_recall, 1.0);
+        assert_eq!(score.artifact_precision, 0.0);
+        assert_eq!(score.violated_prohibitions, vec!["*"]);
+        assert!(!score.negative_constraints_respected);
+    }
+
+    #[test]
     fn unsupported_claims_detects_unprompted_paths() {
         let agent = AgentResult {
             response_text: "Modified: src/unknown_file.rs\nChanged: src/another.rs".into(),

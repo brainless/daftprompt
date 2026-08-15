@@ -333,20 +333,25 @@ pub fn case_c01() -> EvalCase {
         mutation_boundary: MutationBoundary::ReadOnly,
         epics: vec![11, 12, 13, 14],
         relevance: PracticalRelevanceSet {
-            expected_changes: vec![
+            // This fixture replays only the read-only review request. The
+            // historical Epic 020 revision was a separate, explicitly
+            // authorized follow-up phase, so its committed artifact is
+            // evidence for the review's practical relevance rather than an
+            // expected mutation in this run.
+            expected_changes: vec![],
+            prohibited_changes: vec![
                 ExpectedArtifact {
-                    path: "epics/020-*.md".into(),
-                    should_change: true,
-                    expected_blob_hash: Some(
-                        "49878280500dfdbb61a707ae4879723369c13848".into(),
-                    ),
-                    note: "Epic 020 revised blob incorporating review findings".into(),
+                    path: "*".into(),
+                    should_change: false,
+                    expected_blob_hash: None,
+                    note: "Review phase is read-only; any revision requires a separate explicit request"
+                        .into(),
                 },
             ],
-            prohibited_changes: vec![],
             verification_commands: vec!["cargo check --workspace".into()],
             evidence_commits: vec!["9334431bbb37dd0db20f4b80c660387c62cf34bc".into()],
-            evidence_source: "011 Experiment 1, deterministic evidence review".into(),
+            evidence_source: "011 Experiment 1, deterministic evidence review; commit 9334431 records the separately authorized revision phase"
+                .into(),
         },
         rendering_id: "manifest:C01:expert".into(),
     }
@@ -473,8 +478,15 @@ mod tests {
         assert!(c.non_expert_request.is_some());
         assert!(!c.negative_constraints.is_empty());
         assert_eq!(c.mutation_boundary, MutationBoundary::ReadOnly);
-        assert!(!c.relevance.expected_changes.is_empty());
+        assert!(c.relevance.expected_changes.is_empty());
+        assert_eq!(c.relevance.prohibited_changes.len(), 1);
+        assert_eq!(c.relevance.prohibited_changes[0].path, "*");
+        assert!(!c.relevance.prohibited_changes[0].should_change);
         assert!(!c.relevance.evidence_commits.is_empty());
+        assert!(c
+            .relevance
+            .evidence_source
+            .contains("separately authorized revision phase"));
     }
 
     #[test]

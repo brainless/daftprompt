@@ -3046,13 +3046,20 @@ evidence-gap exit guidance as Granite but did not follow it.
   `baef7d2` (worktree/patch-apply/scoring implementation) and `bc5e45b`
   (fixture corrections and live-run record).
 - Review findings:
-  - **T6-R01 — C01 read-only/outcome contradiction (open):** `case_c01()`
+  - **T6-R01 — C01 read-only/outcome contradiction (resolved 2026-08-15):** `case_c01()`
     declares a read-only request and mutation boundary, while its practical
     relevance set requires `epics/020-*.md` to change. The patch adapter also
     correctly tells the model not to emit a diff for read-only analysis. Split
     the review and explicitly authorized revision phases, or otherwise make
     the request, mutation boundary, and expected outcome internally
     consistent before using C01 artifact recall as Task 6 evidence.
+    Resolution: retain C01 as the canonical read-only review phase. Its
+    practical relevance set now expects no mutation and prohibits every path;
+    commit `9334431` remains provenance for the separately authorized revision
+    phase rather than an expected outcome of this run. Focused tests prove a
+    clean worktree scores as success and an Epic 020 edit is rejected. This
+    corrects the fixture interpretation but does not by itself complete a Task
+    6 acceptance criterion or retroactively rewrite the stored live report.
   - **T6-R02 — untracked files absent from worktree ground truth (open):**
     `EvalWorktree::capture_diff()` and `changed_files()` use `git diff HEAD`,
     which omits untracked files. A model-created regression-test file can be
@@ -3080,4 +3087,4 @@ evidence-gap exit guidance as Granite but did not follow it.
   implementation at a time; review, update this note/task status, and commit
   each item before starting the next. Keep Task 6 acceptance checkboxes
   unchanged unless the completed evidence satisfies their full wording.
-- Next iteration: T6-R01, then T6-R02, T6-R03, and T6-R04.
+- Next iteration: T6-R02, then T6-R03 and T6-R04.
