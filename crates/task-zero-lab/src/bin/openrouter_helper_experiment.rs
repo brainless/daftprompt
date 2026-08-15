@@ -187,7 +187,8 @@ fn frozen_inputs(
     let mut budget = PacketBudget::default();
     budget.max_items = 200;
     budget.max_total_bytes = 100_000;
-    let packet = packet::select_packet(&graph, case.request, budget)?;
+    let mut packet = packet::select_packet(&graph, case.request, budget)?;
+    packet::enrich_with_blob_content(&mut packet, &graph)?;
     let request = PromptRequest {
         original: case.request.into(),
         clarified_objective: None,

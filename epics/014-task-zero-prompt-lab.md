@@ -3114,3 +3114,98 @@ evidence-gap exit guidance as Granite but did not follow it.
   repetitions. The four implementation-review items T6-R01 through T6-R04 are
   resolved; Task 6 acceptance checkboxes remain governed by their full corpus
   and comparison requirements above.
+
+### 2026-08-15 — C07 packet-content gap fixed with real Git blob excerpting
+
+- Parent criterion/question: the "next iteration" item above — diagnose the
+  C07 packet source-content gap that produced zero extracted diffs across
+  both live runs (2026-08-14 and 2026-08-15 notes), before running further
+  repetitions. No Task 6 checkbox is touched by this note; the fix is
+  upstream infrastructure the corpus runs depend on, not a corpus result.
+- Repository and immutable revision: daftprompt at `553439a` (this branch's
+  tip before this change). No external repository or live model call was
+  used — this is a code fix plus offline synthetic-fixture tests.
+- Diagnosis: `crates/task-zero-lab/src/packet.rs`'s own module doc already
+  named the exact cause under "Deliberately deferred capabilities": Task 3's
+  `select_packet` only ever builds an item's excerpt from text Task 2 already
+  extracted into the node (`label`, or `extra.body_excerpt` for
+  `ProjectInstruction`/repository-configuration nodes). A `FileOrSection` or
+  `CodeSymbol` node created from a bare path/symbol reference has no
+  extracted body text, so `excerpt_for` falls back to the node's own label —
+  the referenced path/symbol string, not real source content. For C07 this
+  meant the packet told the model the *name* of
+  `dwata-api/src/email_ranking/mod.rs`'s relevant symbol but never its actual
+  code, which the model's own response text in the 2026-08-15 run explicitly
+  confirmed ("no evidence-backed change surface was identified", "cannot
+  inspect the target file's actual source"). This is a genuine packet-
+  selection gap, not a worktree, patch-apply, or scoring defect — consistent
+  with the prior note's conclusion.
+- Change made to the harness: added `packet::enrich_with_blob_content`, a
+  separate, explicit, best-effort step a caller runs after `select_packet`
+  (kept separate so `select_packet` itself stays a pure, offline function of
+  the graph and budget alone — Design Constraint 4). For every
+  `FileOrSection`/`CodeSymbol` item whose excerpt is still exactly its own
+  label, it reads the real Git blob at the graph's already-recorded
+  `resolved_commit` via the existing `git_snapshot::read_blob_at_revision`
+  (Git object store only, never the working tree — Design Constraint 2),
+  windows the text around the node's recorded `line_span` with 15 lines of
+  context on each side (or the file's first 30 lines when no span is
+  recorded), and replaces the placeholder excerpt with that real content,
+  re-applying the same excerpt/total-byte budget `build_items` already
+  enforces. A Git read failure (path untracked at that revision, non-UTF-8
+  blob, not a real repository) is recorded as a `PacketCoverage::
+  budget_omissions` entry and leaves that one item's existing label-only
+  excerpt untouched rather than erroring the whole packet or fabricating
+  content. Wired into all five `select_packet` call sites (`main.rs`'s
+  `graph`/`prompt`/`helper` CLI commands, `eval_runner.rs`, and
+  `openrouter_helper_experiment.rs`) so every live and CLI path benefits, not
+  only a new opt-in flag. Also factored the excerpt-truncation logic
+  (previously duplicated in `build_items` and `apply_helper_dispositions`)
+  into one shared `truncate_excerpt_to_budget` helper, now used by both call
+  sites plus the new function.
+- Observed results and measurements: two new offline unit tests in
+  `packet.rs` against real (synthetic, temporary) Git repositories — no
+  fixture/manifest repository content used. One proves a `CodeSymbol` item
+  with a recorded `line_span` gets its label-only excerpt replaced with the
+  real windowed file content (containing the targeted line) and its
+  `source_version` updated to the real blob ID. The other proves an
+  untracked path leaves the excerpt and `source_version` unchanged and
+  records a `budget_omissions` entry rather than erroring. `cargo test -p
+  task-zero-lab --lib` passes 179/179 (up from 170 with 12 sandboxed-HTTP
+  failures in the prior review note — this run had no HTTP-dependent tests
+  invoked). `cargo test --workspace --exclude daftprompt` passes, including
+  the CLI-level `cli_helper_disabled_matches_cli_prompt` integration test.
+  `cargo check --workspace` fails only on a pre-existing, unrelated GUI
+  compile error in `src/main.rs` (`akar_core::AkarCore::new` missing a
+  `TextPipelineConfig` argument after an upstream `akar-core` signature
+  change); confirmed pre-existing via `git stash` before this change and out
+  of scope for this note.
+- Validated findings: the packet-content gap was exactly what both prior
+  notes suspected (a Task 3 packet-selection omission, not a worktree/agent-
+  boundary defect), and the fix is now exercised by synthetic tests
+  independent of any live repository or model.
+- Rejected or unsupported interpretations: this fix has **not** been proven
+  against the real C07 case yet — no live run has been re-executed with it.
+  "The synthetic tests pass" is evidence the mechanism works on a controlled
+  input, not evidence that C07 (or any other case) will now produce a
+  scoreable diff; the model could still fail to use the now-present real
+  content, and other cases may have their own distinct content gaps.
+- User decision or pending decision: pending. Per this session's explicit
+  scope agreement, no live corpus run was executed as part of this note —
+  that is deliberately deferred to a separate, explicitly authorized
+  session (credentials and manifest repository clones were confirmed
+  available, but a live run was out of this note's agreed scope).
+- Next iteration: re-run C07 live (patch-apply, ≥2 repetitions) with this
+  fix in place and compare against the 2026-08-15 zero-diff baseline; if
+  C07 still produces zero diffs, capture the model's response text again to
+  determine whether the remaining blocker is prompt/budget-related (e.g. the
+  real excerpt still gets truncated or outcompeted by other packet items
+  under the default budget) rather than content-availability. Only after
+  C07 (and ideally another mutation case) can produce at least some patches
+  should further repetitions be spent working toward Task 6's "runs more
+  than once... distinguishes a stable result from single-run variance" bar.
+- Detailed artifacts: `crates/task-zero-lab/src/packet.rs`
+  (`enrich_with_blob_content`, `window_lines`,
+  `truncate_excerpt_to_budget`, and their tests
+  `enrich_with_blob_content_replaces_label_only_excerpt_with_real_source` /
+  `enrich_with_blob_content_records_omission_for_untracked_path_without_erroring`).

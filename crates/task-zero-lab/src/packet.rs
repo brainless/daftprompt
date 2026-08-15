@@ -49,14 +49,18 @@
 //!   model. A real semantic-similarity channel over `daftprompt-indexer`'s
 //!   existing hybrid search remains an explicit, undone follow-up, not
 //!   something this module pretends to already do.
-//! - **Real code/document content excerpting.** Excerpts are built only from
-//!   text Task 2 already extracted into a node (`label`, `extra.body_excerpt`
-//!   for `ProjectInstruction`/repository-configuration nodes). A
-//!   `FileOrSection`/`CodeSymbol` node created only from an *unresolved*
-//!   Markdown reference (no recorded line span) has no known focused span to
-//!   excerpt from its actual file content, so its excerpt is just its own
-//!   label (the referenced path/symbol string). Reading and windowing real
-//!   Git blob content for such nodes is left as a follow-up, not simulated.
+//! - **Real code/document content excerpting.** [`select_packet`] itself still
+//!   builds excerpts only from text Task 2 already extracted into a node
+//!   (`label`, `extra.body_excerpt` for `ProjectInstruction`/repository-
+//!   configuration nodes); a `FileOrSection`/`CodeSymbol` item's excerpt is
+//!   initially just its own label (the referenced path/symbol string). A
+//!   caller with repository access can then run [`enrich_with_blob_content`]
+//!   (Task 6 follow-up for the C07 packet-content gap) to replace those
+//!   label-only excerpts with real Git blob content, windowed around the
+//!   node's `line_span` where known. This is a separate, explicit,
+//!   best-effort step rather than folded into `select_packet`, so the
+//!   selection pipeline itself stays a pure, offline function of the graph
+//!   and budget alone.
 //!
 //! ## Helper evidence stays separate and cannot erase host gaps
 //!
@@ -568,6 +572,22 @@ fn excerpt_for(node: &Node) -> String {
     node.label.clone()
 }
 
+/// Cut `excerpt` down to `max_excerpt_bytes`, appending a truncation marker
+/// that itself counts against the budget. Shared by [`build_items`],
+/// [`apply_helper_dispositions`], and [`enrich_with_blob_content`] so the one
+/// truncation behavior stays in one place.
+fn truncate_excerpt_to_budget(mut excerpt: String, max_excerpt_bytes: usize) -> String {
+    if excerpt.len() <= max_excerpt_bytes {
+        return excerpt;
+    }
+    const MARKER: &str = "… [truncated_by_packet_excerpt_budget]";
+    let content_budget = max_excerpt_bytes.saturating_sub(MARKER.len());
+    let cut = byte_boundary(&excerpt, content_budget);
+    excerpt.truncate(cut);
+    excerpt.push_str(&MARKER[..byte_boundary(MARKER, max_excerpt_bytes - excerpt.len())]);
+    excerpt
+}
+
 fn build_items(graph: &GraphExtraction, locator_map: BTreeMap<String, Vec<FoundVia>>, budget: &PacketBudget) -> (Vec<PacketItem>, Vec<String>) {
     let mut items = Vec::new();
     let mut omissions = Vec::new();
@@ -581,14 +601,7 @@ fn build_items(graph: &GraphExtraction, locator_map: BTreeMap<String, Vec<FoundV
             omissions.push(format!("{locator}: omitted, max_items ({}) reached", budget.max_items));
             continue;
         }
-        let mut excerpt = excerpt_for(node);
-        if excerpt.len() > budget.max_excerpt_bytes {
-            const MARKER: &str = "… [truncated_by_packet_excerpt_budget]";
-            let content_budget = budget.max_excerpt_bytes.saturating_sub(MARKER.len());
-            let cut = byte_boundary(&excerpt, content_budget);
-            excerpt.truncate(cut);
-            excerpt.push_str(&MARKER[..byte_boundary(MARKER, budget.max_excerpt_bytes - excerpt.len())]);
-        }
+        let excerpt = truncate_excerpt_to_budget(excerpt_for(node), budget.max_excerpt_bytes);
         if total_bytes + excerpt.len() > budget.max_total_bytes {
             omissions.push(format!("{locator}: omitted, max_total_bytes ({}) reached", budget.max_total_bytes));
             continue;
@@ -692,6 +705,100 @@ pub fn merge_duplicate_resources(graph: &GraphExtraction, items: Vec<PacketItem>
     merged.extend(standalone);
     merged.sort_by(|a, b| a.locator.cmp(&b.locator));
     merged
+}
+
+/// Number of lines of surrounding context to keep on each side of a node's
+/// recorded `line_span` when windowing real file content. Wide enough to
+/// show a symbol's immediate neighborhood, small enough to stay well inside
+/// a typical `PacketBudget::max_excerpt_bytes`.
+const BLOB_CONTEXT_LINES: usize = 15;
+
+/// Window `text` around a 1-based, inclusive `(first_line, last_line)` span
+/// with `BLOB_CONTEXT_LINES` of context on each side. With no span, returns
+/// the file's first `BLOB_CONTEXT_LINES * 2` lines, since a whole-file
+/// reference (e.g. a bare `file:<path>` mention) has no more specific
+/// location to center on.
+fn window_lines(text: &str, line_span: Option<(usize, usize)>) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    let (start, end) = match line_span {
+        Some((first, last)) => {
+            let first = first.max(1);
+            let last = last.max(first);
+            (first.saturating_sub(BLOB_CONTEXT_LINES).max(1), last.saturating_add(BLOB_CONTEXT_LINES).min(lines.len()))
+        }
+        None => (1, (BLOB_CONTEXT_LINES * 2).min(lines.len())),
+    };
+    lines[(start - 1)..end].join("\n")
+}
+
+/// Task 6 follow-up for the C07 packet-content gap (`epics/014-task-zero-
+/// prompt-lab.md`, "C07 fixture corrected; first live patch-apply run" and
+/// its 2026-08-15 review note): a `FileOrSection`/`CodeSymbol` item whose
+/// excerpt is still just its own label (this module's documented "Real
+/// code/document content excerpting" gap) carries a path/symbol reference
+/// but no actual source text, so a coding agent handed the prompt has
+/// nothing concrete to patch against. This reads the real Git blob at the
+/// graph's `resolved_commit` (never the working tree — Design Constraint 2)
+/// for such items, windows it around the node's recorded `line_span`, and
+/// replaces the placeholder excerpt with real content, re-applying the same
+/// excerpt/total-byte budget `build_items` already enforces.
+///
+/// Deliberately conservative: any Git read failure (path not tracked at
+/// this revision, not a real Git repository, non-UTF-8 blob content) is
+/// recorded as a coverage omission and leaves that one item's existing
+/// label-only excerpt untouched rather than failing the whole packet or
+/// silently fabricating content Task 2 never extracted.
+pub fn enrich_with_blob_content(packet: &mut Packet, graph: &GraphExtraction) -> anyhow::Result<()> {
+    let repo_path = std::path::Path::new(&graph.repo_path);
+    let mut total_bytes: usize = packet.established.iter().chain(packet.candidates.iter()).map(|i| i.excerpt.len()).sum();
+    let max_excerpt_bytes = packet.budget.max_excerpt_bytes;
+    let max_total_bytes = packet.budget.max_total_bytes;
+    let mut omissions = Vec::new();
+
+    for item in packet.established.iter_mut().chain(packet.candidates.iter_mut()) {
+        if !matches!(item.kind, NodeKind::FileOrSection | NodeKind::CodeSymbol) {
+            continue;
+        }
+        if item.excerpt != item.label {
+            continue; // already has real body_excerpt content; do not overwrite it
+        }
+        let Some(path) = item.source_path.clone() else { continue };
+        let blob = match crate::git_snapshot::read_blob_at_revision(repo_path, &graph.resolved_commit, &path) {
+            Ok(Some(blob)) => blob,
+            Ok(None) => {
+                omissions.push(format!("{}: no blob content, path not tracked at {}", item.locator, graph.resolved_commit));
+                continue;
+            }
+            Err(e) => {
+                omissions.push(format!("{}: blob read failed: {e}", item.locator));
+                continue;
+            }
+        };
+        let (blob_id, bytes) = blob;
+        let Ok(text) = String::from_utf8(bytes) else {
+            omissions.push(format!("{}: blob {blob_id} is not valid UTF-8, skipped", item.locator));
+            continue;
+        };
+        let node = graph.nodes.iter().find(|n| n.locator.logical_id == item.locator);
+        let line_span = node.and_then(|n| n.locator.line_span);
+        let windowed = window_lines(&text, line_span);
+        if windowed.is_empty() {
+            continue;
+        }
+        let excerpt = truncate_excerpt_to_budget(format!("{}\n\n{}", item.label, windowed), max_excerpt_bytes);
+        if total_bytes - item.excerpt.len() + excerpt.len() > max_total_bytes {
+            omissions.push(format!("{}: real blob excerpt omitted, max_total_bytes ({max_total_bytes}) reached", item.locator));
+            continue;
+        }
+        total_bytes = total_bytes - item.excerpt.len() + excerpt.len();
+        item.excerpt = excerpt;
+        item.source_version = blob_id;
+    }
+    packet.coverage.budget_omissions.extend(omissions);
+    Ok(())
 }
 
 // ── Coverage, packet, and top-level selection ───────────────────────────
@@ -1061,17 +1168,7 @@ pub fn apply_helper_dispositions(
                     Some(n) => excerpt_for(n),
                     None => disposition.note.clone(),
                 };
-                let excerpt = if excerpt.len() > updated.budget.max_excerpt_bytes {
-                    let mut e = excerpt;
-                    const MARKER: &str = "… [truncated_by_packet_excerpt_budget]";
-                    let content_budget = updated.budget.max_excerpt_bytes.saturating_sub(MARKER.len());
-                    let cut = byte_boundary(&e, content_budget);
-                    e.truncate(cut);
-                    e.push_str(&MARKER[..byte_boundary(MARKER, updated.budget.max_excerpt_bytes - e.len())]);
-                    e
-                } else {
-                    excerpt
-                };
+                let excerpt = truncate_excerpt_to_budget(excerpt, updated.budget.max_excerpt_bytes);
                 updated.candidates.push(PacketItem {
                     locator: disposition.locator.clone(),
                     kind: node.map(|n| n.kind).unwrap_or(NodeKind::FileOrSection),
@@ -1793,5 +1890,143 @@ mod tests {
         );
         assert_eq!(packet.helper_gap_notes.len(), 1);
         assert!(packet.helper_gap_notes[0].host_gap_retained_regardless);
+    }
+
+    // ── enrich_with_blob_content (Task 6 C07 packet-content follow-up) ──
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@test.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@test.com")
+            .args(args)
+            .status()
+            .expect("failed to run git");
+        assert!(status.success(), "git {:?} failed", args);
+    }
+
+    fn init_repo_with_file(rel_path: &str, contents: &str) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-q"]);
+        git(dir.path(), &["config", "user.email", "test@test.com"]);
+        git(dir.path(), &["config", "user.name", "Test"]);
+        let full_path = dir.path().join(rel_path);
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&full_path, contents).unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-q", "-m", "add file"]);
+        let sha = String::from_utf8(
+            std::process::Command::new("git").current_dir(dir.path()).args(["rev-parse", "HEAD"]).output().unwrap().stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        (dir, sha)
+    }
+
+    #[test]
+    fn enrich_with_blob_content_replaces_label_only_excerpt_with_real_source() {
+        let contents: String = (1..=60).map(|n| format!("line {n}\n")).collect();
+        let (repo, sha) = init_repo_with_file("src/mod.rs", &contents);
+
+        let mut graph = base_graph();
+        graph.repo_path = repo.path().to_string_lossy().to_string();
+        graph.resolved_commit = sha;
+        let mut symbol = node_with_path("symbol:src/mod.rs::do_thing", NodeKind::CodeSymbol, "fn do_thing", "src/mod.rs");
+        symbol.locator.line_span = Some((30, 30));
+        graph.nodes.push(symbol);
+
+        let mut packet = Packet {
+            request: "fix do_thing".to_string(),
+            budget: PacketBudget::default(),
+            seeds: Vec::new(),
+            established: vec![PacketItem {
+                locator: "symbol:src/mod.rs::do_thing".to_string(),
+                kind: NodeKind::CodeSymbol,
+                label: "fn do_thing".to_string(),
+                source_path: Some("src/mod.rs".to_string()),
+                source_version: "v1".to_string(),
+                checked: None,
+                category: Some(SourceCategory::Code),
+                excerpt: "fn do_thing".to_string(), // label-only placeholder, as select_packet leaves it
+                verification_commands: Vec::new(),
+                found_via: Vec::new(),
+                merged_from: Vec::new(),
+            }],
+            candidates: Vec::new(),
+            rejected_helper_interpretations: Vec::new(),
+            helper_gap_notes: Vec::new(),
+            coverage: PacketCoverage {
+                queried_sources: Vec::new(),
+                unavailable_sources: Vec::new(),
+                lab_version: "0.1.0".to_string(),
+                graph_resolved_commit: graph.resolved_commit.clone(),
+                index_available: false,
+                index_identifiers_considered: 0,
+                budget_omissions: Vec::new(),
+                remaining_gaps: Vec::new(),
+            },
+        };
+
+        enrich_with_blob_content(&mut packet, &graph).unwrap();
+
+        let item = &packet.established[0];
+        assert!(item.excerpt.contains("line 30"), "excerpt should contain the windowed real content: {}", item.excerpt);
+        assert!(item.excerpt.len() > "fn do_thing".len(), "excerpt must no longer be just the label");
+        assert_ne!(item.source_version, "v1", "source_version should be updated to the real blob id");
+        assert!(packet.coverage.budget_omissions.is_empty());
+    }
+
+    #[test]
+    fn enrich_with_blob_content_records_omission_for_untracked_path_without_erroring() {
+        let (repo, sha) = init_repo_with_file("README.md", "hello\n");
+        let mut graph = base_graph();
+        graph.repo_path = repo.path().to_string_lossy().to_string();
+        graph.resolved_commit = sha;
+        graph.nodes.push(node_with_path("file:does/not/exist.rs", NodeKind::FileOrSection, "does/not/exist.rs", "does/not/exist.rs"));
+
+        let mut packet = Packet {
+            request: "".to_string(),
+            budget: PacketBudget::default(),
+            seeds: Vec::new(),
+            established: vec![PacketItem {
+                locator: "file:does/not/exist.rs".to_string(),
+                kind: NodeKind::FileOrSection,
+                label: "does/not/exist.rs".to_string(),
+                source_path: Some("does/not/exist.rs".to_string()),
+                source_version: "v1".to_string(),
+                checked: None,
+                category: Some(SourceCategory::Code),
+                excerpt: "does/not/exist.rs".to_string(),
+                verification_commands: Vec::new(),
+                found_via: Vec::new(),
+                merged_from: Vec::new(),
+            }],
+            candidates: Vec::new(),
+            rejected_helper_interpretations: Vec::new(),
+            helper_gap_notes: Vec::new(),
+            coverage: PacketCoverage {
+                queried_sources: Vec::new(),
+                unavailable_sources: Vec::new(),
+                lab_version: "0.1.0".to_string(),
+                graph_resolved_commit: graph.resolved_commit.clone(),
+                index_available: false,
+                index_identifiers_considered: 0,
+                budget_omissions: Vec::new(),
+                remaining_gaps: Vec::new(),
+            },
+        };
+
+        enrich_with_blob_content(&mut packet, &graph).unwrap();
+
+        // Untracked path: excerpt stays the label-only placeholder, and the
+        // reason is recorded rather than silently dropped or erroring.
+        assert_eq!(packet.established[0].excerpt, "does/not/exist.rs");
+        assert_eq!(packet.established[0].source_version, "v1");
+        assert!(packet.coverage.budget_omissions.iter().any(|o| o.contains("not tracked")));
     }
 }

@@ -189,7 +189,8 @@ fn build_prompt_variants(
     let mut budget = PacketBudget::default();
     budget.max_items = 200;
     budget.max_total_bytes = 100_000;
-    let pkt = packet::select_packet(&graph, request_text, budget)?;
+    let mut pkt = packet::select_packet(&graph, request_text, budget)?;
+    packet::enrich_with_blob_content(&mut pkt, &graph)?;
     let rendered = prompt::render_prompt(&prompt_request, &pkt, PromptBudget::default())?;
 
     let graph_json = graph.to_normalized_json()?;

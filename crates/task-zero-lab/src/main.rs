@@ -246,7 +246,8 @@ fn main() -> anyhow::Result<()> {
                 max_total_bytes,
                 allowed_relations: task_zero_lab::packet::default_expansion_allowlist(),
             };
-            let packet = task_zero_lab::packet::select_packet(&extraction, &request, budget)?;
+            let mut packet = task_zero_lab::packet::select_packet(&extraction, &request, budget)?;
+            task_zero_lab::packet::enrich_with_blob_content(&mut packet, &extraction)?;
             println!("{}", packet.to_normalized_json()?);
         }
         Command::Prompt { repo, rev, epics, request, objective, negative_constraints, include_dirty, max_prompt_bytes, output } => {
@@ -255,7 +256,8 @@ fn main() -> anyhow::Result<()> {
             let mut packet_budget = task_zero_lab::packet::PacketBudget::default();
             packet_budget.max_items = 200;
             packet_budget.max_total_bytes = 100_000;
-            let packet = task_zero_lab::packet::select_packet(&extraction, &request, packet_budget)?;
+            let mut packet = task_zero_lab::packet::select_packet(&extraction, &request, packet_budget)?;
+            task_zero_lab::packet::enrich_with_blob_content(&mut packet, &extraction)?;
             let request = task_zero_lab::prompt::PromptRequest {
                 original: request,
                 clarified_objective: objective,
@@ -306,7 +308,8 @@ fn main() -> anyhow::Result<()> {
             let mut packet_budget = task_zero_lab::packet::PacketBudget::default();
             packet_budget.max_items = 200;
             packet_budget.max_total_bytes = 100_000;
-            let packet = task_zero_lab::packet::select_packet(&extraction, &request, packet_budget)?;
+            let mut packet = task_zero_lab::packet::select_packet(&extraction, &request, packet_budget)?;
+            task_zero_lab::packet::enrich_with_blob_content(&mut packet, &extraction)?;
             let prompt_request = task_zero_lab::prompt::PromptRequest {
                 original: request,
                 clarified_objective: objective,
