@@ -3088,12 +3088,19 @@ evidence-gap exit guidance as Granite but did not follow it.
     trait docs, CLI help, runner comments, and summary output use the same
     distinction. No repository-reading tool was added, so C07 remains evidence
     that its prompt/packet lacked required source content.
-  - **T6-R04 — unsafe stale-worktree deletion (open):**
+  - **T6-R04 — unsafe stale-worktree deletion (resolved 2026-08-15):**
     `EvalWorktree::create()` recursively deletes any existing sibling path
     derived from its label without proving that the path belongs to this
     harness, checking its type/link status, or confirming Git worktree
     registration. Replace this with validated, non-destructive collision
     handling and cover it with tests.
+    Resolution: creation now refuses every pre-existing derived path after a
+    non-following metadata check, including regular files, directories,
+    symlinks, and dangling links; it never deletes a collision. The RAII guard
+    records the owning repository and asks Git to remove the registered
+    worktree, with no recursive-deletion fallback if Git fails. Tests prove
+    unrelated entries and symlink targets survive, while ordinary create/drop
+    removes both the checkout and Git administration record.
 - Validation: `RUSTC_WRAPPER= cargo test -p task-zero-lab --lib` built and ran
   170 tests: 158 passed, including the new end-to-end patch/scoring test; 12
   mocked HTTP transport tests failed because sandboxed socket binding returned
@@ -3102,4 +3109,8 @@ evidence-gap exit guidance as Granite but did not follow it.
   implementation at a time; review, update this note/task status, and commit
   each item before starting the next. Keep Task 6 acceptance checkboxes
   unchanged unless the completed evidence satisfies their full wording.
-- Next iteration: T6-R04.
+- Next iteration: investigate the still-open C07 packet source-content gap
+  before drawing prompt-variant outcome conclusions or running more live
+  repetitions. The four implementation-review items T6-R01 through T6-R04 are
+  resolved; Task 6 acceptance checkboxes remain governed by their full corpus
+  and comparison requirements above.

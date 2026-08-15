@@ -29,6 +29,8 @@ pub struct WorktreeMeta {
 /// A disposable Git worktree for evaluation. Removes the worktree on drop.
 pub struct EvalWorktree {
     meta: WorktreeMeta,
+    /// Repository that owns the linked-worktree administration record.
+    repo_path: PathBuf,
     /// Whether to remove the worktree on drop. Set to false for inspection.
     auto_remove: bool,
 }
@@ -82,16 +84,18 @@ impl EvalWorktree {
     /// repository checkouts, which always live inside some directory.
     pub fn create(repo_path: &Path, revision: &str, label: &str) -> anyhow::Result<Self> {
         let worktree_base = Self::worktree_base_path(repo_path, label);
-        // Clean up any stale worktree at the same path. The directory name
-        // is namespaced with the repo's own name plus "-eval-" plus the
-        // caller-supplied label (which already incorporates case id,
-        // variant kind, and repetition in eval_runner.rs), so this can only
-        // collide with a directory this same harness created previously,
-        // not with an unrelated real project directory under the same
-        // parent.
-        if worktree_base.exists() {
-            std::fs::remove_dir_all(&worktree_base).ok();
-        }
+        // A derived name is not proof of ownership. Preserve every existing
+        // filesystem entry (including symlinks and dangling symlinks) and
+        // require the caller to choose another label or resolve the collision.
+        // In particular, never recursively delete a path merely because it
+        // resembles one previously produced by this harness.
+        anyhow::ensure!(
+            std::fs::symlink_metadata(&worktree_base).is_err_and(|error| {
+                error.kind() == std::io::ErrorKind::NotFound
+            }),
+            "refusing to create evaluation worktree because the target path already exists or cannot be safely inspected: {}",
+            worktree_base.display()
+        );
         let tmp_base = worktree_base;
 
         // Resolve the commit
@@ -108,14 +112,11 @@ impl EvalWorktree {
         let resolved = String::from_utf8(output.stdout)?.trim().to_string();
 
         // Create the worktree
+        let tmp_base_str = tmp_base.to_str().ok_or_else(|| {
+            anyhow::anyhow!("worktree path is not valid UTF-8: {}", tmp_base.display())
+        })?;
         let output = std::process::Command::new("git")
-            .args([
-                "worktree",
-                "add",
-                "--detach",
-                tmp_base.to_str().unwrap(),
-                &resolved,
-            ])
+            .args(["worktree", "add", "--detach", tmp_base_str, &resolved])
             .current_dir(repo_path)
             .output()?;
         anyhow::ensure!(
@@ -130,6 +131,7 @@ impl EvalWorktree {
                 path: tmp_base,
                 requested_revision: revision.to_string(),
             },
+            repo_path: repo_path.to_path_buf(),
             auto_remove: true,
         })
     }
@@ -243,20 +245,20 @@ impl EvalWorktree {
 
 impl Drop for EvalWorktree {
     fn drop(&mut self) {
-        if self.auto_remove && self.meta.path.exists() {
-            // Remove the worktree via git
+        if self.auto_remove && std::fs::symlink_metadata(&self.meta.path).is_ok() {
+            // Ask the owning repository to remove its worktree and
+            // administration record. If that fails, preserve the path for
+            // inspection rather than recursively deleting an unverified or
+            // potentially replaced filesystem entry.
             let _ = std::process::Command::new("git")
                 .args([
                     "worktree",
                     "remove",
                     "--force",
-                    self.meta.path.to_str().unwrap(),
+                    self.meta.path.to_string_lossy().as_ref(),
                 ])
+                .current_dir(&self.repo_path)
                 .output();
-            // Fallback: remove directory if git worktree remove failed
-            if self.meta.path.exists() {
-                let _ = std::fs::remove_dir_all(&self.meta.path);
-            }
         }
     }
 }
@@ -264,6 +266,18 @@ impl Drop for EvalWorktree {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn init_repo(parent: &Path) -> PathBuf {
+        let repo = parent.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        run_git(&repo, &["init", "-q"]);
+        run_git(&repo, &["config", "user.email", "test@example.com"]);
+        run_git(&repo, &["config", "user.name", "test"]);
+        std::fs::write(repo.join("tracked.txt"), "initial\n").unwrap();
+        run_git(&repo, &["add", "."]);
+        run_git(&repo, &["commit", "-q", "-m", "init"]);
+        repo
+    }
 
     #[test]
     fn worktree_meta_serializes() {
@@ -309,7 +323,92 @@ mod tests {
         // A root path has no parent and (on most platforms) no file_name,
         // so this must degrade to the OS temp dir rather than panic.
         let base = EvalWorktree::worktree_base_path(Path::new("/"), "label");
-        assert_eq!(base, std::env::temp_dir().join("daftprompt-eval-repo-eval-label"));
+        assert_eq!(
+            base,
+            std::env::temp_dir().join("daftprompt-eval-repo-eval-label")
+        );
+    }
+
+    #[test]
+    fn create_preserves_unrelated_directory_at_derived_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = init_repo(temp.path());
+        let collision = EvalWorktree::worktree_base_path(&repo, "collision-dir");
+        std::fs::create_dir(&collision).unwrap();
+        let marker = collision.join("keep-me.txt");
+        std::fs::write(&marker, "unrelated").unwrap();
+
+        let error = EvalWorktree::create(&repo, "HEAD", "collision-dir")
+            .err()
+            .expect("an existing directory must be rejected");
+
+        assert!(error.to_string().contains("refusing to create"));
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "unrelated");
+    }
+
+    #[test]
+    fn create_preserves_unrelated_file_at_derived_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = init_repo(temp.path());
+        let collision = EvalWorktree::worktree_base_path(&repo, "collision-file");
+        std::fs::write(&collision, "unrelated").unwrap();
+
+        let error = EvalWorktree::create(&repo, "HEAD", "collision-file")
+            .err()
+            .expect("an existing file must be rejected");
+
+        assert!(error.to_string().contains("refusing to create"));
+        assert_eq!(std::fs::read_to_string(collision).unwrap(), "unrelated");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_preserves_symlink_and_its_target_at_derived_path() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let repo = init_repo(temp.path());
+        let target = temp.path().join("unrelated-target");
+        std::fs::create_dir(&target).unwrap();
+        let marker = target.join("keep-me.txt");
+        std::fs::write(&marker, "unrelated").unwrap();
+        let collision = EvalWorktree::worktree_base_path(&repo, "collision-link");
+        symlink(&target, &collision).unwrap();
+
+        let error = EvalWorktree::create(&repo, "HEAD", "collision-link")
+            .err()
+            .expect("an existing symlink must be rejected");
+
+        assert!(error.to_string().contains("refusing to create"));
+        assert!(std::fs::symlink_metadata(&collision)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "unrelated");
+    }
+
+    #[test]
+    fn create_and_drop_removes_normal_worktree_and_git_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = init_repo(temp.path());
+        let worktree_path;
+        {
+            let worktree = EvalWorktree::create(&repo, "HEAD", "normal").unwrap();
+            worktree_path = worktree.path().to_path_buf();
+            assert!(worktree_path.is_dir());
+            assert!(worktree_path.join("tracked.txt").is_file());
+        }
+
+        assert!(!worktree_path.exists());
+        let output = std::process::Command::new("git")
+            .args(["worktree", "list", "--porcelain"])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(!String::from_utf8(output.stdout)
+            .unwrap()
+            .contains(&worktree_path.to_string_lossy().to_string()));
     }
 
     /// Reproduces the exact relative-path-dependency depth found in
