@@ -1242,4 +1242,29 @@ diff --git a/notes.txt b/notes.txt\n\
         // (i.e. this test exercised a real worktree, not a mock).
         assert!(wt.path().exists());
     }
+
+    #[test]
+    fn end_to_end_patch_created_file_is_present_in_worktree_ground_truth() {
+        let (_fixture_dir, repo_path) = init_tiny_bugfix_repo();
+        let wt =
+            crate::worktree::EvalWorktree::create(&repo_path, "HEAD", "e2e-untracked-patch-test")
+                .expect("worktree creation should succeed");
+
+        let diff_text = "diff --git a/tests/regression.txt b/tests/regression.txt\n\
+new file mode 100644\n\
+--- /dev/null\n\
++++ b/tests/regression.txt\n\
+@@ -0,0 +1 @@\n\
++regression covered\n";
+        let (applied, diagnostics) = apply_patch(diff_text, wt.path());
+        assert!(applied, "patch should apply cleanly: {diagnostics:?}");
+
+        let changed_files = wt.changed_files().expect("changed_files should succeed");
+        let captured_diff = wt.capture_diff().expect("capture_diff should succeed");
+
+        assert_eq!(changed_files, vec!["tests/regression.txt"]);
+        assert!(captured_diff.contains("diff --git a/tests/regression.txt b/tests/regression.txt"));
+        assert!(captured_diff.contains("new file mode 100644"));
+        assert!(captured_diff.contains("+regression covered"));
+    }
 }

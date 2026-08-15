@@ -3060,12 +3060,19 @@ evidence-gap exit guidance as Granite but did not follow it.
     clean worktree scores as success and an Epic 020 edit is rejected. This
     corrects the fixture interpretation but does not by itself complete a Task
     6 acceptance criterion or retroactively rewrite the stored live report.
-  - **T6-R02 — untracked files absent from worktree ground truth (open):**
+  - **T6-R02 — untracked files absent from worktree ground truth (resolved 2026-08-15):**
     `EvalWorktree::capture_diff()` and `changed_files()` use `git diff HEAD`,
     which omits untracked files. A model-created regression-test file can be
     applied successfully yet disappear from the recorded diff, touched-file
     list, precision/recall, and prohibition checks. Capture untracked files in
     the task-outcome ground truth and add a regression test.
+    Resolution: ground-truth capture now combines the tracked `git diff HEAD`
+    with deterministic Git-generated patches for sorted, non-ignored untracked
+    files; the changed-file list likewise merges, sorts, and deduplicates both
+    classes. Empty untracked files receive an explicit new-file record. An
+    end-to-end test applies a patch creating a regression-test file and proves
+    it appears in both outputs. This repairs the capture/scoring primitive but
+    does not retroactively add omitted files to earlier stored reports.
   - **T6-R03 — worktree path is not repository-read capability (open):** the
     `CodingAgent` boundary receives `worktree_path`, but the single-shot
     `PatchApplyCodingAgent` sends only the rendered prompt to its model and
@@ -3087,4 +3094,4 @@ evidence-gap exit guidance as Granite but did not follow it.
   implementation at a time; review, update this note/task status, and commit
   each item before starting the next. Keep Task 6 acceptance checkboxes
   unchanged unless the completed evidence satisfies their full wording.
-- Next iteration: T6-R02, then T6-R03 and T6-R04.
+- Next iteration: T6-R03, then T6-R04.

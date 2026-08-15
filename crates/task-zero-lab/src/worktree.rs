@@ -9,7 +9,7 @@
 //! - [`EvalWorktree::create`] creates a new worktree at a pinned revision
 //! - The worktree is an RAII guard: dropping it removes the worktree
 //! - The resolved commit is recorded for mismatch detection
-//! - `git diff` captures the agent's changes after execution
+//! - `git diff` plus untracked-file patches capture the agent's changes after execution
 
 use std::path::{Path, PathBuf};
 
@@ -155,7 +155,35 @@ impl EvalWorktree {
             .args(["diff", "HEAD"])
             .current_dir(&self.meta.path)
             .output()?;
-        Ok(String::from_utf8(output.stdout)?)
+        anyhow::ensure!(
+            output.status.success(),
+            "failed to capture tracked worktree diff: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut diff = String::from_utf8(output.stdout)?;
+
+        for path in self.untracked_files()? {
+            let output = std::process::Command::new("git")
+                .args(["diff", "--no-index", "--", "/dev/null", &path])
+                .current_dir(&self.meta.path)
+                .output()?;
+            anyhow::ensure!(
+                matches!(output.status.code(), Some(0 | 1)),
+                "failed to capture untracked file diff for {path}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if output.stdout.is_empty() {
+                // `git diff --no-index` emits nothing for an empty file, but
+                // its creation is still part of the worktree ground truth.
+                diff.push_str(&format!(
+                    "diff --git a/{path} b/{path}\nnew file mode 100644\nindex 0000000..e69de29\n"
+                ));
+            } else {
+                diff.push_str(&String::from_utf8(output.stdout)?);
+            }
+        }
+
+        Ok(diff)
     }
 
     /// List files changed in the worktree (relative paths).
@@ -164,8 +192,38 @@ impl EvalWorktree {
             .args(["diff", "--name-only", "HEAD"])
             .current_dir(&self.meta.path)
             .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "failed to list tracked worktree changes: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         let text = String::from_utf8(output.stdout)?;
-        Ok(text.lines().map(String::from).collect())
+        let mut files: Vec<String> = text.lines().map(String::from).collect();
+        files.extend(self.untracked_files()?);
+        files.sort();
+        files.dedup();
+        Ok(files)
+    }
+
+    /// List untracked, non-ignored files in stable path order.
+    fn untracked_files(&self) -> anyhow::Result<Vec<String>> {
+        let output = std::process::Command::new("git")
+            .args(["ls-files", "--others", "--exclude-standard", "-z"])
+            .current_dir(&self.meta.path)
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "failed to list untracked worktree files: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8(output.stdout)?;
+        let mut files: Vec<String> = text
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(String::from)
+            .collect();
+        files.sort();
+        Ok(files)
     }
 
     /// Check if the worktree is clean (no changes).
