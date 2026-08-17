@@ -293,7 +293,14 @@ No such behavior is included here.
 
 ## Tasks
 
-### Task 0: Prove compatibility with the local TypeScript adapter
+### Task 0: Prove compatibility with the local TypeScript adapter — DONE
+
+Findings: `epics/research/014-acp-adapter-compatibility.md`. Harness:
+`scratch/acp-spike/` (throwaway, not a workspace member — see that doc's
+intro for why). Conclusion: the maintained `agent-client-protocol` crate
+(v2.0.0, same GitHub org as codex-acp's TypeScript SDK) is compatible and
+proven both against scripted fixtures and live against the real adapter; no
+local wire layer is needed. Task 1 should depend on it directly.
 
 Build a small headless spike or test harness before integrating akar UI. Launch
 the local adapter through its documented development command or built entry
@@ -317,16 +324,16 @@ unpredictable. Keep one opt-in live smoke test for manual validation.
 
 #### Acceptance Criteria
 
-- [ ] The adapter is launched as a child process and communicates over stdio.
-- [ ] Initialize, session/new, session/prompt, session/update, permission,
+- [x] The adapter is launched as a child process and communicates over stdio.
+- [x] Initialize, session/new, session/prompt, session/update, permission,
   cancellation, and session/close behavior is observed against the local clone.
-- [ ] The selected Rust ACP dependency is pinned and proven compatible, or the
+- [x] The selected Rust ACP dependency is pinned and proven compatible, or the
   need for a minimal local wire layer is documented.
-- [ ] Adapter stderr cannot corrupt stdout protocol parsing.
-- [ ] Request correlation works while notifications and reverse requests are
+- [x] Adapter stderr cannot corrupt stdout protocol parsing.
+- [x] Request correlation works while notifications and reverse requests are
   interleaved.
-- [ ] The child process is reaped on normal close, error, and client shutdown.
-- [ ] No UI implementation begins until the headless prompt round trip works.
+- [x] The child process is reaped on normal close, error, and client shutdown.
+- [x] No UI implementation begins until the headless prompt round trip works.
 
 ### Task 1: Add the ACP runtime boundary
 

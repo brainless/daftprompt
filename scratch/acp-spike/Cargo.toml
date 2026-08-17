@@ -1,0 +1,25 @@
+[workspace]
+
+[package]
+name = "acp-spike"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Epic 014 Task 0 throwaway compatibility spike. Not a workspace member (see
+# root Cargo.toml `[workspace] members`), so it is invisible to
+# `cargo check --workspace` / `cargo test --workspace` and does not need to be
+# kept building forever. Build/test it directly from this directory:
+#   cd scratch/acp-spike && cargo test
+
+[dependencies]
+agent-client-protocol = "2.0"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+futures = "0.3"
+
+[[bin]]
+name = "fake_adapter"
+path = "src/bin/fake_adapter.rs"

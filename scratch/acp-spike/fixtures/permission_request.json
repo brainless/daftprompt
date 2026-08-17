@@ -1,0 +1,21 @@
+{
+  "_comment": "NOT captured from a live run. Four live attempts (default sandbox, read-only session mode, CODEX_CONFIG approval_policy=untrusted, and a network+outside-cwd command) all auto-approved on this workstation's authenticated Codex profile, so no live session/request_permission was observed. This fixture is reconstructed field-for-field from ~/Projects/codex-acp src/CodexApprovalHandler.ts (buildCommandPermissionRequest/buildCommandOptions) and src/ApprovalOptionId.ts, which give the exact request shape and optionId strings codex-acp sends for a command-execution approval. Treat as schema-accurate, not wire-observed.",
+  "jsonrpc": "2.0",
+  "id": 100,
+  "method": "session/request_permission",
+  "params": {
+    "sessionId": "01a01050-a8b2-7a40-ab44-9e6f9400741e",
+    "toolCall": {
+      "toolCallId": "exec-fixture-0001",
+      "kind": "execute",
+      "status": "pending",
+      "rawInput": { "command": "echo daftprompt-harmless-permission-test", "cwd": "/tmp/acp-spike-repo" }
+    },
+    "options": [
+      { "optionId": "allow_once", "name": "Allow Once", "kind": "allow_once" },
+      { "optionId": "allow_always", "name": "Allow for Session", "kind": "allow_always" },
+      { "optionId": "reject_once", "name": "Reject", "kind": "reject_once" }
+    ],
+    "_meta": { "codex": { "params": { "command": "echo daftprompt-harmless-permission-test", "cwd": "/tmp/acp-spike-repo" } } }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "sessionId": "01a01050-a8b2-7a40-ab44-9e6f9400741e",
+    "models": {
+      "availableModels": [
+        {
+          "modelId": "gpt-5.6-sol[low]",
+          "name": "GPT-5.6-Sol (low)",
+          "description": "Latest frontier agentic coding model. Fast responses with lighter reasoning"
+        },
+        {
+          "modelId": "gpt-5.6-terra[medium]",
+          "name": "GPT-5.6-Terra (medium)",
+          "description": "Balanced agentic coding model for everyday work. Balances speed and reasoning depth for everyday tasks"
+        }
+      ],
+      "currentModelId": "gpt-5.6-sol[low]"
+    },
+    "modes": {
+      "availableModes": [
+        { "id": "read-only", "name": "Read-only", "description": "Requires approval to edit files and run commands." },
+        { "id": "agent", "name": "Agent", "description": "Read and edit files, and run commands." },
+        { "id": "agent-full-access", "name": "Agent (full access)", "description": "Codex can edit files outside this workspace and run commands with network access. Exercise caution when using." }
+      ],
+      "currentModeId": "agent"
+    },
+    "configOptions": [
+      {
+        "id": "mode",
+        "name": "Mode",
+        "description": "Approval and sandboxing preset for the session",
+        "category": "mode",
+        "type": "select",
+        "currentValue": "agent",
+        "options": [
+          { "value": "read-only", "name": "Read-only", "description": "Requires approval to edit files and run commands." },
+          { "value": "agent", "name": "Agent", "description": "Read and edit files, and run commands." },
+          { "value": "agent-full-access", "name": "Agent (full access)", "description": "Codex can edit files outside this workspace and run commands with network access. Exercise caution when using." }
+        ]
+      }
+    ]
+  }
+}
