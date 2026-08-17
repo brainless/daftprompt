@@ -238,7 +238,8 @@ fn main() -> anyhow::Result<()> {
             max_total_bytes,
         } => {
             let epic_numbers = parse_epic_numbers(&epics)?;
-            let extraction = task_zero_lab::graph_build::build_graph(&repo, &rev, &epic_numbers, include_dirty)?;
+            let mut extraction = task_zero_lab::graph_build::build_graph(&repo, &rev, &epic_numbers, include_dirty)?;
+            task_zero_lab::graph_build::add_request_referenced_nodes(&mut extraction, &request);
             let budget = task_zero_lab::packet::PacketBudget {
                 max_depth,
                 max_items,
@@ -252,7 +253,8 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Prompt { repo, rev, epics, request, objective, negative_constraints, include_dirty, max_prompt_bytes, output } => {
             let epic_numbers = parse_epic_numbers(&epics)?;
-            let extraction = task_zero_lab::graph_build::build_graph(&repo, &rev, &epic_numbers, include_dirty)?;
+            let mut extraction = task_zero_lab::graph_build::build_graph(&repo, &rev, &epic_numbers, include_dirty)?;
+            task_zero_lab::graph_build::add_request_referenced_nodes(&mut extraction, &request);
             let mut packet_budget = task_zero_lab::packet::PacketBudget::default();
             packet_budget.max_items = 200;
             packet_budget.max_total_bytes = 100_000;
@@ -304,7 +306,8 @@ fn main() -> anyhow::Result<()> {
             report_output,
         } => {
             let epic_numbers = parse_epic_numbers(&epics)?;
-            let extraction = task_zero_lab::graph_build::build_graph(&repo, &rev, &epic_numbers, include_dirty)?;
+            let mut extraction = task_zero_lab::graph_build::build_graph(&repo, &rev, &epic_numbers, include_dirty)?;
+            task_zero_lab::graph_build::add_request_referenced_nodes(&mut extraction, &request);
             let mut packet_budget = task_zero_lab::packet::PacketBudget::default();
             packet_budget.max_items = 200;
             packet_budget.max_total_bytes = 100_000;

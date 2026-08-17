@@ -170,12 +170,12 @@ fn parse_checkbox_list(body_text: &str, body_start_line: usize) -> Vec<Checklist
 
 // ── Whole-document reference scan (paths, symbols, commands, epic refs) ──
 
-fn backtick_span_regex() -> &'static Regex {
+pub(crate) fn backtick_span_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"`([^`\n]+)`").unwrap())
 }
 
-fn path_like_regex() -> &'static Regex {
+pub(crate) fn path_like_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // A repo-relative-looking path: at least one `/`, only path-safe
     // characters, and a final component containing a `.` extension or a
@@ -183,16 +183,30 @@ fn path_like_regex() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9_.\-]+(/[A-Za-z0-9_.\-]+)+/?$").unwrap())
 }
 
-fn symbol_like_regex() -> &'static Regex {
+pub(crate) fn symbol_like_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // Rust-style qualified path, e.g. `ReviewQueue::columns` or
     // `daftprompt_indexer::db::content_hash`.
     RE.get_or_init(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)+(\(\))?$").unwrap())
 }
 
+/// A `path::symbol` composite reference, e.g.
+/// `` `email_ranking/mod.rs::contains_date` `` — a file path (matching the
+/// same shape as [`path_like_regex`], minus the trailing-`/` directory case)
+/// followed by `::` and a bare identifier. Neither [`path_like_regex`] (no
+/// `::` allowed) nor [`symbol_like_regex`] (no `/` or `.` allowed in its
+/// leading segment) matches this shape on its own, but requests naming an
+/// exact file and symbol together in one backtick span are common enough
+/// (see Epic 014's C07 fixture) to need their own recognizer rather than
+/// being silently dropped as an unrecognized span.
+pub(crate) fn path_symbol_like_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^([A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+)::([A-Za-z_][A-Za-z0-9_]*(?:\(\))?)$").unwrap())
+}
+
 const COMMAND_VERBS: &[&str] = &["cargo", "git", "rustc", "RUST_LOG"];
 
-fn looks_like_command(span: &str) -> bool {
+pub(crate) fn looks_like_command(span: &str) -> bool {
     let first_word = span.split_whitespace().next().unwrap_or("");
     COMMAND_VERBS.iter().any(|verb| first_word == *verb || first_word.starts_with(&format!("{verb}=")))
 }

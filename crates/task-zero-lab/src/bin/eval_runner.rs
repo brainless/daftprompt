@@ -185,7 +185,8 @@ fn build_prompt_variants(
     };
 
     // Variant 2: Deterministic baseline (graph → packet → render)
-    let graph = graph_build::build_graph(repo, rev, &case.epics, false)?;
+    let mut graph = graph_build::build_graph(repo, rev, &case.epics, false)?;
+    graph_build::add_request_referenced_nodes(&mut graph, request_text);
     let mut budget = PacketBudget::default();
     budget.max_items = 200;
     budget.max_total_bytes = 100_000;

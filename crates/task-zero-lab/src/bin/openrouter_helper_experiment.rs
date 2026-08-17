@@ -183,7 +183,8 @@ fn frozen_inputs(
         "case {} constraints no longer match frozen hash",
         case.id
     );
-    let graph = task_zero_lab::graph_build::build_graph(repo, rev, EPICS, false)?;
+    let mut graph = task_zero_lab::graph_build::build_graph(repo, rev, EPICS, false)?;
+    task_zero_lab::graph_build::add_request_referenced_nodes(&mut graph, case.request);
     let mut budget = PacketBudget::default();
     budget.max_items = 200;
     budget.max_total_bytes = 100_000;

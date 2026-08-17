@@ -349,6 +349,8 @@ mod tests {
             kind: NodeKind::Task,
             label: label.into(),
             source_path: Some("epics/014.md".into()),
+            referenced_path: None,
+            path_resolution: None,
             source_version: "abc123".into(),
             checked: Some(false),
             category: Some(SourceCategory::EpicsAndResearch),

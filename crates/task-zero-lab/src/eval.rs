@@ -425,7 +425,16 @@ pub fn case_c07() -> EvalCase {
             "Fix plus regression test; scope explicitly excludes an unrelated GUI date-request change that shares the same commit.".into(),
         ],
         mutation_boundary: MutationBoundary::RepositoryChangesOnlyWhenExplicitlyRequested,
-        epics: vec![11, 12, 13, 14],
+        // `[11, 12, 13, 14]` were daftprompt's own epic numbers, wrongly
+        // reused here (2026-08-15 diagnosis: "C07 still zero-diff after the
+        // packet-content fix..."). `build_graph` resolves epic numbers
+        // against `repo_path` (dwata), not daftprompt, and dwata's own
+        // `epics/` directory (checked directly: `ls ~/Projects/dwata/epics/`)
+        // contains only `001-native-restart-and-legacy-ui-removal.md`, which
+        // is unrelated to email ranking. No dwata epic plausibly covers this
+        // case, so this is left empty rather than pointing at a wrong or
+        // unrelated epic.
+        epics: vec![],
         relevance: PracticalRelevanceSet {
             expected_changes: vec![
                 ExpectedArtifact {

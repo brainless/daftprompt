@@ -827,6 +827,17 @@ operation catalog.
 Run reproducible comparisons over the Task 0 corpus and store complete traces
 without committing private raw material or credentials.
 
+**Qwen-first fixed model (2026-08-15, see Experiment Notes):** the user has
+selected local Qwen 3.5 9B (`unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL` via
+llama-server) as the default fixed capable-model configuration for the next
+round of Task 6 live iterations, in both the capable-agent and helper roles.
+This is a pragmatic scoping choice for iteration speed, not a change to Task
+5's already-satisfied three-open-weight-helper requirement or to Task 7's
+multi-model corpus-level gate: a Qwen-only result may unblock and validate
+the harness mechanics (packet content, worktree/patch-apply wiring, scoring)
+but must not by itself close any Epic 011-013 Task 0 criterion, per Design
+Constraint 7 and the single-anecdote guardrail already stated above.
+
 #### Acceptance Criteria
 
 - [ ] Each case compares raw human prompt, deterministic generated prompt, and
@@ -3209,3 +3220,430 @@ evidence-gap exit guidance as Granite but did not follow it.
   `truncate_excerpt_to_budget`, and their tests
   `enrich_with_blob_content_replaces_label_only_excerpt_with_real_source` /
   `enrich_with_blob_content_records_omission_for_untracked_path_without_erroring`).
+
+### 2026-08-15 — Qwen-first fixed-model decision for Task 6 iteration
+
+- Parent criterion/question: none directly (process/scoping decision, not an
+  experiment result). Governs how the "next iteration" from the prior note
+  (re-run C07 live with the packet-content fix) and subsequent Task 6 work
+  will be executed.
+- Context: the user has been manually evaluating models outside this harness
+  and judges local Qwen 3.5 9B the most promising for their own use of the
+  Epic 011-013 thesis. They cannot yet test that thesis end-to-end because
+  Epic 014 (this harness) is the blocker, and want faster signal.
+- Decision: use local Qwen 3.5 9B (`unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL` via
+  llama-server, already the `eval_runner run-llama-cpp` default) as the sole
+  fixed capable-model configuration — both capable-agent and helper roles —
+  for the next round of Task 6 live iterations, starting with re-running C07
+  now that the packet-content fix from the prior note is in place.
+- Scope and limits, agreed explicitly: this is a fixed-model choice for
+  Task 6's "same fixed capable-model configuration" bullet, which does not
+  itself require multiple models. It does **not** relax Task 5's
+  already-satisfied three-open-weight-helper requirement, and it does
+  **not** authorize closing any Epic 011-013 Task 0 criterion from
+  Qwen-only evidence — Design Constraint 7 and Task 6's single-anecdote
+  guardrail still require multi-run, and eventually multi-model, evidence
+  before any such criterion is checked. If Qwen-only iteration later
+  reveals the harness mechanics work, a separate explicit decision is
+  needed before broadening back to the three-helper matrix for corpus-level
+  conclusions.
+- Next iteration: re-run C07 live (`eval_runner run-llama-cpp --case C07
+  --patch-apply --repetitions 2`, same local Qwen 3.5 9B) with the
+  `enrich_with_blob_content` packet fix in place, and compare against the
+  2026-08-14/2026-08-15 zero-diff baseline.
+
+### 2026-08-15 — C07 still zero-diff after the packet-content fix; root cause is an upstream graph gap, not excerpt enrichment
+
+- Parent criterion/question: the prior note's "next iteration" — re-run C07
+  live with `enrich_with_blob_content` in place and compare against the
+  2026-08-14/2026-08-15 zero-diff baseline. No Task 6 checkbox is touched;
+  the result is negative.
+- Repository and immutable revision: `~/Projects/dwata` at `11d98e0`
+  (`11d98e0ebe604dfff58f9943a562f7f568ccd552`), same pinned revision as the
+  prior C07 runs. daftprompt itself was at the tip of this branch
+  (uncommitted: this file's edits only; no `task-zero-lab` source changed).
+- Harness/model versions: `task-zero-lab` v0.1.0 (unchanged from the prior
+  note — `enrich_with_blob_content` already present, no code edited this
+  iteration); `task-zero-eval-v3` schema; capable-agent and helper model
+  both local Qwen 3.5 9B (`unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL`) via
+  llama-server at `http://localhost:8080`, `patch_apply_llama_cpp` adapter,
+  temperature per server default (0.5), `--reasoning off`.
+- Command: `cargo run -p task-zero-lab --bin eval_runner -- run-llama-cpp
+  --case C07 --patch-apply --repetitions 2 --output
+  epics/research/task-zero-lab/live-2026-08-15b/c07-report.json`. Two stale
+  worktrees (`dwata-eval-C07-HelperRefined-rep1`,
+  `dwata-eval-C07-RawHuman-rep2`) left behind by earlier interrupted
+  attempts at this same run were removed via `git worktree remove --force`
+  before this run; this run's own worktrees were cleaned up automatically.
+- Observed results and measurements: 6/6 runs produced `diff: null` and
+  `worktree_changed_files: []`, identical in shape to the 2026-08-14 and
+  2026-08-15 zero-diff baselines. Aggregate: avg artifact recall 0.00, avg
+  artifact precision 1.00 (vacuous — nothing touched), verification pass
+  rate 1.00, 0 prohibited violations, constraints preserved 4/6 (both
+  `raw_human` reps score `false`, expected — that variant carries no
+  negative-constraints section by design), unsupported_claims 2 on every
+  `deterministic_baseline`/`helper_refined` run (0 on `raw_human`). The
+  model's own response text (identical in substance across reps) explicitly
+  says it lacks the source of `email_ranking/mod.rs` and cannot inspect the
+  file at the resolved commit. Inspecting the actual rendered
+  `deterministic_baseline`/`helper_refined` prompt text in the report
+  confirms why: the packet's "Relevant epic, task, and shared constraints"
+  section is empty, and "Candidate context" contains only two unrelated
+  `DEVELOP.md` excerpts from dwata's own docs (DB access, dev workflow) —
+  no node referencing `email_ranking/mod.rs` or `contains_date` exists in
+  the packet at all. `enrich_with_blob_content` only replaces an existing
+  label-only excerpt on a `FileOrSection`/`CodeSymbol` node; with no such
+  node present, it had nothing to act on — confirmed by tracing
+  `eval_runner.rs`'s `build_graph`/`select_packet`/`enrich_with_blob_content`
+  call chain (all three are called, in that order, unconditionally).
+  Root cause identified in `graph_build::build_graph`: `case_c07()` sets
+  `epics: vec![11, 12, 13, 14]`, and `build_graph(repo, rev, epic_numbers,
+  ..)` calls `discover_epic_file_path(repo, num)` to look for
+  `epics/0NN-*.md` under `repo` — but `repo` here is `~/Projects/dwata`,
+  which has no `epics/` directory at all (those epic numbers only exist in
+  *daftprompt's* own `epics/`). All four requested epics are recorded
+  `requested_epics_unavailable` and produce no nodes. Because dwata is also
+  not indexed by `daftprompt-indexer` (`index_coverage.rs` reports
+  `Index available: false`, `canonical identifiers considered: 0`, visible
+  in the rendered prompt itself), there is no second source of code-symbol
+  or file nodes either. The graph for this run therefore contains only
+  whatever `AGENTS.md`/`DEVELOP.md`/`Cargo.toml`/commit evidence exists for
+  dwata plus lexical candidates from that — never anything about
+  `email_ranking/mod.rs`, regardless of what real Git blob content
+  `enrich_with_blob_content` could have surfaced. The exact-path backtick
+  reference in the request text itself (`` `email_ranking/mod.rs::contains_date` ``)
+  is not, on this path, turned into a node either — exact-seed matching in
+  `packet.rs` only matches request text against locators of nodes that
+  already exist in the graph; it does not synthesize a new node from an
+  unmatched path reference.
+- Validated findings: the 2026-08-15 `enrich_with_blob_content` fix works
+  exactly as its own unit tests describe (confirmed live: the function is
+  reached, unconditionally, for every run) but is not sufficient to fix C07,
+  because the packet-selection gap for this case is one level upstream —
+  no node for the target file ever enters the graph, so there is nothing
+  for the excerpt-enrichment step to enrich. The two prior notes' framing
+  ("the packet only had a label, not real content") was an incomplete
+  diagnosis; the more accurate statement is "the packet never referenced
+  the target file at all" for a case pointed at an external, unindexed
+  repository whose `case.epics` field names epic numbers that belong to a
+  different repository.
+- Rejected or unsupported interpretations: this is not evidence that
+  `enrich_with_blob_content`, the worktree/patch-apply wiring, or the
+  scoring pipeline are broken — all three executed correctly and are
+  independently verified by the synthetic tests and by this run's own
+  clean verification/scoring behavior. It is also not evidence that Qwen
+  3.5 9B specifically is the limiting factor here; the model correctly
+  identified its own missing context in every run rather than hallucinating
+  a fabricated diff, which is arguably correct model behavior given what it
+  was actually given.
+- User decision or pending decision: pending. Two candidate upstream fixes
+  were identified and deliberately NOT applied without review, consistent
+  with this session's "small mechanical fixes only, no design-level change
+  without review" scope: (1) `case_c07()`'s `epics: vec![11, 12, 13, 14]`
+  is likely simply wrong for a case whose target repository is dwata, not
+  daftprompt — it should probably be empty or reference whatever `epics/`
+  dwata itself has (if any), not daftprompt's epic numbers; (2) more
+  fundamentally, `graph_build::build_graph`/`packet::select_packet` has no
+  mechanism to turn an explicit file/symbol path named in the human request
+  text into a graph node when the repository is unindexed and has no
+  matching epic doc — this is a real coverage gap for exactly the kind of
+  case Epic 011-013 need evidence about (a request that names a concrete
+  file the harness should be able to go read), not a defect specific to
+  C07's fixture.
+- Next iteration: before spending further repetitions on C07, resolve (1)
+  above (correct or empty `case_c07()`'s `epics` field) as a quick check
+  that doesn't require design work, and separately scope (2) as its own
+  small harness change — likely: when index coverage is unavailable and no
+  epic doc match exists, fall back to resolving explicit backtick path
+  references in the request text directly against the pinned Git tree
+  (`git_snapshot::read_blob_at_revision` already does this once a path is
+  known) and synthesizing a `FileOrSection`/`CodeSymbol` node for exact
+  matches, ahead of any live agent run. Only after C07 can produce at least
+  some patch attempt should further repetitions be spent working toward
+  Task 6's "runs more than once... distinguishes a stable result from
+  single-run variance" bar; running more reps against the current graph gap
+  would just reproduce the same zero-diff result deterministically modulo
+  model sampling.
+- Detailed artifacts:
+  `epics/research/task-zero-lab/live-2026-08-15b/c07-report.json` (6 runs,
+  full prompts, responses, scores).
+
+### 2026-08-15 — Request-referenced node fallback added; C07 still zero-diff, now for a precisely diagnosed exact-path mismatch
+
+- Parent criterion/question: the prior note's two "next iteration" items —
+  (1) correct `case_c07()`'s wrong `epics` field, (2) add a mechanism that
+  turns an explicit backtick path/symbol reference in the request text into
+  a graph node when the target repository is unindexed and has no matching
+  epic doc. No Task 6 acceptance-criteria checkbox is touched by this note;
+  both items are upstream infrastructure the corpus runs depend on.
+- Repository and immutable revision: `~/Projects/dwata` at `11d98e0`
+  (`11d98e0ebe604dfff58f9943a562f7f568ccd552`), same pinned revision as all
+  prior C07 runs. `~/Projects/dwata/epics/` was inspected directly (`ls`)
+  and contains only `001-native-restart-and-legacy-ui-removal.md`
+  ("Native restart and legacy UI removal"), unrelated to email ranking.
+  daftprompt itself was at the tip of this branch (uncommitted:
+  `crates/task-zero-lab/src/eval.rs`, `graph_build.rs`, `markdown_extract.rs`,
+  `main.rs`, `bin/eval_runner.rs`, `bin/openrouter_helper_experiment.rs`,
+  and this file).
+- Fixture and input request: same C07 expert request as all prior notes
+  (`` Fix the Unicode byte-boundary panic in email ranking at
+  `email_ranking/mod.rs::contains_date`. ``), 3 variants × 2 repetitions (6
+  runs).
+- Harness/model versions: `task-zero-lab` v0.1.0, `task-zero-eval-v3`
+  schema, capable-agent model local Qwen 3.5 9B
+  (`unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL`) via llama-server at
+  `http://localhost:8080`, `patch_apply_llama_cpp` adapter. No
+  `--helper-model` flag was passed this run, so the helper-refined variant's
+  helper adapter is `"disabled"` (`stop_reason: "disabled"`, 0 rounds) —
+  this run compares raw/deterministic/(inert-helper) packet content, not
+  live helper refinement quality; that is a scope difference from the two
+  prior live-run notes, not a regression.
+- Harness change, in order:
+  1. `case_c07()` (`eval.rs`): `epics: vec![11, 12, 13, 14]` — daftprompt's
+     own epic numbers, reused by copy-paste error — changed to `epics:
+     vec![]`. No dwata epic plausibly covers email ranking (the only one
+     that exists, 001, is about native restart/legacy UI removal), so this
+     is left empty rather than pointed at a wrong or unrelated epic.
+  2. `markdown_extract.rs`: `path_like_regex`, `symbol_like_regex`,
+     `looks_like_command`, and `backtick_span_regex` changed from private to
+     `pub(crate)` (no behavior change) so the new fallback below can reuse
+     the exact same path/symbol/command shape judgment
+     `scan_references` already applies, instead of reimplementing it. Added
+     one new `pub(crate)` regex, `path_symbol_like_regex`, recognizing a
+     `path::symbol` composite backtick span (e.g.
+     `email_ranking/mod.rs::contains_date`) — a shape neither
+     `path_like_regex` (no `::` allowed) nor `symbol_like_regex` (no `/` or
+     `.` allowed in its leading segment) matches on its own, and which is
+     exactly the shape the C07 request itself uses. `scan_references` and
+     `extract_epic` are otherwise unchanged.
+  3. `graph_build.rs`: added `pub fn add_request_referenced_nodes(graph:
+     &mut GraphExtraction, request: &str)`. For every backtick span in
+     `request`: skips it if `looks_like_command` says so (e.g. `` `cargo
+     test` ``); skips it if any existing node already answers to it (a
+     small `node_reference_strings` helper mirrors `packet.rs`'s private
+     `reference_strings` — locator, source path, `referenced_path`,
+     `referenced_symbol` — without depending on `packet.rs`, keeping
+     `graph_build.rs` free of a new intra-crate dependency); otherwise
+     classifies the span with the same three regexes `scan_references`
+     uses (now including the new composite one) and synthesizes the
+     matching node(s): a composite `path::symbol` span gets both a
+     `FileOrSection` node (locator `file:{path}`) and a `CodeSymbol` node
+     (locator `symbol:{full span}`), both carrying the file path as
+     `source_path` so `enrich_with_blob_content` can attempt a real blob
+     read for either; a bare path gets a `FileOrSection` node; a bare
+     `Type::method`-shaped symbol gets a `CodeSymbol` node with no known
+     path. All synthesized nodes use `source_version:
+     "unresolved-reference"` and `extra.referenced_path`/
+     `referenced_symbol`, mirroring `extract_epic`'s existing
+     epic-doc-derived reference nodes field-for-field. A plain word or
+     sentence fragment matches none of the three shapes and is left alone,
+     same as `scan_references` already does. `enrich_with_blob_content`
+     itself was not touched, per this iteration's scope.
+  4. Wired `add_request_referenced_nodes` into all five `build_graph` →
+     `select_packet` call sites, immediately after `build_graph` and before
+     `select_packet` (mirroring exactly where the 2026-08-15
+     `enrich_with_blob_content` note wired its own fix into the same five
+     spots): `main.rs`'s `Packet`, `Prompt`, and `Helper` CLI commands (the
+     `Graph` command has no packet step and was left
+     alone, consistent with `enrich_with_blob_content` also skipping it);
+     `eval_runner.rs`'s `build_prompt_variants` (one call covers all three
+     rendered variants, since they share one graph/packet); and
+     `openrouter_helper_experiment.rs`.
+  5. Added three offline unit tests in `graph_build.rs`'s existing test
+     module (synthetic Git fixtures, no live repo/model access):
+     `request_referenced_path_symbol_is_synthesized_and_enriched_with_real_blob_content`
+     proves a composite `path::symbol` request reference with no matching
+     node gets synthesized, that `packet::find_exact_seeds` then seeds on
+     it, and that `packet::enrich_with_blob_content` then replaces its
+     placeholder excerpt with real windowed file content end to end (the
+     fixture deliberately commits the referenced source file in an earlier
+     commit than the resolved `HEAD`, so `build_graph`'s own
+     `changed_files` diff does not already surface it — otherwise the test
+     would trivially pass for the wrong reason).
+     `request_referenced_nodes_are_not_duplicated_when_no_reference_or_already_covered`
+     proves a request with no backtick span, and a request whose backtick
+     span already matches an existing node (`epics/901-other.md`, matched
+     by the fixture's own checklist text), both leave the node count
+     unchanged.
+     `non_path_backtick_spans_do_not_become_spurious_nodes` proves `` `cargo
+     test` `` and a bare word span create no new nodes.
+  6. Re-ran C07 live: `cargo run -p task-zero-lab --bin eval_runner --
+     run-llama-cpp --case C07 --patch-apply --repetitions 2 --output
+     epics/research/task-zero-lab/live-2026-08-15c/c07-report.json`. No
+     stale `dwata-eval-C07-*` worktrees existed before this run
+     (`git -C ~/Projects/dwata worktree list` showed only `[main]`); the
+     run's own six worktrees were cleaned up automatically
+     (`git -C ~/Projects/dwata worktree list` showed only `[main]`
+     afterward too).
+- Observed results and measurements: `cargo test -p task-zero-lab --lib`
+  passes 182/182 (up from the prior note's 179 by exactly the three new
+  tests added here; the earlier 170-with-12-sandboxed-HTTP-failures count
+  from the Task 6 implementation-review note did not recur, consistent with
+  no HTTP-transport test being invoked in either this or the prior run).
+  `cargo test --workspace --exclude daftprompt` passes, including
+  the CLI-level `cli_helper_disabled_matches_cli_prompt` integration test.
+  `cargo check --workspace` still fails only on the same pre-existing,
+  unrelated GUI compile error in `src/main.rs`
+  (`akar_core::AkarCore::new` missing a `TextPipelineConfig` argument),
+  unchanged by this note's edits.
+
+  The node-synthesis mechanism is confirmed working, live, not just in
+  synthetic tests: every one of the 6 rendered `deterministic_baseline`/
+  `helper_refined` prompts now contains, under "Relevant epic, task, and
+  shared constraints", `[E1] email_ranking/mod.rs @ unresolved-reference
+  (symbol:email_ranking/mod.rs::contains_date)` and, under "Candidate
+  context", `[C1] email_ranking/mod.rs @ unresolved-reference
+  (file:email_ranking/mod.rs)` — both entirely absent from every prior C07
+  prompt across all three earlier live-run notes. `find_exact_seeds` is
+  confirmed reaching the synthesized symbol node as established evidence
+  (`[E1]`, not merely a lexical candidate).
+
+  **Zero diffs were still extracted in all 6 runs** (`agent_result.diff:
+  null`, `worktree_changed_files: []`, `diagnostics: ["[no diff extracted]
+  model response contained no fenced or bare unified diff"]` on every run).
+  Aggregate: avg artifact recall 0.00, avg artifact precision 1.00
+  (vacuous), verification pass rate 1.00 (real: a sampled
+  `verification_diagnostics` entry shows a genuine `cargo +nightly check
+  --workspace` dependency-resolution run, not a stub), 0 prohibited
+  violations, intent preserved 6/6, constraints preserved 4/6 (both
+  `raw_human` reps score `false`, expected — no negative-constraints
+  section by prompt design), unsupported_claims 0 on every run (an
+  improvement over the 2026-08-15b run's `unsupported_claims: 2` on every
+  deterministic/helper run — plausible explanation below, not yet proven).
+  `worktree_commit` matched the pinned `11d98e0` on every run.
+
+  This time the cause is not "no node exists" — the rendered
+  `deterministic_baseline`/`helper_refined` prompt text's "Omissions, stale
+  sources, and unsupported capabilities" section reads, verbatim:
+  `packet omission: file:email_ranking/mod.rs: no blob content, path not
+  tracked at 11d98e0ebe604dfff58f9943a562f7f568ccd552` and `packet
+  omission: symbol:email_ranking/mod.rs::contains_date: no blob content,
+  path not tracked at 11d98e0ebe604dfff58f9943a562f7f568ccd552`. The
+  established `[E1]` item's excerpt is still exactly its own label
+  (`"email_ranking/mod.rs::contains_date"`), i.e. `enrich_with_blob_content`
+  ran, attempted a real Git blob read, and recorded a budget omission
+  rather than filling it. Root cause, independently confirmed: the
+  request's backtick span is `email_ranking/mod.rs` (a suffix of the real
+  path), but the tracked path at `11d98e0` is
+  `dwata-api/src/email_ranking/mod.rs` — confirmed directly with `git -C
+  ~/Projects/dwata show 11d98e0:dwata-api/src/email_ranking/mod.rs | head`
+  (succeeds) versus `git -C ~/Projects/dwata show
+  11d98e0:email_ranking/mod.rs` (fails, "path does not exist"). Both
+  `git_snapshot::read_blob_at_revision` and this note's new
+  `add_request_referenced_nodes` do an exact-string tree-path lookup with
+  no suffix/basename resolution, so a request that (accurately, in prose)
+  names a file by its last two path components rather than its full
+  repo-relative path can synthesize a real node yet still never reach real
+  content. Every sampled model response this run explicitly states this
+  exact reason in its own words (e.g. the `deterministic_baseline` rep 1
+  response quotes both omission lines back verbatim and concludes "Without
+  the original code containing the Unicode byte-boundary panic, it is
+  impossible to construct a valid `git-apply` compatible diff") rather than
+  fabricating a patch — the model is behaving correctly given what it
+  received, not failing at the coding task.
+- Validated findings: both harness changes are confirmed correct and
+  load-bearing on real data, not just plausible from code review or
+  synthetic tests — `case_c07()`'s `epics` field no longer names
+  daftprompt's own epics against a different repository, and
+  `add_request_referenced_nodes` demonstrably closes the "no node at all"
+  gap the prior note diagnosed: the synthesized nodes appear in the live
+  packet, are exact-seeded, and are visibly attempted by
+  `enrich_with_blob_content`. The zero-diff outcome has a materially
+  different, more precise cause than every prior note's "no evidence-backed
+  change surface was identified" — it is now specifically "a node and an
+  exact-seed exist, but the referenced path string does not exact-match
+  the repository's real tracked path."
+- Rejected or unsupported interpretations: this is not evidence that
+  `add_request_referenced_nodes`, `find_exact_seeds`, or
+  `enrich_with_blob_content` are broken — each executed exactly as
+  designed and as their unit tests describe; the gap is a missing
+  suffix/basename path-resolution step that was explicitly out of this
+  iteration's scope (the task instructions for this iteration described
+  node synthesis only, not path resolution, and this note does not invent
+  that resolution unreviewed). It is also not evidence that Qwen 3.5 9B is
+  the limiting factor — the model correctly identified the specific missing
+  content and explained why it would not fabricate a patch, which is
+  arguably the correct behavior given its input. The `unsupported_claims:
+  0` result (versus `2` in the 2026-08-15b run) is plausibly explained by
+  the model now having a concrete, named omission to cite instead of
+  reasoning more freely about the change, but two runs under different
+  helper configurations (this run had no live helper; 2026-08-15b did) is
+  not enough evidence to generalize that relationship, and it is not
+  treated as such here.
+- User decision or pending decision: pending. One concrete follow-up was
+  identified and deliberately not applied without review, consistent with
+  this session's "small mechanical fixes only, no design-level change
+  without review" scope: give `add_request_referenced_nodes` (or
+  `read_blob_at_revision`, or a new small tree-walking helper) a
+  suffix/basename fallback — e.g., when an exact tree-path lookup for a
+  synthesized reference fails, search the resolved commit's tree for
+  entries whose path ends with `/{referenced_path}` (or equals it), and
+  either resolve to a unique match or record the ambiguity/absence
+  explicitly rather than guessing. This is materially different in scope
+  and risk from plain node synthesis (it changes what "exact" reference
+  matching means and can silently pick a wrong file if a basename is not
+  unique in a large repository), so it warrants its own explicit review
+  rather than being folded into this iteration.
+- Next iteration: get the user's decision on the suffix/basename
+  path-resolution follow-up above before spending further C07 repetitions
+  — running more reps against the current exact-path gap would just
+  reproduce the same zero-diff result deterministically modulo model
+  sampling, exactly as the prior note anticipated for the epics-field/node-
+  synthesis gaps it identified. Once C07 (or another mutation case) can
+  produce at least some patch attempt, only then should further repetitions
+  be spent working toward Task 6's "runs more than once... distinguishes a
+  stable result from single-run variance" bar. Task 6's live-comparison
+  acceptance criteria remain unchecked; this note satisfies none of them by
+  itself (a single case, 2 repetitions, one model, per the single-anecdote
+  guardrail and Design Constraint 7).
+- Detailed artifacts:
+  `epics/research/task-zero-lab/live-2026-08-15c/c07-report.json` (6 runs,
+  full prompts, responses, scores); `crates/task-zero-lab/src/eval.rs`,
+  `crates/task-zero-lab/src/graph_build.rs`,
+  `crates/task-zero-lab/src/markdown_extract.rs`.
+
+### 2026-08-17 — Unique multi-component suffix resolution authorized for request-synthesized paths
+
+- Parent criterion/question: resolve the explicit pending decision in the
+  2026-08-15 C07 note about whether a request-relative path such as
+  `email_ranking/mod.rs` may resolve to the pinned tree entry
+  `dwata-api/src/email_ranking/mod.rs`. This remains upstream Task 6
+  infrastructure and does not complete any Task 6 acceptance criterion.
+- User decision: authorized as the next work item, with a deliberately narrow
+  fail-closed policy. Resolution must try the existing exact repo-relative
+  path first. Only after exact lookup reports absence may it search the
+  resolved, immutable commit tree for paths equal to the original reference
+  or ending in `/{referenced_path}`. The suffix fallback is allowed only for a
+  multi-component path; basename-only references such as `mod.rs` must not be
+  guessed. A unique suffix match may resolve; zero matches must retain an
+  explicit absence omission, and multiple matches must retain an explicit
+  ambiguity omission rather than selecting a candidate.
+- Provenance requirement: resolution must preserve the request's original
+  reference separately from the canonical matched tree path and record the
+  resolution method (for example, exact versus unique tree suffix) plus the
+  pinned revision/tree identity. Existing authoritative graph paths must keep
+  their exact semantics; this authorization is for unresolved paths
+  synthesized from explicit request references, not a global fuzzy rewrite of
+  `read_blob_at_revision`.
+- Implementation/test status: complete offline. `git_snapshot.rs` now exposes
+  a separate `BlobPathResolution`/`resolve_blob_path_at_revision` boundary;
+  `read_blob_at_revision` remains exact. `packet.rs` invokes the resolver only
+  for graph nodes whose source version is `unresolved-reference`, records the
+  original `referenced_path`, canonical resolved `source_path`, and resolution
+  method on the packet item, and bounds ambiguity diagnostics to eight paths.
+  Tests cover exact-first behavior, a unique multi-component suffix,
+  ambiguity, absence, rejection of basename-only guessing, pinned-commit
+  rather than worktree resolution, and preservation of both original and
+  canonical path provenance. The end-to-end request-reference test now
+  requires the synthesized composite symbol node itself to be the exact seed
+  and proves suffix resolution followed by real blob enrichment.
+- Verification: focused resolver, request-reference, and blob-enrichment tests
+  pass; `RUSTC_WRAPPER= cargo check --workspace --offline` passes; `git diff
+  --check` is clean. A new live C07 run has not been performed in this
+  iteration, so no live model or patch-attempt result is claimed here.
+- Next iteration: re-run C07 and confirm that the rendered deterministic and
+  helper packet contains real content from
+  `dwata-api/src/email_ranking/mod.rs`, with `email_ranking/mod.rs` retained as
+  the original request reference. Further Task 6 repetitions remain
+  deferred until C07 (or another mutation case) receives real source content
+  and can make at least one patch attempt.

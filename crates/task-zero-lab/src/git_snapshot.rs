@@ -10,7 +10,16 @@
 
 use std::path::Path;
 
+use gix::bstr::ByteSlice;
 use serde::Serialize;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlobPathResolution {
+    Exact(String),
+    UniqueSuffix(String),
+    NotFound,
+    Ambiguous(Vec<String>),
+}
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum ChangeKind {
@@ -186,6 +195,59 @@ pub fn read_blob_at_revision(repo_path: &Path, resolved_commit: &str, rel_path: 
         .try_into_blob()
         .map_err(|e| anyhow::anyhow!("object for '{}' ({}) is not a blob: {}", rel_path, blob_id, e))?;
     Ok(Some((blob_id, blob.data.clone())))
+}
+
+/// Resolve a request-supplied path against blob entries in a pinned commit.
+/// Exact repo-relative paths always win. The fallback accepts only a unique,
+/// segment-anchored suffix with at least two path components; basename-only
+/// guessing is deliberately excluded because names such as `mod.rs` are
+/// routinely ambiguous in real repositories.
+pub fn resolve_blob_path_at_revision(
+    repo_path: &Path,
+    resolved_commit: &str,
+    referenced_path: &str,
+) -> anyhow::Result<BlobPathResolution> {
+    let repo = gix::discover(repo_path)
+        .map_err(|e| anyhow::anyhow!("failed to discover Git repository at {}: {}", repo_path.display(), e))?;
+    let resolved_id = repo
+        .rev_parse_single(resolved_commit)
+        .map_err(|e| anyhow::anyhow!("failed to resolve revision '{}': {}", resolved_commit, e))?;
+    let commit = resolved_id
+        .object()?
+        .try_into_commit()
+        .map_err(|e| anyhow::anyhow!("resolved revision '{}' is not a commit: {}", resolved_commit, e))?;
+    let tree = commit.tree()?;
+    let tree_id_for_errors = commit.tree_id()?;
+
+    if tree
+        .lookup_entry_by_path(referenced_path)
+        .map_err(|e| anyhow::anyhow!("failed to look up '{}' in tree {}: {}", referenced_path, tree_id_for_errors, e))?
+        .is_some_and(|entry| entry.mode().is_blob())
+    {
+        return Ok(BlobPathResolution::Exact(referenced_path.to_string()));
+    }
+
+    let components: Vec<&str> = referenced_path.split('/').filter(|part| !part.is_empty()).collect();
+    if components.len() < 2 {
+        return Ok(BlobPathResolution::NotFound);
+    }
+    let suffix = format!("/{referenced_path}");
+    let mut matches: Vec<String> = tree
+        .traverse()
+        .breadthfirst
+        .files()?
+        .into_iter()
+        .filter(|entry| entry.mode.is_blob())
+        .filter_map(|entry| entry.filepath.to_str().ok().map(str::to_string))
+        .filter(|path| path.ends_with(&suffix))
+        .collect();
+    matches.sort();
+    matches.dedup();
+    Ok(match matches.len() {
+        0 => BlobPathResolution::NotFound,
+        1 => BlobPathResolution::UniqueSuffix(matches.pop().unwrap()),
+        _ => BlobPathResolution::Ambiguous(matches),
+    })
 }
 
 fn diff_against_first_parent(
@@ -554,6 +616,72 @@ mod tests {
 
         let missing = read_blob_at_revision(repo.path(), &first_sha, "does-not-exist.md").unwrap();
         assert!(missing.is_none());
+    }
+
+    #[test]
+    fn blob_path_resolution_is_exact_first_unique_and_fail_closed() {
+        let repo = init_repo();
+        for (path, text) in [
+            ("email_ranking/mod.rs", "exact"),
+            ("dwata-api/src/email_ranking/mod.rs", "nested"),
+            ("other/src/shared/mod.rs", "first ambiguous"),
+            ("third/src/shared/mod.rs", "second ambiguous"),
+        ] {
+            let full = repo.path().join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, text).unwrap();
+        }
+        git(repo.path(), &["add", "."]);
+        git(repo.path(), &["commit", "-q", "-m", "paths"]);
+
+        assert_eq!(
+            resolve_blob_path_at_revision(repo.path(), "HEAD", "email_ranking/mod.rs").unwrap(),
+            BlobPathResolution::Exact("email_ranking/mod.rs".to_string()),
+            "an exact blob must win even when another path has the same suffix"
+        );
+        assert_eq!(
+            resolve_blob_path_at_revision(repo.path(), "HEAD", "src/email_ranking/mod.rs").unwrap(),
+            BlobPathResolution::UniqueSuffix("dwata-api/src/email_ranking/mod.rs".to_string())
+        );
+        assert!(matches!(
+            resolve_blob_path_at_revision(repo.path(), "HEAD", "src/shared/mod.rs").unwrap(),
+            BlobPathResolution::Ambiguous(paths) if paths.len() == 2
+        ));
+        assert_eq!(
+            resolve_blob_path_at_revision(repo.path(), "HEAD", "src/missing.rs").unwrap(),
+            BlobPathResolution::NotFound
+        );
+        assert_eq!(
+            resolve_blob_path_at_revision(repo.path(), "HEAD", "mod.rs").unwrap(),
+            BlobPathResolution::NotFound,
+            "basename-only fallback must remain disabled"
+        );
+    }
+
+    #[test]
+    fn blob_path_resolution_uses_pinned_commit_not_worktree() {
+        let repo = init_repo();
+        let committed = repo.path().join("app/src/only.rs");
+        std::fs::create_dir_all(committed.parent().unwrap()).unwrap();
+        std::fs::write(&committed, "committed").unwrap();
+        git(repo.path(), &["add", "."]);
+        git(repo.path(), &["commit", "-q", "-m", "committed path"]);
+        let sha = String::from_utf8(
+            Command::new("git").current_dir(repo.path()).args(["rev-parse", "HEAD"]).output().unwrap().stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+
+        std::fs::remove_file(committed).unwrap();
+        let uncommitted = repo.path().join("worktree/src/only.rs");
+        std::fs::create_dir_all(uncommitted.parent().unwrap()).unwrap();
+        std::fs::write(uncommitted, "uncommitted").unwrap();
+
+        assert_eq!(
+            resolve_blob_path_at_revision(repo.path(), &sha, "src/only.rs").unwrap(),
+            BlobPathResolution::UniqueSuffix("app/src/only.rs".to_string())
+        );
     }
 
     // ── Real-history manifest fixtures (epics/research/task-zero-lab/manifest.md §6) ──

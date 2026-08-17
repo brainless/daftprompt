@@ -541,6 +541,13 @@ pub struct PacketItem {
     pub kind: NodeKind,
     pub label: String,
     pub source_path: Option<String>,
+    /// Original path spelling supplied by the request; `source_path` becomes
+    /// the canonical repo-relative path resolved in the pinned tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referenced_path: Option<String>,
+    /// `exact` or `unique_tree_suffix` for request-synthesized references.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_resolution: Option<String>,
     pub source_version: String,
     pub checked: Option<bool>,
     pub category: Option<SourceCategory>,
@@ -612,6 +619,8 @@ fn build_items(graph: &GraphExtraction, locator_map: BTreeMap<String, Vec<FoundV
             kind: node.kind,
             label: node.label.clone(),
             source_path: node.locator.source_path.clone(),
+            referenced_path: None,
+            path_resolution: None,
             source_version: node.source_version.clone(),
             checked: node.checked,
             category: categorize(node),
@@ -765,7 +774,35 @@ pub fn enrich_with_blob_content(packet: &mut Packet, graph: &GraphExtraction) ->
         if item.excerpt != item.label {
             continue; // already has real body_excerpt content; do not overwrite it
         }
-        let Some(path) = item.source_path.clone() else { continue };
+        let Some(referenced_path) = item.source_path.clone() else { continue };
+        let node = graph.nodes.iter().find(|n| n.locator.logical_id == item.locator);
+        let synthesized = node.is_some_and(|node| node.source_version == "unresolved-reference");
+        let (path, resolution) = if synthesized {
+            match crate::git_snapshot::resolve_blob_path_at_revision(repo_path, &graph.resolved_commit, &referenced_path) {
+                Ok(crate::git_snapshot::BlobPathResolution::Exact(path)) => (path, "exact"),
+                Ok(crate::git_snapshot::BlobPathResolution::UniqueSuffix(path)) => (path, "unique_tree_suffix"),
+                Ok(crate::git_snapshot::BlobPathResolution::NotFound) => {
+                    omissions.push(format!("{}: no blob content, path not tracked at {}", item.locator, graph.resolved_commit));
+                    continue;
+                }
+                Ok(crate::git_snapshot::BlobPathResolution::Ambiguous(paths)) => {
+                    const MAX_REPORTED_AMBIGUOUS_PATHS: usize = 8;
+                    let total = paths.len();
+                    let mut summary = paths.into_iter().take(MAX_REPORTED_AMBIGUOUS_PATHS).collect::<Vec<_>>().join(", ");
+                    if total > MAX_REPORTED_AMBIGUOUS_PATHS {
+                        summary.push_str(&format!(", … and {} more", total - MAX_REPORTED_AMBIGUOUS_PATHS));
+                    }
+                    omissions.push(format!("{}: ambiguous path '{}' at {}: {}", item.locator, referenced_path, graph.resolved_commit, summary));
+                    continue;
+                }
+                Err(e) => {
+                    omissions.push(format!("{}: path resolution failed: {e}", item.locator));
+                    continue;
+                }
+            }
+        } else {
+            (referenced_path.clone(), "exact")
+        };
         let blob = match crate::git_snapshot::read_blob_at_revision(repo_path, &graph.resolved_commit, &path) {
             Ok(Some(blob)) => blob,
             Ok(None) => {
@@ -782,7 +819,6 @@ pub fn enrich_with_blob_content(packet: &mut Packet, graph: &GraphExtraction) ->
             omissions.push(format!("{}: blob {blob_id} is not valid UTF-8, skipped", item.locator));
             continue;
         };
-        let node = graph.nodes.iter().find(|n| n.locator.logical_id == item.locator);
         let line_span = node.and_then(|n| n.locator.line_span);
         let windowed = window_lines(&text, line_span);
         if windowed.is_empty() {
@@ -796,6 +832,11 @@ pub fn enrich_with_blob_content(packet: &mut Packet, graph: &GraphExtraction) ->
         total_bytes = total_bytes - item.excerpt.len() + excerpt.len();
         item.excerpt = excerpt;
         item.source_version = blob_id;
+        if synthesized {
+            item.referenced_path = Some(referenced_path);
+            item.source_path = Some(path);
+            item.path_resolution = Some(resolution.to_string());
+        }
     }
     packet.coverage.budget_omissions.extend(omissions);
     Ok(())
@@ -1174,6 +1215,8 @@ pub fn apply_helper_dispositions(
                     kind: node.map(|n| n.kind).unwrap_or(NodeKind::FileOrSection),
                     label: node.map(|n| n.label.clone()).unwrap_or_else(|| disposition.locator.clone()),
                     source_path: node.and_then(|n| n.locator.source_path.clone()),
+                    referenced_path: None,
+                    path_resolution: None,
                     source_version: node.map(|n| n.source_version.clone()).unwrap_or_else(|| "unresolved-reference".to_string()),
                     checked: node.and_then(|n| n.checked),
                     category: node.and_then(categorize),
@@ -1462,6 +1505,8 @@ mod tests {
                 kind: NodeKind::Epic,
                 label: "Epic 900".to_string(),
                 source_path: Some("epics/900-sample.md".to_string()),
+                referenced_path: None,
+                path_resolution: None,
                 source_version: "v1".to_string(),
                 checked: None,
                 category: Some(SourceCategory::EpicsAndResearch),
@@ -1479,6 +1524,8 @@ mod tests {
                 kind: NodeKind::FileOrSection,
                 label: "epics/900-sample.md".to_string(),
                 source_path: Some("epics/900-sample.md".to_string()),
+                referenced_path: None,
+                path_resolution: None,
                 source_version: "unresolved-reference".to_string(),
                 checked: None,
                 category: Some(SourceCategory::Documents),
@@ -1529,6 +1576,8 @@ mod tests {
             kind: NodeKind::Task,
             label: "Task 1".to_string(),
             source_path: Some("epics/900-sample.md".to_string()),
+            referenced_path: None,
+            path_resolution: None,
             source_version: "v1".to_string(),
             checked: None,
             category: Some(SourceCategory::EpicsAndResearch),
@@ -1542,6 +1591,8 @@ mod tests {
             kind: NodeKind::AcceptanceCriterion,
             label: "Criterion 1".to_string(),
             source_path: Some("epics/900-sample.md".to_string()),
+            referenced_path: None,
+            path_resolution: None,
             source_version: "v1".to_string(),
             checked: Some(false),
             category: Some(SourceCategory::EpicsAndResearch),
@@ -1949,6 +2000,8 @@ mod tests {
                 kind: NodeKind::CodeSymbol,
                 label: "fn do_thing".to_string(),
                 source_path: Some("src/mod.rs".to_string()),
+                referenced_path: None,
+                path_resolution: None,
                 source_version: "v1".to_string(),
                 checked: None,
                 category: Some(SourceCategory::Code),
@@ -1998,6 +2051,8 @@ mod tests {
                 kind: NodeKind::FileOrSection,
                 label: "does/not/exist.rs".to_string(),
                 source_path: Some("does/not/exist.rs".to_string()),
+                referenced_path: None,
+                path_resolution: None,
                 source_version: "v1".to_string(),
                 checked: None,
                 category: Some(SourceCategory::Code),

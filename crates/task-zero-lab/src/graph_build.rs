@@ -170,6 +170,120 @@ fn repository_configuration_node(source_path: &str, source_version: &str, text: 
     }
 }
 
+/// Every string a node already answers to, for "is this backtick span
+/// already covered by an existing node" checks. Mirrors `packet.rs`'s
+/// private `reference_strings` (locator, source path, and any recorded
+/// `referenced_path`/`referenced_symbol`) so a request span that already
+/// matches a real node is never given a second, synthetic one.
+fn node_reference_strings(node: &Node) -> Vec<String> {
+    let mut out = vec![node.locator.logical_id.clone()];
+    if let Some(p) = &node.locator.source_path {
+        out.push(p.clone());
+    }
+    if let Some(p) = node.extra.get("referenced_path").and_then(|v| v.as_str()) {
+        out.push(p.to_string());
+    }
+    if let Some(s) = node.extra.get("referenced_symbol").and_then(|v| v.as_str()) {
+        out.push(s.to_string());
+    }
+    out
+}
+
+fn unresolved_reference_node(kind: NodeKind, locator: String, label: String, source_path: Option<String>, extra: serde_json::Value) -> Node {
+    Node {
+        kind,
+        locator: NodeLocator::new(locator, source_path, None),
+        label,
+        source_version: "unresolved-reference".to_string(),
+        checked: None,
+        extra,
+    }
+}
+
+/// Task 2's `extract_epic` only ever turns a backtick path/symbol reference
+/// into a node when the reference appears inside an already-loaded epic
+/// document (see `markdown_extract::scan_references`'s whole-document
+/// pass). A request naming an exact file or symbol that has no matching
+/// epic doc and no index coverage — e.g. Epic 014's C07 fixture,
+/// `` `email_ranking/mod.rs::contains_date` `` against an unindexed,
+/// epic-less target repository — previously produced no node at all: not a
+/// label-only placeholder, nothing. `find_exact_seeds` (`packet.rs`) can
+/// then never seed on it, and `enrich_with_blob_content` has nothing to
+/// enrich because there is no node to begin with.
+///
+/// This synthesizes the missing node(s) directly from the request text,
+/// using the same path/symbol/command shape judgment
+/// `markdown_extract::scan_references` already applies (reused via its
+/// `pub(crate)` regex helpers, not reimplemented) so a bare command or
+/// plain-word backtick span still does not become a spurious file/symbol
+/// node. Call this after [`build_graph`] and before
+/// `packet::select_packet` so the new node participates in exact seeding;
+/// `packet::enrich_with_blob_content` then resolves it conservatively in the
+/// pinned tree and fills it with real Git blob content.
+pub fn add_request_referenced_nodes(graph: &mut GraphExtraction, request: &str) {
+    for caps in markdown_extract::backtick_span_regex().captures_iter(request) {
+        let span = caps[1].to_string();
+        if markdown_extract::looks_like_command(&span) {
+            continue; // e.g. `cargo test` — a command, not a file/symbol reference
+        }
+        let already_covered = graph.nodes.iter().any(|n| node_reference_strings(n).iter().any(|r| r == &span));
+        if already_covered {
+            continue;
+        }
+
+        if let Some(caps) = markdown_extract::path_symbol_like_regex().captures(&span) {
+            // `path::symbol`, e.g. `email_ranking/mod.rs::contains_date`:
+            // synthesize both a FileOrSection node for the path and a
+            // CodeSymbol node for the symbol, both carrying the file path so
+            // `enrich_with_blob_content` can attempt a real blob read for
+            // either.
+            let path = caps[1].to_string();
+            let file_locator = format!("file:{path}");
+            if !graph.nodes.iter().any(|n| n.locator.logical_id == file_locator) {
+                graph.nodes.push(unresolved_reference_node(
+                    NodeKind::FileOrSection,
+                    file_locator,
+                    path.clone(),
+                    Some(path.clone()),
+                    json!({ "referenced_path": path }),
+                ));
+            }
+            let symbol_locator = format!("symbol:{span}");
+            if !graph.nodes.iter().any(|n| n.locator.logical_id == symbol_locator) {
+                graph.nodes.push(unresolved_reference_node(
+                    NodeKind::CodeSymbol,
+                    symbol_locator,
+                    span.clone(),
+                    Some(path.clone()),
+                    json!({ "referenced_path": path, "referenced_symbol": span }),
+                ));
+            }
+        } else if markdown_extract::path_like_regex().is_match(&span) {
+            let locator = format!("file:{span}");
+            graph.nodes.push(unresolved_reference_node(
+                NodeKind::FileOrSection,
+                locator,
+                span.clone(),
+                Some(span.clone()),
+                json!({ "referenced_path": span }),
+            ));
+        } else if markdown_extract::symbol_like_regex().is_match(&span) {
+            let locator = format!("symbol:{span}");
+            graph.nodes.push(unresolved_reference_node(
+                NodeKind::CodeSymbol,
+                locator,
+                span.clone(),
+                None,
+                json!({ "referenced_symbol": span }),
+            ));
+        }
+        // Anything else (a plain word, a sentence fragment, ...) is left
+        // alone, same as `scan_references` leaves it out of its own node
+        // synthesis.
+    }
+    graph.normalize();
+}
+
 /// Build the Task 2 evidence graph for `epic_numbers` (e.g. `[11, 12, 13]`)
 /// plus `AGENTS.md`, `DEVELOP.md`, root `Cargo.toml`, and revision-pinned
 /// Git facts, at `rev` in `repo`.
@@ -642,5 +756,123 @@ mod tests {
             assert!(!explanation.is_empty());
             assert!(!edge.provenance.is_empty(), "edge {} -> {} has no provenance", edge.from, edge.to);
         }
+    }
+
+    // ── `add_request_referenced_nodes` (C07 upstream-graph-gap fix) ────────
+
+    /// A fixture with a real source file so the composite `path::symbol`
+    /// request-reference test can drive `enrich_with_blob_content` end to
+    /// end, mirroring dwata's unindexed, epic-less C07 shape: the epic
+    /// requested (900) has nothing to do with the referenced file, and there
+    /// is no index, so the only way the file/symbol enters the graph at all
+    /// is the request-reference fallback under test.
+    fn init_fixture_repo_with_source_file() -> tempfile::TempDir {
+        let dir = init_fixture_repo();
+        std::fs::create_dir_all(dir.path().join("workspace/src")).unwrap();
+        let contents: String = (1..=40).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(dir.path().join("workspace/src/email_ranking.rs"), &contents).unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-q", "-m", "add source file"]);
+        // A follow-up commit that does not touch the source file, so `HEAD`'s
+        // first-parent diff (`build_graph`'s `changed_files`) does not
+        // itself surface `src/email_ranking.rs` as a node. This mirrors the
+        // real C07 shape: a file the harness must reach via the request-text
+        // fallback, not one it would have gotten for free from the commit
+        // diff or an epic doc.
+        std::fs::write(dir.path().join("DEVELOP.md"), "# DEVELOP.md\n\n## Build\n\ncargo check --workspace.\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-q", "-m", "unrelated follow-up"]);
+        dir
+    }
+
+    #[test]
+    fn request_referenced_path_symbol_is_synthesized_and_enriched_with_real_blob_content() {
+        let dir = init_fixture_repo_with_source_file();
+        let mut extraction = build_graph(dir.path(), "HEAD", &[900], false).unwrap();
+        assert!(
+            !extraction.nodes.iter().any(|n| n.locator.logical_id == "file:src/email_ranking.rs"),
+            "no node should reference the file before the fallback runs"
+        );
+        assert!(
+            !extraction.nodes.iter().any(|n| n.locator.logical_id == "symbol:src/email_ranking.rs::contains_date"),
+            "no node should reference the symbol before the fallback runs"
+        );
+
+        let request = "Fix the panic at `src/email_ranking.rs::contains_date`.";
+        add_request_referenced_nodes(&mut extraction, request);
+
+        let file_node = extraction
+            .nodes
+            .iter()
+            .find(|n| n.locator.logical_id == "file:src/email_ranking.rs")
+            .expect("path half of the composite reference should synthesize a FileOrSection node");
+        assert_eq!(file_node.kind, NodeKind::FileOrSection);
+        assert_eq!(file_node.source_version, "unresolved-reference");
+
+        let symbol_node = extraction
+            .nodes
+            .iter()
+            .find(|n| n.locator.logical_id == "symbol:src/email_ranking.rs::contains_date")
+            .expect("symbol half of the composite reference should synthesize a CodeSymbol node");
+        assert_eq!(symbol_node.kind, NodeKind::CodeSymbol);
+        assert_eq!(symbol_node.locator.source_path.as_deref(), Some("src/email_ranking.rs"));
+        assert_eq!(symbol_node.extra["referenced_path"], "src/email_ranking.rs");
+
+        // find_exact_seeds now matches the request's backtick span as
+        // established evidence, exactly as it already does for an
+        // epic-doc-derived reference.
+        let seeds = crate::packet::find_exact_seeds(&extraction, request);
+        assert!(
+            seeds.iter().any(|s| s.locator == "symbol:src/email_ranking.rs::contains_date"),
+            "the composite symbol node itself must be exact-seeded"
+        );
+
+        // enrich_with_blob_content uniquely resolves the request suffix and
+        // fills the synthesized node with real Git blob content. This is the
+        // end-to-end proof the upstream graph gap is closed, not just that a
+        // placeholder node now exists.
+        let budget = crate::packet::PacketBudget::default();
+        let mut packet = crate::packet::select_packet(&extraction, request, budget).unwrap();
+        crate::packet::enrich_with_blob_content(&mut packet, &extraction).unwrap();
+        let enriched = packet
+            .established
+            .iter()
+            .chain(packet.candidates.iter())
+            .find(|i| i.locator == "file:src/email_ranking.rs")
+            .expect("synthesized file node should have been selected into the packet");
+        assert!(enriched.excerpt.contains("line 1"), "excerpt should contain real file content, got: {}", enriched.excerpt);
+        assert_ne!(enriched.source_version, "unresolved-reference", "source_version should be a real blob id after enrichment");
+        assert_eq!(enriched.referenced_path.as_deref(), Some("src/email_ranking.rs"));
+        assert_eq!(enriched.source_path.as_deref(), Some("workspace/src/email_ranking.rs"));
+        assert_eq!(enriched.path_resolution.as_deref(), Some("unique_tree_suffix"));
+    }
+
+    #[test]
+    fn request_referenced_nodes_are_not_duplicated_when_no_reference_or_already_covered() {
+        let dir = init_fixture_repo_with_source_file();
+
+        // No backtick reference at all: no new nodes.
+        let mut extraction = build_graph(dir.path(), "HEAD", &[900], false).unwrap();
+        let before = extraction.nodes.len();
+        add_request_referenced_nodes(&mut extraction, "Please just fix the crash, no specifics.");
+        assert_eq!(extraction.nodes.len(), before);
+
+        // A backtick reference that already matches an existing node
+        // (epics/901-other.md is referenced by the fixture's own criterion
+        // text and so already has a node) must not get a second, duplicate
+        // node.
+        let mut extraction = build_graph(dir.path(), "HEAD", &[900], false).unwrap();
+        let before = extraction.nodes.len();
+        add_request_referenced_nodes(&mut extraction, "See `epics/901-other.md` for details.");
+        assert_eq!(extraction.nodes.len(), before, "an already-covered reference must not create a duplicate node");
+    }
+
+    #[test]
+    fn non_path_backtick_spans_do_not_become_spurious_nodes() {
+        let dir = init_fixture_repo_with_source_file();
+        let mut extraction = build_graph(dir.path(), "HEAD", &[900], false).unwrap();
+        let before = extraction.nodes.len();
+        add_request_referenced_nodes(&mut extraction, "Run `cargo test` and also consider `refactor` carefully.");
+        assert_eq!(extraction.nodes.len(), before, "a bare command or plain word backtick span must not synthesize a node");
     }
 }

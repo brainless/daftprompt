@@ -1,0 +1,408 @@
+{
+  "schema_version": "task-zero-eval-v3",
+  "agent_adapter": "patch_apply_llama_cpp",
+  "agent_model": "qwen3.5-9b",
+  "agent_capabilities": {
+    "prompt_only_model_input": true,
+    "repository_read": false,
+    "host_patch_apply": true
+  },
+  "cases": [
+    {
+      "case_id": "C07",
+      "runs": [
+        {
+          "schema_version": "task-zero-eval-v3",
+          "case_id": "C07",
+          "rendering_id": "manifest:C07:expert",
+          "variant": {
+            "kind": "raw_human",
+            "text": "Fix the Unicode byte-boundary panic in email ranking at `email_ranking/mod.rs::contains_date`.",
+            "byte_count": 94,
+            "token_estimate": 23,
+            "helper_report_json": null
+          },
+          "agent_adapter": "patch_apply_llama_cpp",
+          "agent_model": "qwen3.5-9b",
+          "agent_capabilities": {
+            "prompt_only_model_input": true,
+            "repository_read": false,
+            "host_patch_apply": true
+          },
+          "repetition": 1,
+          "worktree_commit": "11d98e0ebe604dfff58f9943a562f7f568ccd552",
+          "worktree_path": "/Users/brainless/Projects/dwata-eval-C07-RawHuman-rep1",
+          "worktree_diff": "",
+          "worktree_changed_files": [],
+          "agent_result": {
+            "response_text": "The request asks to fix a specific Unicode byte-boundary panic in `email_ranking/mod.rs` at the `contains_date` function. However, the provided context does not include the source code for this file, nor does it describe the specific logic causing the panic (e.g., whether it involves parsing RFC 2822 dates, handling multi-byte UTF-8 characters in date strings, or iterating over bytes instead of characters).\n\nWithout the original code to analyze and the specific error scenario, it is impossible to generate an accurate, targeted fix. Providing a hypothetical diff without the source code would likely be incorrect and break patch parsing if applied to a different version of the code.\n\nTherefore, no diff is provided.",
+            "touched_files": [],
+            "diff": null,
+            "input_tokens": 182,
+            "output_tokens": 147,
+            "elapsed_ms": 9801,
+            "stop_reason": "stop",
+            "diagnostics": [
+              "[no diff extracted] model response contained no fenced or bare unified diff"
+            ]
+          },
+          "score": {
+            "prompt_quality": {
+              "intent_preserved": true,
+              "constraints_preserved": false,
+              "has_provenance_labels": false,
+              "has_gap_disclosure": false,
+              "prompt_bytes": 94,
+              "token_estimate": 23,
+              "omitted_context": []
+            },
+            "task_outcome": {
+              "artifact_recall": 0.0,
+              "artifact_precision": 1.0,
+              "violated_prohibitions": [],
+              "verification_passed": true,
+              "verification_commands_run": [
+                "cargo +nightly check --workspace"
+              ],
+              "verification_diagnostics": [
+                "[stderr] cargo +nightly check --workspace:     Updating crates.io index\n     Locking 546 packages to latest compatible versions\n      Adding actix-cors v0.6.5 (available: v0.7.1)\n      Adding calamine v0.24.0 (available: v0.36.1)\n      Adding config v0.14.1 (available: v0.15.25)\n      Adding dateparser v0.2.1 (available: v0.3.1)\n      Adding dirs v5.0.1 (available: v6.0.0)\n      Adding generic-array v0.14.7 (available: v0.14.9)\n      Adding keyring v2.3.3 (available: v4.1.6)\n      Adding mail-parser v0.9.4 (available: v0.11.6)\n      Addi..."
+              ],
+              "unsupported_claims": 0,
+              "negative_constraints_respected": true
+            }
+          },
+          "graph_hash": "6a2b4fae5152df71",
+          "packet_hash": "a446b7fccd5f67ae",
+          "prompt_template_version": "task-zero-baseline-v1",
+          "eval_timestamp": "2026-08-15T15:29:48.632803+00:00"
+        },
+        {
+          "schema_version": "task-zero-eval-v3",
+          "case_id": "C07",
+          "rendering_id": "manifest:C07:expert",
+          "variant": {
+            "kind": "deterministic_baseline",
+            "text": "# Coding-agent handoff\n\nTemplate: `task-zero-baseline-v1`\n\n## Immutable intent and boundaries\n\nThe text below is immutable human input. Do not rewrite it or infer additional authority.\n\n### Original request (verbatim)\n\n```text\nFix the Unicode byte-boundary panic in email ranking at `email_ranking/mod.rs::contains_date`.\n```\n\n### Negative constraints (verbatim)\n\n- `Fix plus regression test; scope explicitly excludes an unrelated GUI date-request change that shares the same commit.`\n\n### Mutation boundary\n\nRepository changes are authorized only when the original request explicitly asks for them. Never dispatch another coding agent or mutate external state.\n\n## Clarified objective\n\nFix the Unicode byte-boundary panic in email ranking at `email_ranking/mod.rs::contains_date`.\n\nVerify this interpretation against the immutable request before acting.\n\n## Repository snapshot and coverage\n\n- [RUN] Repository: packet-bound snapshot (canonical path is intentionally not re-read by the renderer).\n- [RUN] Resolved commit: `11d98e0ebe604dfff58f9943a562f7f568ccd552`.\n- [RUN] Lab version: `0.1.0`; prompt template: `task-zero-baseline-v1`.\n- [RUN] Index available: `false`; canonical identifiers considered: `0`.\n- [RUN] Queried source categories: `[Instructions, Documents, Code, Commits]`.\n- [RUN] Unavailable source categories: `[EpicsAndResearch]`.\n- Coverage warning: no index was available; indexed code/document coverage is missing.\n\n## Relevant epic, task, and shared constraints\n\nThe established evidence below is the bounded packet selection. Checked state is shown when recorded; absence from this packet is not evidence of irrelevance.\n\n\n## Candidate context (not established)\n\nThe following are retrieval candidates, not repository facts. Verify them at the pinned revision before relying on them.\n\n- **[C1] DEVELOP.md @ 384b0d31d4c82f4c8bf052b87967851803852e04 (instruction:DEVELOP.md#accessing-the-database-directly)** suggestion/candidate only — label \"Accessing the Database Directly\"; excerpt \"Accessing the Database Directly\\n\\n\\nIf you have the SQLite CLI installed, you can query the database directly:\\n\\n```bash\\n# On macOS\\nsqlite3 ~/Library/Application\\\\ Support/dwata/db.sqlite\\n\\n# Example queries\\nSELECT * FROM credentials_metadata;\\nSELECT * FROM download_jobs;\\nSELECT * FROM emails;\\n.tables  # List all tables\\n.schema credentials_metadata  # Show table schema\\n```\"\n- **[C2] DEVELOP.md @ 384b0d31d4c82f4c8bf052b87967851803852e04 (instruction:DEVELOP.md#development-workflow)** suggestion/candidate only — label \"Development Workflow\"; excerpt \"Development Workflow\\n\\n\\n1. **Modifying API Types**:\\n   - Edit types in `shared-types/src/`\\n   - Regenerate TypeScript types: `cargo run --bin generate_api_types`\\n   - The GUI will automatically use the updated types\\n\\n2. **Adding API Endpoints**:\\n   - Add request/response types to `shared-types`\\n   - Implement handler in `dwata-api/src/handlers/`\\n   - Register route in `dwata-api/src/main.rs`\\n   - Regenerate TypeScript t\"\n\n## Unresolved Task 0 criteria, gaps, and human decisions\n\n- No host-recorded reachable gaps; this does not prove completeness.\n\n## Suggested actions and dependencies\n\nThese are bounded suggestions, not repository claims or expanded authorization:\n\n1. Re-open cited sources at the resolved commit and verify every assumption.\n2. Address unchecked criteria in dependency order while preserving the immutable constraints.\n3. Stop and ask the human when evidence leaves a product or authorization decision unresolved.\n\n## Likely change surface\n\n- No evidence-backed change surface was identified. Do not invent file ownership.\n\n## Required artifacts and output contract\n\nReturn a focused result that maps work to the requested criteria, reports files changed, lists verification performed and failures, and separates completed work from remaining gaps. Prompt quality is not task-outcome evidence; downstream correctness must be assessed independently.\n\n## Project-derived verification\n\n- No exact verification command survived in packet evidence. Do not guess from the language; inspect repository instructions/configuration and report this gap.\n\n## Omissions, stale sources, and unsupported capabilities\n\n- unavailable source category: EpicsAndResearch\n- No model, credentials, network, semantic retrieval, repository mutation, or coding-agent dispatch was used by this renderer.\n\nPrompt budget: at most 24000 bytes; token estimate uses 4 bytes/token.\n",
+            "byte_count": 4469,
+            "token_estimate": 1118,
+            "helper_report_json": null
+          },
+          "agent_adapter": "patch_apply_llama_cpp",
+          "agent_model": "qwen3.5-9b",
+          "agent_capabilities": {
+            "prompt_only_model_input": true,
+            "repository_read": false,
+            "host_patch_apply": true
+          },
+          "repetition": 1,
+          "worktree_commit": "11d98e0ebe604dfff58f9943a562f7f568ccd552",
+          "worktree_path": "/Users/brainless/Projects/dwata-eval-C07-DeterministicBaseline-rep1",
+          "worktree_diff": "",
+          "worktree_changed_files": [],
+          "agent_result": {
+            "response_text": "I cannot generate a diff for this request because the necessary source code (`email_ranking/mod.rs`) and the specific panic details are not present in the provided repository snapshot or candidate context. The packet explicitly states \"no index was available\" and \"No evidence-backed change surface was identified.\"\n\nTo fix the Unicode byte-boundary panic in `contains_date`, I would need to:\n1.  Read the current implementation of `contains_date` in `email_ranking/mod.rs`.\n2.  Identify the specific panic trigger (e.g., slicing a UTF-8 string by byte offset).\n3.  Apply the correct fix (e.g., using `char_indices()` or `encode_utf8` to find valid boundaries).\n\nSince I cannot inspect the file at the resolved commit `11d98e0ebe604dfff58f9943a562f7f568ccd552` to see the existing code, I cannot produce a valid, targeted diff.\n\n**Action Required:** Please provide the content of `email_ranking/mod.rs` (specifically the `contains_date` function) or the error log/stack trace associated with the panic so I can generate the correct fix.",
+            "touched_files": [],
+            "diff": null,
+            "input_tokens": 1206,
+            "output_tokens": 257,
+            "elapsed_ms": 17007,
+            "stop_reason": "stop",
+            "diagnostics": [
+              "[no diff extracted] model response contained no fenced or bare unified diff"
+            ]
+          },
+          "score": {
+            "prompt_quality": {
+              "intent_preserved": true,
+              "constraints_preserved": true,
+              "has_provenance_labels": true,
+              "has_gap_disclosure": true,
+              "prompt_bytes": 4469,
+              "token_estimate": 1118,
+              "omitted_context": []
+            },
+            "task_outcome": {
+              "artifact_recall": 0.0,
+              "artifact_precision": 1.0,
+              "violated_prohibitions": [],
+              "verification_passed": true,
+              "verification_commands_run": [
+                "cargo +nightly check --workspace"
+              ],
+              "verification_diagnostics": [
+                "[stderr] cargo +nightly check --workspace:     Updating crates.io index\n     Locking 546 packages to latest compatible versions\n      Adding actix-cors v0.6.5 (available: v0.7.1)\n      Adding calamine v0.24.0 (available: v0.36.1)\n      Adding config v0.14.1 (available: v0.15.25)\n      Adding dateparser v0.2.1 (available: v0.3.1)\n      Adding dirs v5.0.1 (available: v6.0.0)\n      Adding generic-array v0.14.7 (available: v0.14.9)\n      Adding keyring v2.3.3 (available: v4.1.6)\n      Adding mail-parser v0.9.4 (available: v0.11.6)\n      Addi..."
+              ],
+              "unsupported_claims": 2,
+              "negative_constraints_respected": true
+            }
+          },
+          "graph_hash": "6a2b4fae5152df71",
+          "packet_hash": "a446b7fccd5f67ae",
+          "prompt_template_version": "task-zero-baseline-v1",
+          "eval_timestamp": "2026-08-15T15:30:28.559803+00:00"
+        },
+        {
+          "schema_version": "task-zero-eval-v3",
+          "case_id": "C07",
+          "rendering_id": "manifest:C07:expert",
+          "variant": {
+            "kind": "helper_refined",
+            "text": "# Coding-agent handoff\n\nTemplate: `task-zero-baseline-v1`\n\n## Immutable intent and boundaries\n\nThe text below is immutable human input. Do not rewrite it or infer additional authority.\n\n### Original request (verbatim)\n\n```text\nFix the Unicode byte-boundary panic in email ranking at `email_ranking/mod.rs::contains_date`.\n```\n\n### Negative constraints (verbatim)\n\n- `Fix plus regression test; scope explicitly excludes an unrelated GUI date-request change that shares the same commit.`\n\n### Mutation boundary\n\nRepository changes are authorized only when the original request explicitly asks for them. Never dispatch another coding agent or mutate external state.\n\n## Clarified objective\n\nFix the Unicode byte-boundary panic in email ranking at `email_ranking/mod.rs::contains_date`.\n\nVerify this interpretation against the immutable request before acting.\n\n## Repository snapshot and coverage\n\n- [RUN] Repository: packet-bound snapshot (canonical path is intentionally not re-read by the renderer).\n- [RUN] Resolved commit: `11d98e0ebe604dfff58f9943a562f7f568ccd552`.\n- [RUN] Lab version: `0.1.0`; prompt template: `task-zero-baseline-v1`.\n- [RUN] Index available: `false`; canonical identifiers considered: `0`.\n- [RUN] Queried source categories: `[Instructions, Documents, Code, Commits]`.\n- [RUN] Unavailable source categories: `[EpicsAndResearch]`.\n- Coverage warning: no index was available; indexed code/document coverage is missing.\n\n## Relevant epic, task, and shared constraints\n\nThe established evidence below is the bounded packet selection. Checked state is shown when recorded; absence from this packet is not evidence of irrelevance.\n\n\n## Candidate context (not established)\n\nThe following are retrieval candidates, not repository facts. Verify them at the pinned revision before relying on them.\n\n- **[C1] DEVELOP.md @ 384b0d31d4c82f4c8bf052b87967851803852e04 (instruction:DEVELOP.md#accessing-the-database-directly)** suggestion/candidate only — label \"Accessing the Database Directly\"; excerpt \"Accessing the Database Directly\\n\\n\\nIf you have the SQLite CLI installed, you can query the database directly:\\n\\n```bash\\n# On macOS\\nsqlite3 ~/Library/Application\\\\ Support/dwata/db.sqlite\\n\\n# Example queries\\nSELECT * FROM credentials_metadata;\\nSELECT * FROM download_jobs;\\nSELECT * FROM emails;\\n.tables  # List all tables\\n.schema credentials_metadata  # Show table schema\\n```\"\n- **[C2] DEVELOP.md @ 384b0d31d4c82f4c8bf052b87967851803852e04 (instruction:DEVELOP.md#development-workflow)** suggestion/candidate only — label \"Development Workflow\"; excerpt \"Development Workflow\\n\\n\\n1. **Modifying API Types**:\\n   - Edit types in `shared-types/src/`\\n   - Regenerate TypeScript types: `cargo run --bin generate_api_types`\\n   - The GUI will automatically use the updated types\\n\\n2. **Adding API Endpoints**:\\n   - Add request/response types to `shared-types`\\n   - Implement handler in `dwata-api/src/handlers/`\\n   - Register route in `dwata-api/src/main.rs`\\n   - Regenerate TypeScript t\"\n\n## Unresolved Task 0 criteria, gaps, and human decisions\n\n- No host-recorded reachable gaps; this does not prove completeness.\n\n## Suggested actions and dependencies\n\nThese are bounded suggestions, not repository claims or expanded authorization:\n\n1. Re-open cited sources at the resolved commit and verify every assumption.\n2. Address unchecked criteria in dependency order while preserving the immutable constraints.\n3. Stop and ask the human when evidence leaves a product or authorization decision unresolved.\n\n## Likely change surface\n\n- No evidence-backed change surface was identified. Do not invent file ownership.\n\n## Required artifacts and output contract\n\nReturn a focused result that maps work to the requested criteria, reports files changed, lists verification performed and failures, and separates completed work from remaining gaps. Prompt quality is not task-outcome evidence; downstream correctness must be assessed independently.\n\n## Project-derived verification\n\n- No exact verification command survived in packet evidence. Do not guess from the language; inspect repository instructions/configuration and report this gap.\n\n## Omissions, stale sources, and unsupported capabilities\n\n- unavailable source category: EpicsAndResearch\n- No model, credentials, network, semantic retrieval, repository mutation, or coding-agent dispatch was used by this renderer.\n\nPrompt budget: at most 24000 bytes; token estimate uses 4 bytes/token.\n",
+            "byte_count": 4469,
+            "token_estimate": 1118,
+            "helper_report_json": "{\"adapter\":\"disabled\",\"rounds\":0,\"calls\":[],\"duplicate_calls\":0,\"malformed_outputs\":0,\"truncated_outputs\":0,\"stop_reason\":\"disabled\",\"submission\":null,\"diagnostics\":[]}"
+          },
+          "agent_adapter": "patch_apply_llama_cpp",
+          "agent_model": "qwen3.5-9b",
+          "agent_capabilities": {
+            "prompt_only_model_input": true,
+            "repository_read": false,
+            "host_patch_apply": true
+          },
+          "repetition": 1,
+          "worktree_commit": "11d98e0ebe604dfff58f9943a562f7f568ccd552",
+          "worktree_path": "/Users/brainless/Projects/dwata-eval-C07-HelperRefined-rep1",
+          "worktree_diff": "",
+          "worktree_changed_files": [],
+          "agent_result": {
+            "response_text": "I cannot generate a diff for this request because the necessary source code (`email_ranking/mod.rs`) and the specific panic details are not present in the provided repository snapshot or candidate context. The packet explicitly states \"no index was available\" and \"No evidence-backed change surface was identified.\"\n\nTo fix the Unicode byte-boundary panic in `contains_date`, I would need to:\n1.  Read the current implementation of `contains_date` in `email_ranking/mod.rs`.\n2.  Identify the specific panic trigger (e.g., slicing a UTF-8 string by byte offset).\n3.  Apply the correct fix (e.g., using `char_indices()` or `encode_utf8` to find valid boundaries).\n\nSince I cannot inspect the file at the resolved commit `11d98e0ebe604dfff58f9943a562f7f568ccd552` to see the existing code, I cannot produce a valid, targeted diff.\n\n**Action Required:** Please provide the content of `email_ranking/mod.rs` (specifically the `contains_date` function) or the error log/stack trace associated with the panic so I can generate the correct fix.",
+            "touched_files": [],
+            "diff": null,
+            "input_tokens": 1206,
+            "output_tokens": 257,
+            "elapsed_ms": 16771,
+            "stop_reason": "stop",
+            "diagnostics": [
+              "[no diff extracted] model response contained no fenced or bare unified diff"
+            ]
+          },
+          "score": {
+            "prompt_quality": {
+              "intent_preserved": true,
+              "constraints_preserved": true,
+              "has_provenance_labels": true,
+              "has_gap_disclosure": true,
+              "prompt_bytes": 4469,
+              "token_estimate": 1118,
+              "omitted_context": []
+            },
+            "task_outcome": {
+              "artifact_recall": 0.0,
+              "artifact_precision": 1.0,
+              "violated_prohibitions": [],
+              "verification_passed": true,
+              "verification_commands_run": [
+                "cargo +nightly check --workspace"
+              ],
+              "verification_diagnostics": [
+                "[stderr] cargo +nightly check --workspace:     Updating crates.io index\n     Locking 546 packages to latest compatible versions\n      Adding actix-cors v0.6.5 (available: v0.7.1)\n      Adding calamine v0.24.0 (available: v0.36.1)\n      Adding config v0.14.1 (available: v0.15.25)\n      Adding dateparser v0.2.1 (available: v0.3.1)\n      Adding dirs v5.0.1 (available: v6.0.0)\n      Adding generic-array v0.14.7 (available: v0.14.9)\n      Adding keyring v2.3.3 (available: v4.1.6)\n      Adding mail-parser v0.9.4 (available: v0.11.6)\n      Addi..."
+              ],
+              "unsupported_claims": 2,
+              "negative_constraints_respected": true
+            }
+          },
+          "graph_hash": "6a2b4fae5152df71",
+          "packet_hash": "a446b7fccd5f67ae",
+          "prompt_template_version": "task-zero-baseline-v1",
+          "eval_timestamp": "2026-08-15T15:31:17.813226+00:00"
+        },
+        {
+          "schema_version": "task-zero-eval-v3",
+          "case_id": "C07",
+          "rendering_id": "manifest:C07:expert",
+          "variant": {
+            "kind": "raw_human",
+            "text": "Fix the Unicode byte-boundary panic in email ranking at `email_ranking/mod.rs::contains_date`.",
+            "byte_count": 94,
+            "token_estimate": 23,
+            "helper_report_json": null
+          },
+          "agent_adapter": "patch_apply_llama_cpp",
+          "agent_model": "qwen3.5-9b",
+          "agent_capabilities": {
+            "prompt_only_model_input": true,
+            "repository_read": false,
+            "host_patch_apply": true
+          },
+          "repetition": 2,
+          "worktree_commit": "11d98e0ebe604dfff58f9943a562f7f568ccd552",
+          "worktree_path": "/Users/brainless/Projects/dwata-eval-C07-RawHuman-rep2",
+          "worktree_diff": "",
+          "worktree_changed_files": [],
+          "agent_result": {
+            "response_text": "The request asks to fix a specific Unicode byte-boundary panic in `email_ranking/mod.rs` at the `contains_date` function. However, the provided context does not include the source code for this file, nor does it describe the specific logic causing the panic (e.g., whether it involves parsing RFC 2822 dates, handling multi-byte UTF-8 characters in date strings, or iterating over bytes instead of characters).\n\nWithout the original code to analyze and the specific error scenario, it is impossible to generate an accurate, targeted fix. Providing a hypothetical diff without the source code would likely be incorrect and break patch parsing if applied to a different version of the code.\n\nTherefore, no diff is provided.",
+            "touched_files": [],
+            "diff": null,
+            "input_tokens": 182,
+            "output_tokens": 147,
+            "elapsed_ms": 9768,
+            "stop_reason": "stop",
+            "diagnostics": [
+              "[no diff extracted] model response contained no fenced or bare unified diff"
+            ]
+          },
+          "score": {
+            "prompt_quality": {
+              "intent_preserved": true,
+              "constraints_preserved": false,
+              "has_provenance_labels": false,
+              "has_gap_disclosure": false,
+              "prompt_bytes": 94,
+              "token_estimate": 23,
+              "omitted_context": []
+            },
+            "task_outcome": {
+              "artifact_recall": 0.0,
+              "artifact_precision": 1.0,
+              "violated_prohibitions": [],
+              "verification_passed": true,
+              "verification_commands_run": [
+                "cargo +nightly check --workspace"
+              ],
+              "verification_diagnostics": [
+                "[stderr] cargo +nightly check --workspace:     Updating crates.io index\n     Locking 546 packages to latest compatible versions\n      Adding actix-cors v0.6.5 (available: v0.7.1)\n      Adding calamine v0.24.0 (available: v0.36.1)\n      Adding config v0.14.1 (available: v0.15.25)\n      Adding dateparser v0.2.1 (available: v0.3.1)\n      Adding dirs v5.0.1 (available: v6.0.0)\n      Adding generic-array v0.14.7 (available: v0.14.9)\n      Adding keyring v2.3.3 (available: v4.1.6)\n      Adding mail-parser v0.9.4 (available: v0.11.6)\n      Addi..."
+              ],
+              "unsupported_claims": 0,
+              "negative_constraints_respected": true
+            }
+          },
+          "graph_hash": "6a2b4fae5152df71",
+          "packet_hash": "a446b7fccd5f67ae",
+          "prompt_template_version": "task-zero-baseline-v1",
+          "eval_timestamp": "2026-08-15T15:31:56.395718+00:00"
+        },
+        {
+          "schema_version": "task-zero-eval-v3",
+          "case_id": "C07",
+          "rendering_id": "manifest:C07:expert",
+          "variant": {
+            "kind": "deterministic_baseline",
+            "text": "# Coding-agent handoff\n\nTemplate: `task-zero-baseline-v1`\n\n## Immutable intent and boundaries\n\nThe text below is immutable human input. Do not rewrite it or infer additional authority.\n\n### Original request (verbatim)\n\n```text\nFix the Unicode byte-boundary panic in email ranking at `email_ranking/mod.rs::contains_date`.\n```\n\n### Negative constraints (verbatim)\n\n- `Fix plus regression test; scope explicitly excludes an unrelated GUI date-request change that shares the same commit.`\n\n### Mutation boundary\n\nRepository changes are authorized only when the original request explicitly asks for them. Never dispatch another coding agent or mutate external state.\n\n## Clarified objective\n\nFix the Unicode byte-boundary panic in email ranking at `email_ranking/mod.rs::contains_date`.\n\nVerify this interpretation against the immutable request before acting.\n\n## Repository snapshot and coverage\n\n- [RUN] Repository: packet-bound snapshot (canonical path is intentionally not re-read by the renderer).\n- [RUN] Resolved commit: `11d98e0ebe604dfff58f9943a562f7f568ccd552`.\n- [RUN] Lab version: `0.1.0`; prompt template: `task-zero-baseline-v1`.\n- [RUN] Index available: `false`; canonical identifiers considered: `0`.\n- [RUN] Queried source categories: `[Instructions, Documents, Code, Commits]`.\n- [RUN] Unavailable source categories: `[EpicsAndResearch]`.\n- Coverage warning: no index was available; indexed code/document coverage is missing.\n\n## Relevant epic, task, and shared constraints\n\nThe established evidence below is the bounded packet selection. Checked state is shown when recorded; absence from this packet is not evidence of irrelevance.\n\n\n## Candidate context (not established)\n\nThe following are retrieval candidates, not repository facts. Verify them at the pinned revision before relying on them.\n\n- **[C1] DEVELOP.md @ 384b0d31d4c82f4c8bf052b87967851803852e04 (instruction:DEVELOP.md#accessing-the-database-directly)** suggestion/candidate only — label \"Accessing the Database Directly\"; excerpt \"Accessing the Database Directly\\n\\n\\nIf you have the SQLite CLI installed, you can query the database directly:\\n\\n```bash\\n# On macOS\\nsqlite3 ~/Library/Application\\\\ Support/dwata/db.sqlite\\n\\n# Example queries\\nSELECT * FROM credentials_metadata;\\nSELECT * FROM download_jobs;\\nSELECT * FROM emails;\\n.tables  # List all tables\\n.schema credentials_metadata  # Show table schema\\n```\"\n- **[C2] DEVELOP.md @ 384b0d31d4c82f4c8bf052b87967851803852e04 (instruction:DEVELOP.md#development-workflow)** suggestion/candidate only — label \"Development Workflow\"; excerpt \"Development Workflow\\n\\n\\n1. **Modifying API Types**:\\n   - Edit types in `shared-types/src/`\\n   - Regenerate TypeScript types: `cargo run --bin generate_api_types`\\n   - The GUI will automatically use the updated types\\n\\n2. **Adding API Endpoints**:\\n   - Add request/response types to `shared-types`\\n   - Implement handler in `dwata-api/src/handlers/`\\n   - Register route in `dwata-api/src/main.rs`\\n   - Regenerate TypeScript t\"\n\n## Unresolved Task 0 criteria, gaps, and human decisions\n\n- No host-recorded reachable gaps; this does not prove completeness.\n\n## Suggested actions and dependencies\n\nThese are bounded suggestions, not repository claims or expanded authorization:\n\n1. Re-open cited sources at the resolved commit and verify every assumption.\n2. Address unchecked criteria in dependency order while preserving the immutable constraints.\n3. Stop and ask the human when evidence leaves a product or authorization decision unresolved.\n\n## Likely change surface\n\n- No evidence-backed change surface was identified. Do not invent file ownership.\n\n## Required artifacts and output contract\n\nReturn a focused result that maps work to the requested criteria, reports files changed, lists verification performed and failures, and separates completed work from remaining gaps. Prompt quality is not task-outcome evidence; downstream correctness must be assessed independently.\n\n## Project-derived verification\n\n- No exact verification command survived in packet evidence. Do not guess from the language; inspect repository instructions/configuration and report this gap.\n\n## Omissions, stale sources, and unsupported capabilities\n\n- unavailable source category: EpicsAndResearch\n- No model, credentials, network, semantic retrieval, repository mutation, or coding-agent dispatch was used by this renderer.\n\nPrompt budget: at most 24000 bytes; token estimate uses 4 bytes/token.\n",
+            "byte_count": 4469,
+            "token_estimate": 1118,
+            "helper_report_json": null
+          },
+          "agent_adapter": "patch_apply_llama_cpp",
+          "agent_model": "qwen3.5-9b",
+          "agent_capabilities": {
+            "prompt_only_model_input": true,
+            "repository_read": false,
+            "host_patch_apply": true
+          },
+          "repetition": 2,
+          "worktree_commit": "11d98e0ebe604dfff58f9943a562f7f568ccd552",
+          "worktree_path": "/Users/brainless/Projects/dwata-eval-C07-DeterministicBaseline-rep2",
+          "worktree_diff": "",
+          "worktree_changed_files": [],
+          "agent_result": {
+            "response_text": "I cannot generate a diff for this request because the necessary source code (`email_ranking/mod.rs`) and the specific panic details are not present in the provided repository snapshot or candidate context. The packet explicitly states \"no index was available\" and \"No evidence-backed change surface was identified.\"\n\nTo fix the Unicode byte-boundary panic in `contains_date`, I would need to:\n1.  Read the current implementation of `contains_date` in `email_ranking/mod.rs`.\n2.  Identify the specific panic trigger (e.g., slicing a UTF-8 string by byte offset).\n3.  Apply the correct fix (e.g., using `char_indices()` or `encode_utf8` to find valid boundaries).\n\nSince I cannot inspect the file at the resolved commit `11d98e0ebe604dfff58f9943a562f7f568ccd552` to see the existing code, I cannot produce a valid, targeted diff.\n\n**Action Required:** Please provide the content of `email_ranking/mod.rs` (specifically the `contains_date` function) or the error log/stack trace associated with the panic so I can generate the correct fix.",
+            "touched_files": [],
+            "diff": null,
+            "input_tokens": 1206,
+            "output_tokens": 257,
+            "elapsed_ms": 16897,
+            "stop_reason": "stop",
+            "diagnostics": [
+              "[no diff extracted] model response contained no fenced or bare unified diff"
+            ]
+          },
+          "score": {
+            "prompt_quality": {
+              "intent_preserved": true,
+              "constraints_preserved": true,
+              "has_provenance_labels": true,
+              "has_gap_disclosure": true,
+              "prompt_bytes": 4469,
+              "token_estimate": 1118,
+              "omitted_context": []
+            },
+            "task_outcome": {
+              "artifact_recall": 0.0,
+              "artifact_precision": 1.0,
+              "violated_prohibitions": [],
+              "verification_passed": true,
+              "verification_commands_run": [
+                "cargo +nightly check --workspace"
+              ],
+              "verification_diagnostics": [
+                "[stderr] cargo +nightly check --workspace:     Updating crates.io index\n     Locking 546 packages to latest compatible versions\n      Adding actix-cors v0.6.5 (available: v0.7.1)\n      Adding calamine v0.24.0 (available: v0.36.1)\n      Adding config v0.14.1 (available: v0.15.25)\n      Adding dateparser v0.2.1 (available: v0.3.1)\n      Adding dirs v5.0.1 (available: v6.0.0)\n      Adding generic-array v0.14.7 (available: v0.14.9)\n      Adding keyring v2.3.3 (available: v4.1.6)\n      Adding mail-parser v0.9.4 (available: v0.11.6)\n      Addi..."
+              ],
+              "unsupported_claims": 2,
+              "negative_constraints_respected": true
+            }
+          },
+          "graph_hash": "6a2b4fae5152df71",
+          "packet_hash": "a446b7fccd5f67ae",
+          "prompt_template_version": "task-zero-baseline-v1",
+          "eval_timestamp": "2026-08-15T15:32:41.969432+00:00"
+        },
+        {
+          "schema_version": "task-zero-eval-v3",
+          "case_id": "C07",
+          "rendering_id": "manifest:C07:expert",
+          "variant": {
+            "kind": "helper_refined",
+            "text": "# Coding-agent handoff\n\nTemplate: `task-zero-baseline-v1`\n\n## Immutable intent and boundaries\n\nThe text below is immutable human input. Do not rewrite it or infer additional authority.\n\n### Original request (verbatim)\n\n```text\nFix the Unicode byte-boundary panic in email ranking at `email_ranking/mod.rs::contains_date`.\n```\n\n### Negative constraints (verbatim)\n\n- `Fix plus regression test; scope explicitly excludes an unrelated GUI date-request change that shares the same commit.`\n\n### Mutation boundary\n\nRepository changes are authorized only when the original request explicitly asks for them. Never dispatch another coding agent or mutate external state.\n\n## Clarified objective\n\nFix the Unicode byte-boundary panic in email ranking at `email_ranking/mod.rs::contains_date`.\n\nVerify this interpretation against the immutable request before acting.\n\n## Repository snapshot and coverage\n\n- [RUN] Repository: packet-bound snapshot (canonical path is intentionally not re-read by the renderer).\n- [RUN] Resolved commit: `11d98e0ebe604dfff58f9943a562f7f568ccd552`.\n- [RUN] Lab version: `0.1.0`; prompt template: `task-zero-baseline-v1`.\n- [RUN] Index available: `false`; canonical identifiers considered: `0`.\n- [RUN] Queried source categories: `[Instructions, Documents, Code, Commits]`.\n- [RUN] Unavailable source categories: `[EpicsAndResearch]`.\n- Coverage warning: no index was available; indexed code/document coverage is missing.\n\n## Relevant epic, task, and shared constraints\n\nThe established evidence below is the bounded packet selection. Checked state is shown when recorded; absence from this packet is not evidence of irrelevance.\n\n\n## Candidate context (not established)\n\nThe following are retrieval candidates, not repository facts. Verify them at the pinned revision before relying on them.\n\n- **[C1] DEVELOP.md @ 384b0d31d4c82f4c8bf052b87967851803852e04 (instruction:DEVELOP.md#accessing-the-database-directly)** suggestion/candidate only — label \"Accessing the Database Directly\"; excerpt \"Accessing the Database Directly\\n\\n\\nIf you have the SQLite CLI installed, you can query the database directly:\\n\\n```bash\\n# On macOS\\nsqlite3 ~/Library/Application\\\\ Support/dwata/db.sqlite\\n\\n# Example queries\\nSELECT * FROM credentials_metadata;\\nSELECT * FROM download_jobs;\\nSELECT * FROM emails;\\n.tables  # List all tables\\n.schema credentials_metadata  # Show table schema\\n```\"\n- **[C2] DEVELOP.md @ 384b0d31d4c82f4c8bf052b87967851803852e04 (instruction:DEVELOP.md#development-workflow)** suggestion/candidate only — label \"Development Workflow\"; excerpt \"Development Workflow\\n\\n\\n1. **Modifying API Types**:\\n   - Edit types in `shared-types/src/`\\n   - Regenerate TypeScript types: `cargo run --bin generate_api_types`\\n   - The GUI will automatically use the updated types\\n\\n2. **Adding API Endpoints**:\\n   - Add request/response types to `shared-types`\\n   - Implement handler in `dwata-api/src/handlers/`\\n   - Register route in `dwata-api/src/main.rs`\\n   - Regenerate TypeScript t\"\n\n## Unresolved Task 0 criteria, gaps, and human decisions\n\n- No host-recorded reachable gaps; this does not prove completeness.\n\n## Suggested actions and dependencies\n\nThese are bounded suggestions, not repository claims or expanded authorization:\n\n1. Re-open cited sources at the resolved commit and verify every assumption.\n2. Address unchecked criteria in dependency order while preserving the immutable constraints.\n3. Stop and ask the human when evidence leaves a product or authorization decision unresolved.\n\n## Likely change surface\n\n- No evidence-backed change surface was identified. Do not invent file ownership.\n\n## Required artifacts and output contract\n\nReturn a focused result that maps work to the requested criteria, reports files changed, lists verification performed and failures, and separates completed work from remaining gaps. Prompt quality is not task-outcome evidence; downstream correctness must be assessed independently.\n\n## Project-derived verification\n\n- No exact verification command survived in packet evidence. Do not guess from the language; inspect repository instructions/configuration and report this gap.\n\n## Omissions, stale sources, and unsupported capabilities\n\n- unavailable source category: EpicsAndResearch\n- No model, credentials, network, semantic retrieval, repository mutation, or coding-agent dispatch was used by this renderer.\n\nPrompt budget: at most 24000 bytes; token estimate uses 4 bytes/token.\n",
+            "byte_count": 4469,
+            "token_estimate": 1118,
+            "helper_report_json": "{\"adapter\":\"disabled\",\"rounds\":0,\"calls\":[],\"duplicate_calls\":0,\"malformed_outputs\":0,\"truncated_outputs\":0,\"stop_reason\":\"disabled\",\"submission\":null,\"diagnostics\":[]}"
+          },
+          "agent_adapter": "patch_apply_llama_cpp",
+          "agent_model": "qwen3.5-9b",
+          "agent_capabilities": {
+            "prompt_only_model_input": true,
+            "repository_read": false,
+            "host_patch_apply": true
+          },
+          "repetition": 2,
+          "worktree_commit": "11d98e0ebe604dfff58f9943a562f7f568ccd552",
+          "worktree_path": "/Users/brainless/Projects/dwata-eval-C07-HelperRefined-rep2",
+          "worktree_diff": "",
+          "worktree_changed_files": [],
+          "agent_result": {
+            "response_text": "I cannot generate a diff for this request because the necessary source code (`email_ranking/mod.rs`) and the specific panic details are not present in the provided repository snapshot or candidate context. The packet explicitly states \"no index was available\" and \"No evidence-backed change surface was identified.\"\n\nTo fix the Unicode byte-boundary panic in `contains_date`, I would need to:\n1.  Read the current implementation of `contains_date` in `email_ranking/mod.rs`.\n2.  Identify the specific panic trigger (e.g., slicing a UTF-8 string by byte offset).\n3.  Apply the correct fix (e.g., using `char_indices()` or `encode_utf8` to find valid boundaries).\n\nSince I cannot inspect the file at the resolved commit `11d98e0ebe604dfff58f9943a562f7f568ccd552` to see the existing code, I cannot produce a valid, targeted diff.\n\n**Action Required:** Please provide the content of `email_ranking/mod.rs` (specifically the `contains_date` function) or the error log/stack trace associated with the panic so I can generate the correct fix.",
+            "touched_files": [],
+            "diff": null,
+            "input_tokens": 1206,
+            "output_tokens": 257,
+            "elapsed_ms": 16619,
+            "stop_reason": "stop",
+            "diagnostics": [
+              "[no diff extracted] model response contained no fenced or bare unified diff"
+            ]
+          },
+          "score": {
+            "prompt_quality": {
+              "intent_preserved": true,
+              "constraints_preserved": true,
+              "has_provenance_labels": true,
+              "has_gap_disclosure": true,
+              "prompt_bytes": 4469,
+              "token_estimate": 1118,
+              "omitted_context": []
+            },
+            "task_outcome": {
+              "artifact_recall": 0.0,
+              "artifact_precision": 1.0,
+              "violated_prohibitions": [],
+              "verification_passed": true,
+              "verification_commands_run": [
+                "cargo +nightly check --workspace"
+              ],
+              "verification_diagnostics": [
+                "[stderr] cargo +nightly check --workspace:     Updating crates.io index\n     Locking 546 packages to latest compatible versions\n      Adding actix-cors v0.6.5 (available: v0.7.1)\n      Adding calamine v0.24.0 (available: v0.36.1)\n      Adding config v0.14.1 (available: v0.15.25)\n      Adding dateparser v0.2.1 (available: v0.3.1)\n      Adding dirs v5.0.1 (available: v6.0.0)\n      Adding generic-array v0.14.7 (available: v0.14.9)\n      Adding keyring v2.3.3 (available: v4.1.6)\n      Adding mail-parser v0.9.4 (available: v0.11.6)\n      Addi..."
+              ],
+              "unsupported_claims": 2,
+              "negative_constraints_respected": true
+            }
+          },
+          "graph_hash": "6a2b4fae5152df71",
+          "packet_hash": "a446b7fccd5f67ae",
+          "prompt_template_version": "task-zero-baseline-v1",
+          "eval_timestamp": "2026-08-15T15:33:28.080223+00:00"
+        }
+      ]
+    }
+  ],
+  "generated_at": "2026-08-15T15:33:28.080314+00:00"
+}
