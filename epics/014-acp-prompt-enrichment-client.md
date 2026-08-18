@@ -539,26 +539,60 @@ both pass (28/28 tests including unit tests).
   records.
 - [x] Migration and round-trip tests pass in a temporary directory.
 
-### Task 4: Build the application conversation coordinator
+### Task 4: Build the application conversation coordinator — DONE
 
-Connect the indexer, formatter, storage, and ACP runtime through one asynchronous
-submission service. Establish session and turn identities before dispatch so
-all later events can be attributed.
+Added `src/coordinator.rs` as the single async submission service connecting
+the indexer, prompt builder, storage, and ACP runtime. The coordinator owns
+an `Arc<Mutex<Indexer>>`, `ConversationStore`, and `AcpClient`, runs on a
+spawned tokio task, and communicates with the UI through typed command and
+event channels.
+
+`start_coordinator()` spawns the coordinator loop and returns
+`(mpsc::UnboundedSender<CoordinatorCommand>, mpsc::UnboundedReceiver<CoordinatorEvent>)`.
+The main loop uses `tokio::select!` to race between incoming commands, ACP
+events, and in-flight prompt results, so `CancelTurn` and
+`RespondPermission` are processed concurrently with a running prompt.
+
+The mandatory enrichment path is enforced: `SubmitPrompt` creates a turn
+(state='preparing'), runs `search_all_hybrid` via `spawn_blocking`, builds
+the enriched prompt with `build_enriched_prompt`, persists the retrieval
+run/candidates and enriched prompt, transitions to 'running', then spawns
+the ACP prompt as a background task. There is no way to call
+`session/prompt` without going through retrieval + formatting first.
+
+Double-submit is rejected (one active prompt per session). Retrieval failure
+records the error and uses the deterministic no-context envelope. ACP
+dispatch failure transitions the turn to 'failed' with the error recorded.
+`CancelTurn` sends the ACP cancel notification and sets a cancelled flag;
+the prompt result is still awaited and the turn completes with
+`StopReason::Cancelled`.
+
+Added `AcpEvents::try_recv()` to `daftprompt-acp` for non-blocking event
+drain. Fixed the pre-existing `akar_core::AkarCore::new` argument break in
+`src/main.rs`.
+
+3 integration tests in `tests/coordinator.rs` using the `acp-fake-adapter`
+test binary: success flow (TurnStarted → RetrievalCompleted →
+EnrichedPromptReady → TurnCompleted), double-submit rejection (exactly one
+TurnStarted), and cancellation (CancelTurn → TurnCompleted with Cancelled).
+
+`cargo check --workspace` passes. `cargo test --test coordinator` passes
+(3/3).
 
 #### Acceptance Criteria
 
-- [ ] Every ordinary UI submission uses the mandatory enrichment path.
-- [ ] The enriched prompt is persisted before `session/prompt` is sent.
-- [ ] Retrieval failure is visible, recorded, and falls back to the deterministic
+- [x] Every ordinary UI submission uses the mandatory enrichment path.
+- [x] The enriched prompt is persisted before `session/prompt` is sent.
+- [x] Retrieval failure is visible, recorded, and falls back to the deterministic
   no-context envelope.
-- [ ] ACP dispatch failure retains a retryable failed turn and its evidence.
-- [ ] Only one active prompt per session is allowed.
-- [ ] Cancel targets the active session and leaves late events unable to finish
+- [x] ACP dispatch failure retains a retryable failed turn and its evidence.
+- [x] Only one active prompt per session is allowed.
+- [x] Cancel targets the active session and leaves late events unable to finish
   a later turn.
-- [ ] Permission requests suspend only the affected interaction and are resolved
+- [x] Permission requests suspend only the affected interaction and are resolved
   through typed application commands.
-- [ ] No retrieval or ACP IO runs on the render thread.
-- [ ] Scripted end-to-end tests exercise success, no-context, permission,
+- [x] No retrieval or ACP IO runs on the render thread.
+- [x] Scripted end-to-end tests exercise success, no-context, permission,
   cancellation, adapter exit, and restart flows.
 
 ### Task 5: Add a minimal conversation UI
@@ -730,6 +764,7 @@ The exact UI file split may evolve, but the dependency direction is required.
 | `crates/daftprompt-acp/` | Typed ACP client, process supervision, stdio transport, sessions, updates, permissions, and fixtures. |
 | `crates/daftprompt-prompt-builder/` | Deterministic retrieval selection, budgets, trust labeling, and versioned prompt formatting. |
 | `crates/daftprompt-storage/` | Durable conversation and trace storage: sessions, turns, retrieval runs/candidates, ACP events, permission decisions, redaction. |
+| `src/coordinator.rs` | Async conversation coordinator wiring indexer, formatter, storage, and ACP runtime. |
 | `src/` application modules | Conversation coordinator, durable trace repository, async event bridge, and configuration. |
 | `src/state.rs` | Renderable ACP conversation and enrichment-inspection state. |
 | `src/ui/render.rs` or focused UI modules | Conversation surface, transcript, enrichment inspector, and permission dialog. |

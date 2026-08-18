@@ -533,7 +533,7 @@ impl winit::application::ApplicationHandler for Application {
         surface.configure(&device, &surface_config);
 
         // AkarCore takes &Device/&Queue; create while borrows are live, then move in.
-        let core = akar_core::AkarCore::new(&device, &queue, surface_format);
+        let core = akar_core::AkarCore::new(&device, &queue, surface_format, akar_core::TextPipelineConfig::default());
 
         self.state = Some(state);
         self.device = Some(device);

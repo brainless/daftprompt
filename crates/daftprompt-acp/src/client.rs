@@ -167,6 +167,11 @@ impl AcpEvents {
     pub async fn recv(&mut self) -> Option<AcpEvent> {
         self.inner.recv().await
     }
+
+    /// Try to receive the next event without blocking.
+    pub fn try_recv(&mut self) -> Result<AcpEvent, mpsc::error::TryRecvError> {
+        self.inner.try_recv()
+    }
 }
 
 impl AcpClient {
