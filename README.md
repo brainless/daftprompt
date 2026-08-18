@@ -132,6 +132,60 @@ cargo run --release -- --screenshot /tmp/daftprompt.png --exit
 cargo test --workspace
 ```
 
+## ACP Prompt Enrichment
+
+daftprompt can enrich user prompts with repository context before sending them
+to a coding agent via the Agent Client Protocol (ACP).
+
+### Starting a Conversation
+
+1. Ensure `codex-acp` is installed or specify the adapter path with `--adapter`
+2. Start daftprompt against an indexed repository:
+   ```
+   cargo run -- --repo ~/your-project
+   ```
+3. Press **Tab** to open the conversation panel
+4. Type your request and press **Send** (or Cmd+Enter)
+5. daftprompt retrieves relevant code, documents, and git history, builds an
+   enriched prompt, and sends it to the agent
+
+### What Gets Enriched
+
+Every ordinary prompt is automatically enriched with:
+- Relevant source code excerpts (ranked by hybrid search)
+- Document chunks matching your query
+- Git log entries for recent changes
+
+The original prompt is preserved exactly. Retrieved context is labeled as
+untrusted reference material and safely delimited.
+
+### Inspecting Enrichment
+
+- Click the **Inspector** button in the conversation header to see:
+  - The exact original prompt
+  - The enriched prompt sent to the agent
+  - Which excerpts were included or excluded and why
+  - Retrieval budget and status
+
+### Permissions
+
+When the agent needs to run a command or access files, a permission dialog
+appears. You must explicitly choose an option — nothing is auto-approved.
+
+### Configuration
+
+```bash
+cargo run -- --adapter codex-acp                    # use installed binary
+cargo run -- --adapter npm --adapter-args "run,start,--prefix,/path/to/codex-acp"  # from source
+cargo run -- --request-timeout 120                   # 2-minute timeout
+cargo run -- --shutdown-grace 15                     # 15s graceful shutdown
+```
+
+### Trace Location
+
+Conversation records are stored in `~/Library/Caches/daftprompt/conversations/`
+and survive index rebuilding (`--reindex`).
+
 ## License
 
 This project is a prototype and is not yet licensed for distribution.

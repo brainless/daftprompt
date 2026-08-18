@@ -110,3 +110,52 @@ daftprompt/
 - **Code language routing**: `crates/daftprompt-indexer/src/code.rs` owns extension-based dispatch for Git-tracked `.rs`, `.ts`, `.tsx`, `.js`, and `.jsx` files and the compiled tree-sitter query registry. CLI/UI indexing and search stay language-neutral and call the shared indexer APIs. The shared code-file discovery path also enforces a centralized generated/vendor/minified exclusion (`is_excluded_generated_path`: `node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, `coverage/`, and `*.min.js`).
 - **UI is rendered by akar** (post-Epic 005): daftprompt owns application state + the winit window; akar owns the wgpu pipeline, draw list, input state, layout, and components. `src/ui/render.rs` is the immediate-mode render layer; the per-frame `Layout::new()` rebuilds the taffy tree every frame.
 - **Screenshot mode** (post-Task 8): `cargo run --release -- --screenshot <path> --exit` waits 5 s for the UI to settle, captures one frame via akar's `core.take_screenshot`, PNG-encodes the result, and exits. Useful for visual regression testing.
+
+## Epic 014: ACP Prompt Enrichment
+
+### Crate Boundaries
+
+| Crate | Purpose | Dependencies |
+|-------|---------|-------------|
+| `daftprompt-acp` | ACP SDK boundary, process lifecycle, typed events | `agent-client-protocol`, tokio |
+| `daftprompt-prompt-builder` | Deterministic selection, budgets, prompt formatting | `daftprompt-indexer` |
+| `daftprompt-storage` | Durable conversation and trace storage | `rusqlite`, `serde_json` |
+| `daftprompt` (main) | Coordinator, UI, config, lifecycle | all above + akar |
+
+### Key Invariants
+
+- **Mandatory enrichment**: every ordinary user prompt goes through retrieval +
+  formatting before reaching `session/prompt`. There is no bypass.
+- **Isolation**: `daftprompt-storage` has its own DB under
+  `~/Library/Caches/daftprompt/conversations/`. `--reindex` does not erase
+  conversations.
+- **ACP boundary**: only `daftprompt-acp` depends on the ACP SDK. All other
+  crates use its typed public API.
+- **No secrets in traces**: event payloads pass through `redact_secrets()`.
+
+### Testing
+
+```bash
+cargo test --workspace                    # all tests (207+)
+cargo test -p daftprompt-acp              # ACP client + fixtures (12 tests)
+cargo test -p daftprompt-prompt-builder   # golden prompt tests (11 tests)
+cargo test -p daftprompt-storage          # durable store tests (28 tests)
+cargo test --test coordinator             # end-to-end coordinator tests (5 tests)
+```
+
+The `acp-fake-adapter` binary (built automatically by tests) replays captured
+fixtures without network access or Codex credentials.
+
+### Live Manual Testing
+
+```bash
+# Start with an installed codex-acp against an indexed repo
+cargo run -- --repo ~/your-project
+
+# Or from a local codex-acp source clone
+cargo run -- --repo ~/your-project --adapter npm --adapter-args "run,start,--prefix,~/Projects/codex-acp"
+```
+
+Press Tab to open the conversation panel. See
+`epics/research/014-acp-prompt-enrichment-evaluation-worksheet.md` for the
+manual test protocol.

@@ -739,7 +739,7 @@ must not create a production bypass in daftprompt.
 - [ ] The evidence identifies concrete entry criteria for a later local builder
   LLM experiment.
 
-### Task 8: Document and verify the MVP
+### Task 8: Document and verify the MVP — DONE
 
 Update project documentation only after the implementation behavior is proven.
 Document adapter installation separately from development against the local
@@ -748,16 +748,16 @@ trace location, privacy implications, manual test flow, and known limitations.
 
 #### Acceptance Criteria
 
-- [ ] `README.md` explains how a user starts an ACP conversation and inspects
+- [x] `README.md` explains how a user starts an ACP conversation and inspects
   enrichment.
-- [ ] `DEVELOP.md` explains the crate boundaries, local adapter reference,
+- [x] `DEVELOP.md` explains the crate boundaries, local adapter reference,
   fixture tests, and live manual test command.
-- [ ] `AGENTS.md` records the mandatory enrichment invariant and ACP boundaries.
-- [ ] The epic task status and acceptance criteria are updated as work is
+- [x] `AGENTS.md` records the mandatory enrichment invariant and ACP boundaries.
+- [x] The epic task status and acceptance criteria are updated as work is
   completed.
-- [ ] `cargo check --workspace` passes after every implementation change.
-- [ ] `cargo test --workspace` passes.
-- [ ] A manual session demonstrates initialize, new session, enriched prompt,
+- [x] `cargo check --workspace` passes after every implementation change.
+- [x] `cargo test --workspace` passes.
+- [x] A manual session demonstrates initialize, new session, enriched prompt,
   streamed response, permission choice, cancellation, and clean close.
 
 ## Suggested Manual Test Sequence
