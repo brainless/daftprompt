@@ -486,27 +486,58 @@ implementation, out of scope for Task 2.
   delimiter-injection, FTS-only, and no-result cases.
 - [x] The module has no ACP, akar, winit, or provider dependency.
 
-### Task 3: Add durable conversation and trace storage
+### Task 3: Add durable conversation and trace storage — DONE
 
-Create a durable schema and repository API for ACP sessions, turns, retrieval
-runs, retrieval hits, protocol events, and permission decisions. Apply explicit
-schema migrations. Do not couple this database's lifecycle to index rebuilding.
+Created `crates/daftprompt-storage/` with a migration-backed SQLite database
+and `ConversationStore` repository API. The DB file lives under
+`~/Library/Caches/daftprompt/conversations/`, completely isolated from the
+per-repo search index DBs so `--reindex` cannot erase conversation records.
+
+Schema (migration version 1): `acp_sessions` with adapter negotiation
+metadata, `turns` with validated state transitions
+(preparing → running → completed/cancelled/failed; terminal states reject
+further transitions), `retrieval_runs` and `retrieval_candidates` retaining
+rank, score, match type, inclusion, truncation reason, and exclusion reason,
+`acp_events` with monotonically-increasing per-session sequence numbers,
+direction, correlation ID, event kind, method, and timestamp, and
+`permission_decisions` with offered options JSON, chosen option ID, and
+outcome.
+
+`original_prompt` is immutable (no update method exists). `enriched_prompt`
+is set exactly once when enrichment completes. Event payloads pass through
+`redact_secrets()` which walks the JSON tree redacting keys containing
+SECRET/KEY/TOKEN/PASSWORD, Bearer/Basic auth headers, and long opaque
+strings that look like credentials. The redaction module also has a
+text-level fallback for non-JSON payloads.
+
+19 integration tests in `tests/durable_store.rs` pass in a temporary
+directory: migration (all tables exist, schema version, idempotency),
+round-trip (exact text preservation without normalization), state transitions
+(7 tests covering all legal and illegal transitions including terminal
+states), event ordering (monotonic sequence), path isolation (different
+directory from indexer DBs), redaction (6 tests covering API keys, tokens,
+Bearer auth, password fields, nested secrets, env-style values, and
+preservation of normal values), and permission round-trip (option IDs and
+cancelled outcome).
+
+`cargo check -p daftprompt-storage` and `cargo test -p daftprompt-storage`
+both pass (28/28 tests including unit tests).
 
 #### Acceptance Criteria
 
-- [ ] Original and enriched prompts round-trip without normalization.
-- [ ] Exact included context snapshots can reconstruct what Codex received.
-- [ ] Retrieval candidates retain rank, score, match type, selection state,
+- [x] Original and enriched prompts round-trip without normalization.
+- [x] Exact included context snapshots can reconstruct what Codex received.
+- [x] Retrieval candidates retain rank, score, match type, selection state,
   truncation, and exclusion reason.
-- [ ] ACP events have stable sequence ordering, direction, correlation ID,
+- [x] ACP events have stable sequence ordering, direction, correlation ID,
   method/update kind, and timestamp.
-- [ ] A turn moves through explicit preparing, running, completed, cancelled,
+- [x] A turn moves through explicit preparing, running, completed, cancelled,
   and failed states without impossible transitions.
-- [ ] Permission options and the exact chosen outcome are durable.
-- [ ] Reindexing does not delete conversation records.
-- [ ] Secrets and full process environments are absent from fixtures and stored
+- [x] Permission options and the exact chosen outcome are durable.
+- [x] Reindexing does not delete conversation records.
+- [x] Secrets and full process environments are absent from fixtures and stored
   records.
-- [ ] Migration and round-trip tests pass in a temporary directory.
+- [x] Migration and round-trip tests pass in a temporary directory.
 
 ### Task 4: Build the application conversation coordinator
 
@@ -698,6 +729,7 @@ The exact UI file split may evolve, but the dependency direction is required.
 | `Cargo.toml` | Add ACP and prompt-enrichment workspace crates/dependencies. |
 | `crates/daftprompt-acp/` | Typed ACP client, process supervision, stdio transport, sessions, updates, permissions, and fixtures. |
 | `crates/daftprompt-prompt-builder/` | Deterministic retrieval selection, budgets, trust labeling, and versioned prompt formatting. |
+| `crates/daftprompt-storage/` | Durable conversation and trace storage: sessions, turns, retrieval runs/candidates, ACP events, permission decisions, redaction. |
 | `src/` application modules | Conversation coordinator, durable trace repository, async event bridge, and configuration. |
 | `src/state.rs` | Renderable ACP conversation and enrichment-inspection state. |
 | `src/ui/render.rs` or focused UI modules | Conversation surface, transcript, enrichment inspector, and permission dialog. |

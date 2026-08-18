@@ -1,0 +1,21 @@
+[package]
+name = "daftprompt-storage"
+version = "0.1.0"
+edition = "2021"
+
+# Epic 014 Task 3: durable conversation and trace storage. This is a
+# separate SQLite database from the per-repo search index
+# (daftprompt-indexer's ~/Library/Caches/daftprompt/{repo_slug}.db).
+# Conversation records survive --reindex.
+
+[dependencies]
+rusqlite = { version = "0.31", features = ["bundled"] }
+anyhow = "1"
+dirs = "5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+log = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
