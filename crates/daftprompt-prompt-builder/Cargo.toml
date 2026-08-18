@@ -1,0 +1,15 @@
+[package]
+name = "daftprompt-prompt-builder"
+version = "0.1.0"
+edition = "2021"
+
+# Epic 014 Task 2: deterministic context selection and prompt formatting,
+# provider-independent, sitting above `daftprompt-indexer`
+# (see epics/014-acp-prompt-enrichment-client.md, File-change Summary and
+# Design Decisions #4-5). This crate must never depend on the ACP SDK
+# (`daftprompt-acp` is the only place that may), akar, winit, or any adapter
+# ("provider") crate. It is allowed to depend on `daftprompt-indexer`'s
+# result types, per the epic's explicit dependency-direction note.
+
+[dependencies]
+daftprompt-indexer = { path = "../daftprompt-indexer" }
