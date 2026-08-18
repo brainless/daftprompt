@@ -47,6 +47,9 @@ pub enum CoordinatorEvent {
     SessionCreated {
         session_db_id: i64,
         acp_session_id: String,
+        adapter_name: String,
+        adapter_version: String,
+        protocol_version: String,
     },
     TurnStarted {
         turn_id: i64,
@@ -118,12 +121,15 @@ async fn run(
     events: mpsc::UnboundedSender<CoordinatorEvent>,
 ) {
     // Initialize ACP connection
-    if let Err(e) = acp_client.initialize().await {
-        let _ = events.send(CoordinatorEvent::AdapterError {
-            error: format!("ACP initialize failed: {e}"),
-        });
-        return;
-    }
+    let init_info = match acp_client.initialize().await {
+        Ok(info) => info,
+        Err(e) => {
+            let _ = events.send(CoordinatorEvent::AdapterError {
+                error: format!("ACP initialize failed: {e}"),
+            });
+            return;
+        }
+    };
 
     // Create ACP session
     let acp_session_id: AcpSessionId = match acp_client.new_session(".").await {
@@ -160,6 +166,17 @@ async fn run(
     let _ = events.send(CoordinatorEvent::SessionCreated {
         session_db_id,
         acp_session_id: acp_session_id.to_string(),
+        adapter_name: init_info
+            .agent_info
+            .as_ref()
+            .map(|i| i.name.clone())
+            .unwrap_or_default(),
+        adapter_version: init_info
+            .agent_info
+            .as_ref()
+            .map(|i| i.version.clone())
+            .unwrap_or_default(),
+        protocol_version: format!("v{}", init_info.protocol_version.as_u16()),
     });
 
     log::info!(

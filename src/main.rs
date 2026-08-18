@@ -1,3 +1,4 @@
+mod config;
 mod coordinator;
 mod git_log;
 mod state;
@@ -7,8 +8,9 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use clap::Parser;
-use coordinator::{start_coordinator, CoordinatorCommand, CoordinatorConfig, CoordinatorEvent};
-use daftprompt_acp::{AcpClient, AcpClientConfig, AdapterLaunchProfile, PermissionOutcome};
+use config::{AdapterArgs, DaftpromptConfig};
+use coordinator::{start_coordinator, CoordinatorCommand, CoordinatorEvent};
+use daftprompt_acp::{AcpClient, AcpClientConfig, PermissionOutcome};
 use daftprompt_indexer::{CommitData, Indexer, IndexerConfig, SymbolKind, UnifiedSearchHit};
 use daftprompt_storage::ConversationStore;
 use state::AppState;
@@ -89,6 +91,9 @@ struct Args {
     /// without `--screenshot` (matches akar's demo behavior).
     #[arg(long)]
     exit: bool,
+
+    #[command(flatten)]
+    adapter_args: AdapterArgs,
 }
 
 impl From<&git_log::CommitInfo> for CommitData {
@@ -108,6 +113,7 @@ fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     let args = Args::parse();
+    let config = DaftpromptConfig::from_args(&args.adapter_args);
 
     let indexer_config = IndexerConfig::default();
 
@@ -439,6 +445,7 @@ fn main() -> anyhow::Result<()> {
             commits,
             indexer,
             repo_path: args.repo,
+            config,
             last_frame: None,
             screenshot_path: args.screenshot,
             exit_after_screenshot: args.exit,
@@ -464,6 +471,7 @@ struct Application {
     commits: Vec<git_log::CommitInfo>,
     indexer: Option<Indexer>,
     repo_path: PathBuf,
+    config: DaftpromptConfig,
     // Timestamp of the previous `handle_redraw` call. Used by Task 4 (drawer)
     // to advance `state.drawer_animation` with a delta-time. None on the
     // first frame; the first `handle_redraw` then primes it.
@@ -564,38 +572,62 @@ impl winit::application::ApplicationHandler for Application {
         // indexer was not created (no_index or failure), the coordinator
         // is skipped and the conversation panel will show "Disconnected".
         if self.state.as_ref().unwrap().indexer.is_some() {
-            match tokio::runtime::Runtime::new() {
-                Ok(rt) => {
-                    let indexer_arc = std::sync::Arc::new(tokio::sync::Mutex::new(
-                        daftprompt_indexer::Indexer::new(
-                            &self.repo_path,
-                            &IndexerConfig::default(),
-                        )
-                        .expect("Indexer::new for coordinator"),
-                    ));
-                    let store = ConversationStore::open_in_memory()
-                        .expect("ConversationStore::open_in_memory");
-                    let (acp_client, acp_events) = AcpClient::launch(
-                        AdapterLaunchProfile::new("acp-fake-adapter"),
-                        AcpClientConfig {
-                            request_timeout: std::time::Duration::from_secs(60),
-                            ..AcpClientConfig::default()
-                        },
-                    );
-                    let config = CoordinatorConfig::default();
-                    let (cmd_tx, evt_rx) = start_coordinator(
-                        indexer_arc,
-                        store,
-                        acp_client,
-                        acp_events,
-                        config,
-                    );
-                    self.coordinator_cmd = Some(cmd_tx);
-                    self.coordinator_evt = Some(evt_rx);
-                    self.tokio_runtime = Some(rt);
+            // Pre-flight check: verify the adapter executable exists.
+            if let Err(e) = config::check_adapter_executable(&self.config.adapter.executable) {
+                log::error!("{e}");
+                // Surface the error in the conversation transcript.
+                if let Some(state) = self.state.as_mut() {
+                    state.conversation.entries.push(state::TranscriptEntry {
+                        kind: state::TranscriptEntryKind::Error,
+                        text: e.clone(),
+                        timestamp: timestamp_now(),
+                    });
                 }
-                Err(e) => {
-                    log::warn!("Failed to create tokio runtime for coordinator: {e}");
+            } else {
+                match tokio::runtime::Runtime::new() {
+                    Ok(rt) => {
+                        let indexer_arc = std::sync::Arc::new(tokio::sync::Mutex::new(
+                            daftprompt_indexer::Indexer::new(
+                                &self.repo_path,
+                                &IndexerConfig::default(),
+                            )
+                            .expect("Indexer::new for coordinator"),
+                        ));
+                        let store = match &self.config.trace.db_path {
+                            Some(path) => ConversationStore::open(path)
+                                .expect("ConversationStore::open"),
+                            None => {
+                                let db_path = ConversationStore::default_path_for_repo(&self.repo_path)
+                                    .expect("default_path_for_repo");
+                                ConversationStore::open(&db_path)
+                                    .expect("ConversationStore::open")
+                            }
+                        };
+                        let launch_profile = self.config.to_launch_profile();
+                        let (acp_client, acp_events) = AcpClient::launch(
+                            launch_profile,
+                            AcpClientConfig {
+                                request_timeout: std::time::Duration::from_secs(
+                                    self.config.adapter.request_timeout_secs,
+                                ),
+                                ..AcpClientConfig::default()
+                            },
+                        );
+                        let coord_config = self.config.to_coordinator_config();
+                        let (cmd_tx, evt_rx) = start_coordinator(
+                            indexer_arc,
+                            store,
+                            acp_client,
+                            acp_events,
+                            coord_config,
+                        );
+                        self.coordinator_cmd = Some(cmd_tx);
+                        self.coordinator_evt = Some(evt_rx);
+                        self.tokio_runtime = Some(rt);
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to create tokio runtime for coordinator: {e}");
+                    }
                 }
             }
         }
@@ -647,6 +679,7 @@ impl winit::application::ApplicationHandler for Application {
                 }
             }
             winit::event::WindowEvent::CloseRequested => {
+                self.shutdown_coordinator();
                 event_loop.exit();
             }
             winit::event::WindowEvent::RedrawRequested => {
@@ -658,6 +691,7 @@ impl winit::application::ApplicationHandler for Application {
                 // has to happen here because `handle_redraw` doesn't have
                 // access to the `ActiveEventLoop` borrow.
                 if self.screenshot_taken && self.exit_after_screenshot {
+                    self.shutdown_coordinator();
                     event_loop.exit();
                 }
             }
@@ -1039,6 +1073,13 @@ impl Application {
 
         Ok(())
     }
+
+    fn shutdown_coordinator(&mut self) {
+        if let Some(cmd) = self.coordinator_cmd.take() {
+            let _ = cmd.send(CoordinatorCommand::Shutdown);
+        }
+        self.coordinator_evt = None;
+    }
 }
 
 /// Drain all pending coordinator events and update `state.conversation`.
@@ -1062,12 +1103,22 @@ fn drain_coordinator_events(
 /// Apply a single coordinator event to `state.conversation`.
 fn apply_coordinator_event(event: CoordinatorEvent, state: &mut AppState) {
     match event {
-        CoordinatorEvent::SessionCreated { .. } => {
+        CoordinatorEvent::SessionCreated {
+            adapter_name,
+            adapter_version,
+            protocol_version,
+            ..
+        } => {
             state.conversation.adapter_status.connected = true;
-            state.conversation.adapter_status.name = "ACP".to_string();
+            state.conversation.adapter_status.name = adapter_name.clone();
+            state.conversation.adapter_status.version = adapter_version.clone();
+            state.conversation.adapter_status.protocol_version = protocol_version.clone();
             state.conversation.entries.push(state::TranscriptEntry {
                 kind: state::TranscriptEntryKind::SystemMessage,
-                text: "Session created.".to_string(),
+                text: format!(
+                    "Session created. Adapter: {} v{}, protocol {}.",
+                    adapter_name, adapter_version, protocol_version
+                ),
                 timestamp: timestamp_now(),
             });
         }

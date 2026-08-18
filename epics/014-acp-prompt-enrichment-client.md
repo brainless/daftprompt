@@ -646,26 +646,56 @@ PermissionDialogState, EnrichmentInspectorState).
 - [x] Adapter launch, authentication-required, protocol, timeout, and process
   exit failures are distinguishable to the user.
 
-### Task 6: Add configuration and lifecycle handling
+### Task 6: Add configuration and lifecycle handling — DONE
 
 Add explicit configuration for the adapter executable, arguments, permitted
 environment overrides, request timeout, retrieval budgets, and trace location.
 Provide a sensible Codex profile without assuming `npx` network installation at
 application startup.
 
+Added `src/config.rs` with `DaftpromptConfig` (adapter, retrieval, trace
+sub-configs), `AdapterArgs` (clap-flattenable CLI args), and
+`check_adapter_executable` pre-flight validation. `DaftpromptConfig::default()`
+uses `codex-acp` on PATH, 60s request timeout, 10s shutdown grace, 10 limit
+per source, 8000 char budget, 1500 per excerpt. `from_args` builds from CLI.
+`to_launch_profile` and `to_coordinator_config` bridge to the existing types.
+
+CLI args added: `--adapter`, `--adapter-args`, `--adapter-env` (KEY=VALUE),
+`--request-timeout`, `--shutdown-grace`. All visible in `--help`.
+
+Lifecycle: `Application` now holds `DaftpromptConfig`. Coordinator launch in
+`resumed` uses `config.to_launch_profile()` and `config.to_coordinator_config()`
+instead of hardcoded values. `ConversationStore` uses
+`default_path_for_repo()` (persistent on disk) instead of `open_in_memory()`.
+Pre-flight executable check runs before `AcpClient::launch`; if the executable
+is not found, an error is surfaced in the conversation transcript.
+
+Shutdown: `Application::shutdown_coordinator()` sends
+`CoordinatorCommand::Shutdown` and drops the event receiver. Called on both
+`CloseRequested` and screenshot+exit. The coordinator's `Shutdown` handler
+cancels any in-flight prompt and calls `session/close`. The `AcpClient`
+background task applies the grace period + forced-termination fallback.
+
+Adapter metadata: `CoordinatorEvent::SessionCreated` now carries
+`adapter_name`, `adapter_version`, and `protocol_version` from
+`InitializeInfo`. The UI populates `AdapterStatus` fields and shows the
+adapter identity in the transcript system message.
+
+`cargo check --workspace` passes. `cargo test --workspace` passes (199/199).
+
 #### Acceptance Criteria
 
-- [ ] daftprompt can launch an installed `codex-acp` or an explicitly configured
+- [x] daftprompt can launch an installed `codex-acp` or an explicitly configured
   local development command.
-- [ ] Arguments are passed directly to the process and never through a shell.
-- [ ] Missing executables fail with an actionable message.
-- [ ] Adapter version and initialization metadata are displayed and recorded.
-- [ ] Existing authentication may be used without daftprompt reading or storing
+- [x] Arguments are passed directly to the process and never through a shell.
+- [x] Missing executables fail with an actionable message.
+- [x] Adapter version and initialization metadata are displayed and recorded.
+- [x] Existing authentication may be used without daftprompt reading or storing
   credential files.
-- [ ] Authentication-required is explained; interactive authentication UI is
+- [x] Authentication-required is explained; interactive authentication UI is
   explicitly deferred.
-- [ ] Closing a session uses `session/close` when advertised.
-- [ ] Application exit cancels active work, closes stdin, waits for the child,
+- [x] Closing a session uses `session/close` when advertised.
+- [x] Application exit cancels active work, closes stdin, waits for the child,
   and applies a bounded forced-termination fallback.
 
 ### Task 7: Add replayable fixtures and manual evaluation workflow
