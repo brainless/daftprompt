@@ -335,29 +335,77 @@ unpredictable. Keep one opt-in live smoke test for manual validation.
 - [x] The child process is reaped on normal close, error, and client shutdown.
 - [x] No UI implementation begins until the headless prompt round trip works.
 
-### Task 1: Add the ACP runtime boundary
+### Task 1: Add the ACP runtime boundary — DONE
 
-Add a reusable `daftprompt-acp` workspace crate. Implement adapter launch
-profiles, process supervision, request IDs, pending-response correlation,
-typed notifications, reverse requests, timeouts, cancellation, session close,
-stderr tail capture, and graceful shutdown.
+Added the `crates/daftprompt-acp/` workspace crate as the sole dependent on
+the `agent-client-protocol` SDK (v2.0.0, per Task 0's conclusion). It
+launches one adapter subprocess per `AcpClient::launch` call via a private
+background task built on the SDK's `AcpAgent`/`ConnectionTo` connection
+primitives, and exposes only typed methods (`initialize`, `new_session`,
+`prompt`, `cancel`, `respond_permission`, `close_session`, `shutdown`), a
+typed event stream (`AcpEvent`/`SessionUpdateKind`/`PermissionRequest`), and
+a typed `AcpError` -- no raw child-process handle, JSON-RPC id, or unbounded
+`serde_json::Value` payload crosses the public API (unknown payloads are
+capped through `RawDiagnostic`, 16 KiB by default).
 
-The public API must expose typed events and errors rather than raw process
-objects. Raw protocol payload preservation may be available through a bounded
-diagnostic type.
+Two correctness issues surfaced only once real concurrency was exercised by
+tests, not by reading the SDK docs alone, and both are now fixed and covered:
+`agent-client-protocol`'s incoming dispatch loop processes one message at a
+time and awaits each notification/request handler before continuing, so the
+outgoing "command loop" driving `initialize`/`session/new`/`session/prompt`/
+`session/close` dispatches each one via `ConnectionTo::spawn` instead of
+awaiting it inline -- otherwise a long-running prompt would block a
+concurrently issued `session/cancel` notification from ever being sent.
+Permission responses have the same shape: the `Responder` for
+`session/request_permission` is stashed (it is a plain `Send + 'static`
+value, not tied to the handler's stack frame) and answered later from
+`AcpClient::respond_permission`, which also rejects any `optionId` the
+adapter did not actually offer (`AcpError::InvalidPermissionOption`) rather
+than trusting the caller (Design Decision #7). A second race -- a command
+sent right as the adapter process exited could see a generic
+"channel closed" error instead of the real reason -- is closed with a
+`Notify`-backed terminal-error cell the background task populates just
+before it returns.
+
+11 scripted tests run against an `acp-fake-adapter` test-support binary
+(adapted from the Task 0 spike's `fake_adapter`, replaying the same
+captured fixtures) with no network access or Codex credentials: initialize
+protocol-version validation, session/new, a full prompt round trip with
+streamed updates, a permission round trip (including the invalid-option
+rejection), cancel before and during a turn, session close + graceful
+shutdown, unknown session/update variants and unknown notification/request
+methods surfacing as diagnostics instead of crashing, a malformed stdout
+line being reported as a diagnostic without corrupting subsequent framing,
+a client-enforced timeout on a request the fixture adapter deliberately
+never answers, and an early (`exit(7)`) process exit being reported as a
+distinguishable error. `cargo check -p daftprompt-acp` and
+`cargo test -p daftprompt-acp` both pass, as does
+`cargo check --workspace --exclude daftprompt`; the only workspace check
+failure is the pre-existing, out-of-scope `akar_core::AkarCore::new` argument
+break in `src/main.rs` (unrelated to Epic 014).
+
+One caveat on the last acceptance criterion below: `AcpError::BrokenPipe`'s
+classification (string-matching the SDK's internal error text) is
+implemented but not exercised by a dedicated scripted test, since reliably
+forcing a mid-write broken pipe without racing the early-exit path proved
+adapter-timing-dependent; `AcpError::EarlyExit` embeds the adapter's stderr
+tail in its `detail` string (the SDK's own 64 KiB tail capture) rather than
+exposing it as a separate structured field. Both are real, typed,
+distinguishable variants; only their test depth and field granularity are
+lighter than the other categories.
 
 #### Acceptance Criteria
 
-- [ ] Only `daftprompt-acp` depends on the ACP SDK or local wire schemas.
-- [ ] Executable path and arguments are configured without shell evaluation.
-- [ ] Initialization records and validates negotiated capabilities.
-- [ ] New session, prompt, cancel, permission response, and close are supported.
-- [ ] Concurrent reverse requests and streaming notifications do not block
+- [x] Only `daftprompt-acp` depends on the ACP SDK or local wire schemas.
+- [x] Executable path and arguments are configured without shell evaluation.
+- [x] Initialization records and validates negotiated capabilities.
+- [x] New session, prompt, cancel, permission response, and close are supported.
+- [x] Concurrent reverse requests and streaming notifications do not block
   prompt-response correlation.
-- [ ] Unknown updates are preserved as typed generic events.
-- [ ] Timeout, malformed message, broken pipe, early exit, and stderr-tail
+- [x] Unknown updates are preserved as typed generic events.
+- [x] Timeout, malformed message, broken pipe, early exit, and stderr-tail
   errors are distinguishable.
-- [ ] Scripted adapter tests run without network access or Codex credentials.
+- [x] Scripted adapter tests run without network access or Codex credentials.
 
 ### Task 2: Add deterministic context selection and prompt formatting
 

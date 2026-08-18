@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/daftprompt-indexer"]
+members = [".", "crates/daftprompt-indexer", "crates/daftprompt-acp"]
 
 [package]
 name = "daftprompt"

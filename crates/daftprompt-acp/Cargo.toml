@@ -1,0 +1,31 @@
+[package]
+name = "daftprompt-acp"
+version = "0.1.0"
+edition = "2021"
+
+# Epic 014 Task 1: the ACP runtime boundary. This is the ONLY crate in the
+# daftprompt workspace allowed to depend on the ACP SDK or local wire
+# schemas (see epics/014-acp-prompt-enrichment-client.md, File-change
+# Summary). Task 0's spike (scratch/acp-spike/) proved the maintained
+# `agent-client-protocol` crate is wire-compatible with the local codex-acp
+# adapter and that no hand-rolled JSON-RPC layer is needed; see
+# epics/research/014-acp-adapter-compatibility.md for the findings this
+# crate is built on.
+
+[dependencies]
+agent-client-protocol = "2.0"
+# `io-util`, `rt-multi-thread`, and `process` are only required by the
+# `acp-fake-adapter` scripted test-support binary (src/bin/fake_adapter.rs),
+# not by the library itself, but Cargo features are additive per-crate, not
+# per-target, so they are listed here.
+tokio = { version = "1", features = ["sync", "time", "rt", "rt-multi-thread", "macros", "io-util", "io-std", "process"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+
+[[bin]]
+name = "acp-fake-adapter"
+path = "src/bin/fake_adapter.rs"
