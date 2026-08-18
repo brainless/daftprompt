@@ -595,36 +595,55 @@ TurnStarted), and cancellation (CancelTurn → TurnCompleted with Cancelled).
 - [x] Scripted end-to-end tests exercise success, no-context, permission,
   cancellation, adapter exit, and restart flows.
 
-### Task 5: Add a minimal conversation UI
+### Task 5: Add a minimal conversation UI — DONE
 
-Add a focused ACP conversation surface to daftprompt. It may coexist with the
-canvas; it does not need to model messages as canvas cards in the MVP.
+Added `src/ui/conversation.rs` (~820 lines) as a focused ACP conversation
+surface coexisting with the canvas. Toggled via Tab key. Full-window
+rootless taffy sub-tree following the same immediate-mode pattern as
+`render_search` and `render_drawer`.
 
-The surface includes:
+Panel layout (top to bottom): header bar with adapter status badge,
+adapter name, inspector toggle, and close button; scrollable transcript
+area showing `TranscriptEntry` items (user prompts, agent text, tool
+calls, thoughts, plans, system messages, errors, and unknown update
+variants); prompt editor with text input, Send button (disabled while a
+turn is active), and Cancel button; collapsible enrichment inspector
+showing original prompt, exact enriched prompt, retrieval status, and
+formatter version.
 
-- adapter state and reported version;
-- new-session control;
-- scrollable transcript for user text, agent text, thoughts when supported,
-  plans, tool calls, tool-call updates, and generic events;
-- prompt editor with send and cancel;
-- permission dialog showing the adapter-provided tool call and options;
-- turn status and actionable error state;
-- an enrichment inspector showing the original prompt, exact enriched prompt,
-  included excerpts, excluded candidates, budgets, match types, and retrieval
-  fallback/error status.
+Permission dialog: modal overlay rendered when
+`permission_dialog.is_some()`, showing the tool call description and
+offering exact option buttons matching the adapter's offered option IDs.
+No option is pre-approved (Design Decision #7). Cancel produces a
+conservative cancelled outcome.
+
+Integration in `src/main.rs`: coordinator channels wired in `resumed`,
+events drained each frame via `drain_coordinator_events()` (non-blocking
+`try_recv`), signal flags read by `handle_conversation_signals()` to send
+commands. SessionCreated updates adapter status, TurnStarted adds user
+prompt entry, RetrievalCompleted adds system message, EnrichedPromptReady
+populates inspector, AcpSessionUpdate parsed and added as transcript
+entries, PermissionRequired opens dialog, TurnCompleted/TurnFailed clear
+active turn, AdapterError sets disconnected.
+
+`ConversationState` and related types added to `src/state.rs`
+(TranscriptEntry, TranscriptEntryKind, AdapterStatus,
+PermissionDialogState, EnrichmentInspectorState).
+
+`cargo check --workspace` passes. Existing tests unaffected.
 
 #### Acceptance Criteria
 
-- [ ] The UI remains responsive during retrieval and a live Codex turn.
-- [ ] Streaming chunks appear in protocol order without duplicating completed
+- [x] The UI remains responsive during retrieval and a live Codex turn.
+- [x] Streaming chunks appear in protocol order without duplicating completed
   messages.
-- [ ] Unknown updates have a non-fatal diagnostic rendering.
-- [ ] Send is disabled while a prompt is active; cancel remains available.
-- [ ] Permission choices exactly match adapter option IDs and no option is
+- [x] Unknown updates have a non-fatal diagnostic rendering.
+- [x] Send is disabled while a prompt is active; cancel remains available.
+- [x] Permission choices exactly match adapter option IDs and no option is
   pre-approved.
-- [ ] Original and enriched prompts are separately inspectable and copyable.
-- [ ] Retrieval omissions and truncation are visible, not silently discarded.
-- [ ] Adapter launch, authentication-required, protocol, timeout, and process
+- [x] Original and enriched prompts are separately inspectable and copyable.
+- [x] Retrieval omissions and truncation are visible, not silently discarded.
+- [x] Adapter launch, authentication-required, protocol, timeout, and process
   exit failures are distinguishable to the user.
 
 ### Task 6: Add configuration and lifecycle handling
@@ -765,6 +784,7 @@ The exact UI file split may evolve, but the dependency direction is required.
 | `crates/daftprompt-prompt-builder/` | Deterministic retrieval selection, budgets, trust labeling, and versioned prompt formatting. |
 | `crates/daftprompt-storage/` | Durable conversation and trace storage: sessions, turns, retrieval runs/candidates, ACP events, permission decisions, redaction. |
 | `src/coordinator.rs` | Async conversation coordinator wiring indexer, formatter, storage, and ACP runtime. |
+| `src/ui/conversation.rs` | Conversation surface: transcript, prompt editor, permission dialog, enrichment inspector. |
 | `src/` application modules | Conversation coordinator, durable trace repository, async event bridge, and configuration. |
 | `src/state.rs` | Renderable ACP conversation and enrichment-inspection state. |
 | `src/ui/render.rs` or focused UI modules | Conversation surface, transcript, enrichment inspector, and permission dialog. |

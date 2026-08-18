@@ -1,5 +1,6 @@
 use crate::ui::container::Container;
 use akar_components::{CanvasState, TextEditState};
+use daftprompt_acp::PermissionRequestId;
 use glam::Vec2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -58,6 +59,9 @@ pub struct AppState {
     pub search_results: Vec<daftprompt_indexer::SearchResult>,
     pub code_search_results: Vec<daftprompt_indexer::CodeSearchResult>,
     pub document_search_results: Vec<daftprompt_indexer::DocumentSearchResult>,
+
+    // Conversation state (ACP conversation surface, toggled via Tab)
+    pub conversation: ConversationState,
 }
 
 #[derive(Debug, Clone)]
@@ -136,6 +140,8 @@ impl AppState {
             search_results: Vec::new(),
             code_search_results: Vec::new(),
             document_search_results: Vec::new(),
+
+            conversation: ConversationState::default(),
         }
     }
 
@@ -145,7 +151,7 @@ impl AppState {
     }
 
     #[allow(dead_code)]
-    fn create_sample_folders() -> Vec<FolderData> {
+    pub fn create_sample_folders() -> Vec<FolderData> {
         vec![
             FolderData {
                 name: "My Project".to_string(),
@@ -178,3 +184,129 @@ impl AppState {
         ]
     }
 }
+
+// ── Conversation state types (Task 5, Epic 014) ──
+
+pub struct ConversationState {
+    pub visible: bool,
+    pub entries: Vec<TranscriptEntry>,
+    pub prompt_input: String,
+    pub prompt_edit_state: TextEditState,
+    pub adapter_status: AdapterStatus,
+    pub active_turn_id: Option<i64>,
+    pub permission_dialog: Option<PermissionDialogState>,
+    pub enrichment_inspector_visible: bool,
+    pub enrichment_inspector: Option<EnrichmentInspectorState>,
+    pub transcript_scroll_y: f32,
+    // Signal fields: set by render, consumed by main.rs each frame.
+    pub prompt_send_requested: bool,
+    pub cancel_requested: bool,
+    pub permission_response: Option<String>,
+    pub permission_cancel_requested: bool,
+}
+
+impl Default for ConversationState {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            entries: Vec::new(),
+            prompt_input: String::new(),
+            prompt_edit_state: TextEditState::default(),
+            adapter_status: AdapterStatus::default(),
+            active_turn_id: None,
+            permission_dialog: None,
+            enrichment_inspector_visible: false,
+            enrichment_inspector: None,
+            transcript_scroll_y: 0.0,
+            prompt_send_requested: false,
+            cancel_requested: false,
+            permission_response: None,
+            permission_cancel_requested: false,
+        }
+    }
+}
+
+pub struct TranscriptEntry {
+    pub kind: TranscriptEntryKind,
+    pub text: String,
+    #[allow(dead_code)]
+    pub timestamp: String,
+}
+
+pub enum TranscriptEntryKind {
+    UserPrompt,
+    AgentText,
+    ToolCall,
+    ToolCallUpdate,
+    Thought,
+    #[allow(dead_code)]
+    Plan,
+    SystemMessage,
+    Error,
+    Unknown(String),
+}
+
+pub struct AdapterStatus {
+    pub connected: bool,
+    pub name: String,
+    pub version: String,
+    #[allow(dead_code)]
+    pub protocol_version: String,
+}
+
+impl Default for AdapterStatus {
+    fn default() -> Self {
+        Self {
+            connected: false,
+            name: String::new(),
+            version: String::new(),
+            protocol_version: String::new(),
+        }
+    }
+}
+
+pub struct PermissionDialogState {
+    pub request_id: PermissionRequestId,
+    pub tool_call_description: String,
+    pub options: Vec<PermissionDialogOption>,
+}
+
+pub struct PermissionDialogOption {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+}
+
+pub struct EnrichmentInspectorState {
+    pub original_prompt: String,
+    pub enriched_prompt: String,
+    pub included_excerpts: Vec<InspectorExcerpt>,
+    pub excluded_candidates: Vec<InspectorExcluded>,
+    pub retrieval_status: String,
+    #[allow(dead_code)]
+    pub formatter_version: u32,
+    pub total_char_budget: usize,
+    #[allow(dead_code)]
+    pub per_excerpt_char_limit: usize,
+}
+
+pub struct InspectorExcerpt {
+    pub rank: usize,
+    pub source: String,
+    pub identifier: String,
+    #[allow(dead_code)]
+    pub match_type: String,
+    #[allow(dead_code)]
+    pub text: String,
+    pub truncated: bool,
+    #[allow(dead_code)]
+    pub truncation_reason: Option<String>,
+}
+
+pub struct InspectorExcluded {
+    pub rank: usize,
+    pub source: String,
+    pub identifier: String,
+    pub reason: String,
+}
+

@@ -13,4 +13,5 @@
 // Tasks 3/4/6 — each task deletes the corresponding old module file.
 pub mod adapter;
 pub mod container;
+pub mod conversation;
 pub mod render;

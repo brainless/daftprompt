@@ -706,7 +706,7 @@ fn render_containers(
 // `akar_components::color::color_to_f32` is `pub(crate)` and not exposed
 // in the public re-exports. The conversion is trivial — extract each
 // 8-bit channel and divide by 255.0.
-fn color_to_f32(c: u32) -> [f32; 4] {
+pub(crate) fn color_to_f32(c: u32) -> [f32; 4] {
     [
         ((c >> 24) & 0xFF) as f32 / 255.0,
         ((c >> 16) & 0xFF) as f32 / 255.0,

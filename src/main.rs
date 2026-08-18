@@ -1,3 +1,4 @@
+mod coordinator;
 mod git_log;
 mod state;
 mod ui;
@@ -6,9 +7,14 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use clap::Parser;
+use coordinator::{start_coordinator, CoordinatorCommand, CoordinatorConfig, CoordinatorEvent};
+use daftprompt_acp::{AcpClient, AcpClientConfig, AdapterLaunchProfile, PermissionOutcome};
 use daftprompt_indexer::{CommitData, Indexer, IndexerConfig, SymbolKind, UnifiedSearchHit};
+use daftprompt_storage::ConversationStore;
 use state::AppState;
+use tokio::sync::mpsc;
 use ui::container::{Container, ContainerType};
+use ui::conversation::render_conversation;
 use ui::render::{render_canvas, render_drawer, render_search};
 
 #[derive(Parser)]
@@ -432,11 +438,15 @@ fn main() -> anyhow::Result<()> {
             window: None,
             commits,
             indexer,
+            repo_path: args.repo,
             last_frame: None,
             screenshot_path: args.screenshot,
             exit_after_screenshot: args.exit,
             start_time: None,
             screenshot_taken: false,
+            tokio_runtime: None,
+            coordinator_cmd: None,
+            coordinator_evt: None,
         })
         .unwrap();
 
@@ -453,6 +463,7 @@ struct Application {
     window: Option<std::sync::Arc<winit::window::Window>>,
     commits: Vec<git_log::CommitInfo>,
     indexer: Option<Indexer>,
+    repo_path: PathBuf,
     // Timestamp of the previous `handle_redraw` call. Used by Task 4 (drawer)
     // to advance `state.drawer_animation` with a delta-time. None on the
     // first frame; the first `handle_redraw` then primes it.
@@ -466,6 +477,12 @@ struct Application {
     exit_after_screenshot: bool,
     start_time: Option<Instant>,
     screenshot_taken: bool,
+    // Coordinator (Task 5): async runtime, command sender, event receiver.
+    // The coordinator runs on a tokio runtime and communicates with the UI
+    // through typed channels.
+    tokio_runtime: Option<tokio::runtime::Runtime>,
+    coordinator_cmd: Option<mpsc::UnboundedSender<CoordinatorCommand>>,
+    coordinator_evt: Option<mpsc::UnboundedReceiver<CoordinatorEvent>>,
 }
 
 impl winit::application::ApplicationHandler for Application {
@@ -542,6 +559,46 @@ impl winit::application::ApplicationHandler for Application {
         self.surface_config = Some(surface_config);
         self.core = Some(core);
         self.window = Some(window.clone());
+
+        // Start the coordinator (Task 5). Requires the indexer; if the
+        // indexer was not created (no_index or failure), the coordinator
+        // is skipped and the conversation panel will show "Disconnected".
+        if self.state.as_ref().unwrap().indexer.is_some() {
+            match tokio::runtime::Runtime::new() {
+                Ok(rt) => {
+                    let indexer_arc = std::sync::Arc::new(tokio::sync::Mutex::new(
+                        daftprompt_indexer::Indexer::new(
+                            &self.repo_path,
+                            &IndexerConfig::default(),
+                        )
+                        .expect("Indexer::new for coordinator"),
+                    ));
+                    let store = ConversationStore::open_in_memory()
+                        .expect("ConversationStore::open_in_memory");
+                    let (acp_client, acp_events) = AcpClient::launch(
+                        AdapterLaunchProfile::new("acp-fake-adapter"),
+                        AcpClientConfig {
+                            request_timeout: std::time::Duration::from_secs(60),
+                            ..AcpClientConfig::default()
+                        },
+                    );
+                    let config = CoordinatorConfig::default();
+                    let (cmd_tx, evt_rx) = start_coordinator(
+                        indexer_arc,
+                        store,
+                        acp_client,
+                        acp_events,
+                        config,
+                    );
+                    self.coordinator_cmd = Some(cmd_tx);
+                    self.coordinator_evt = Some(evt_rx);
+                    self.tokio_runtime = Some(rt);
+                }
+                Err(e) => {
+                    log::warn!("Failed to create tokio runtime for coordinator: {e}");
+                }
+            }
+        }
 
         window.request_redraw();
     }
@@ -709,7 +766,14 @@ impl Application {
         //   Escape cascade: code → commits → deselect-all-cards.
         // Also clears `core.input.focused_id` on Escape so any focused text
         // input loses focus (matters once Task 6 wires the search box).
+        //
+        // Tab toggles the conversation surface (Task 5). The Tab char is
+        // consumed so text_input doesn't insert it.
         let cmd_or_ctrl = state.cmd_or_ctrl;
+        if core.input.chars.contains(&'\t') {
+            core.input.chars.retain(|&c| c != '\t');
+            state.conversation.visible = !state.conversation.visible;
+        }
         if cmd_or_ctrl && (core.input.chars.contains(&'k') || core.input.chars.contains(&'K')) {
             // `akar-winit` correctly forwards the textual "k" from the
             // shortcut as input. It opens the search UI, not part of the
@@ -737,7 +801,10 @@ impl Application {
                 .retain(|c| c.container_type != ContainerType::DocumentSearchResults);
         }
         if core.input.keys_pressed.contains(&akar_core::Key::Escape) {
-            if state.search_active {
+            if state.conversation.visible {
+                // Close conversation panel first.
+                state.conversation.visible = false;
+            } else if state.search_active {
                 state.search_active = false;
                 state.search_just_opened = false;
                 state.search_query.clear();
@@ -834,6 +901,16 @@ impl Application {
         if state.search_active {
             render_search(core, &mut layout, state, dt);
         }
+        if state.conversation.visible {
+            render_conversation(core, &mut layout, state);
+        }
+
+        // Drain coordinator events and handle UI signals (Task 5).
+        drain_coordinator_events(self.coordinator_evt.as_mut(), state);
+        handle_conversation_signals(
+            self.coordinator_cmd.as_ref(),
+            state,
+        );
 
         // Acquire the surface texture. If acquisition fails, skip the frame
         // and request another redraw — same as Task 1.
@@ -961,5 +1038,313 @@ impl Application {
         frame.present();
 
         Ok(())
+    }
+}
+
+/// Drain all pending coordinator events and update `state.conversation`.
+fn drain_coordinator_events(
+    evt_rx: Option<&mut mpsc::UnboundedReceiver<CoordinatorEvent>>,
+    state: &mut AppState,
+) {
+    let Some(rx) = evt_rx else { return };
+    loop {
+        match rx.try_recv() {
+            Ok(event) => apply_coordinator_event(event, state),
+            Err(mpsc::error::TryRecvError::Empty) => break,
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                state.conversation.adapter_status.connected = false;
+                break;
+            }
+        }
+    }
+}
+
+/// Apply a single coordinator event to `state.conversation`.
+fn apply_coordinator_event(event: CoordinatorEvent, state: &mut AppState) {
+    match event {
+        CoordinatorEvent::SessionCreated { .. } => {
+            state.conversation.adapter_status.connected = true;
+            state.conversation.adapter_status.name = "ACP".to_string();
+            state.conversation.entries.push(state::TranscriptEntry {
+                kind: state::TranscriptEntryKind::SystemMessage,
+                text: "Session created.".to_string(),
+                timestamp: timestamp_now(),
+            });
+        }
+        CoordinatorEvent::TurnStarted { turn_id } => {
+            state.conversation.active_turn_id = Some(turn_id);
+            // The user prompt entry is added here rather than at send time
+            // so it arrives with the turn_id for correlation.
+            let prompt_text = state.conversation.prompt_input.clone();
+            state.conversation.entries.push(state::TranscriptEntry {
+                kind: state::TranscriptEntryKind::UserPrompt,
+                text: prompt_text,
+                timestamp: timestamp_now(),
+            });
+        }
+        CoordinatorEvent::RetrievalCompleted {
+            status,
+            candidate_count,
+            included_count,
+            ..
+        } => {
+            state.conversation.entries.push(state::TranscriptEntry {
+                kind: state::TranscriptEntryKind::SystemMessage,
+                text: format!(
+                    "Retrieval {status}: {candidate_count} candidates, {included_count} included"
+                ),
+                timestamp: timestamp_now(),
+            });
+        }
+        CoordinatorEvent::EnrichedPromptReady {
+            original,
+            enriched,
+            ..
+        } => {
+            state.conversation.enrichment_inspector =
+                Some(state::EnrichmentInspectorState {
+                    original_prompt: original,
+                    enriched_prompt: enriched,
+                    included_excerpts: Vec::new(),
+                    excluded_candidates: Vec::new(),
+                    retrieval_status: "ok".to_string(),
+                    formatter_version: 1,
+                    total_char_budget: 0,
+                    per_excerpt_char_limit: 0,
+                });
+        }
+        CoordinatorEvent::AcpSessionUpdate { update_json, .. } => {
+            parse_session_update(&update_json, state);
+        }
+        CoordinatorEvent::PermissionRequired {
+            request_id,
+            tool_call_json,
+            options_json,
+        } => {
+            let tool_call_desc = serde_json::from_str::<serde_json::Value>(&tool_call_json)
+                .ok()
+                .and_then(|v| {
+                    v.get("toolCall")
+                        .or_else(|| v.get("tool"))
+                        .and_then(|t| t.get("name"))
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| truncate_str_static(&tool_call_json, 100));
+
+            let options: Vec<state::PermissionDialogOption> =
+                serde_json::from_str::<Vec<serde_json::Value>>(&options_json)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|opt| state::PermissionDialogOption {
+                        id: opt
+                            .get("optionId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        label: opt
+                            .get("label")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Allow")
+                            .to_string(),
+                        kind: opt
+                            .get("kind")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("allow_once")
+                            .to_string(),
+                    })
+                    .collect();
+
+            state.conversation.permission_dialog = Some(state::PermissionDialogState {
+                request_id,
+                tool_call_description: tool_call_desc,
+                options,
+            });
+        }
+        CoordinatorEvent::TurnCompleted { stop_reason, .. } => {
+            state.conversation.active_turn_id = None;
+            state.conversation.entries.push(state::TranscriptEntry {
+                kind: state::TranscriptEntryKind::SystemMessage,
+                text: format!("Turn completed: {stop_reason}"),
+                timestamp: timestamp_now(),
+            });
+        }
+        CoordinatorEvent::TurnFailed { error, .. } => {
+            state.conversation.active_turn_id = None;
+            state.conversation.entries.push(state::TranscriptEntry {
+                kind: state::TranscriptEntryKind::Error,
+                text: error,
+                timestamp: timestamp_now(),
+            });
+        }
+        CoordinatorEvent::AdapterError { error } => {
+            state.conversation.adapter_status.connected = false;
+            state.conversation.entries.push(state::TranscriptEntry {
+                kind: state::TranscriptEntryKind::Error,
+                text: format!("Adapter error: {error}"),
+                timestamp: timestamp_now(),
+            });
+        }
+    }
+}
+
+/// Parse a session update JSON and add the appropriate transcript entry.
+fn parse_session_update(json: &str, state: &mut AppState) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        state.conversation.entries.push(state::TranscriptEntry {
+            kind: state::TranscriptEntryKind::Unknown("raw".to_string()),
+            text: truncate_str_static(json, 200).to_string(),
+            timestamp: timestamp_now(),
+        });
+        return;
+    };
+
+    let update_type = v
+        .get("sessionUpdate")
+        .and_then(|u| u.get("type").or_else(|| u.get("updateType")))
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
+
+    match update_type {
+        "message" => {
+            if let Some(content) = v
+                .get("sessionUpdate")
+                .and_then(|u| u.get("content"))
+                .and_then(|c| c.as_array())
+            {
+                for block in content {
+                    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                        let kind = if block.get("type").and_then(|t| t.as_str()) == Some("thinking")
+                        {
+                            state::TranscriptEntryKind::Thought
+                        } else {
+                            state::TranscriptEntryKind::AgentText
+                        };
+                        state.conversation.entries.push(state::TranscriptEntry {
+                            kind,
+                            text: text.to_string(),
+                            timestamp: timestamp_now(),
+                        });
+                    }
+                }
+            } else if let Some(text) = v
+                .get("sessionUpdate")
+                .and_then(|u| u.get("text"))
+                .and_then(|t| t.as_str())
+            {
+                state.conversation.entries.push(state::TranscriptEntry {
+                    kind: state::TranscriptEntryKind::AgentText,
+                    text: text.to_string(),
+                    timestamp: timestamp_now(),
+                });
+            }
+        }
+        "toolCall" => {
+            let tool_name = v
+                .get("sessionUpdate")
+                .and_then(|u| u.get("toolName").or_else(|| u.get("name")))
+                .and_then(|n| n.as_str())
+                .unwrap_or("unknown tool");
+            state.conversation.entries.push(state::TranscriptEntry {
+                kind: state::TranscriptEntryKind::ToolCall,
+                text: tool_name.to_string(),
+                timestamp: timestamp_now(),
+            });
+        }
+        "toolCallUpdate" => {
+            let tool_name = v
+                .get("sessionUpdate")
+                .and_then(|u| u.get("toolName").or_else(|| u.get("name")))
+                .and_then(|n| n.as_str())
+                .unwrap_or("unknown tool");
+            state.conversation.entries.push(state::TranscriptEntry {
+                kind: state::TranscriptEntryKind::ToolCallUpdate,
+                text: tool_name.to_string(),
+                timestamp: timestamp_now(),
+            });
+        }
+        _ => {
+            state.conversation.entries.push(state::TranscriptEntry {
+                kind: state::TranscriptEntryKind::Unknown(
+                    update_type.to_string(),
+                ),
+                text: truncate_str_static(json, 200).to_string(),
+                timestamp: timestamp_now(),
+            });
+        }
+    }
+}
+
+/// Handle UI signal flags set by `render_conversation`.
+fn handle_conversation_signals(
+    cmd_tx: Option<&mpsc::UnboundedSender<CoordinatorCommand>>,
+    state: &mut AppState,
+) {
+    // Send prompt
+    if state.conversation.prompt_send_requested {
+        state.conversation.prompt_send_requested = false;
+        let prompt = state.conversation.prompt_input.trim().to_string();
+        if !prompt.is_empty() {
+            if let Some(tx) = cmd_tx {
+                let _ = tx.send(CoordinatorCommand::SubmitPrompt { original: prompt });
+                // Clear the input after sending.
+                state.conversation.prompt_input.clear();
+                state.conversation.prompt_edit_state = Default::default();
+            } else {
+                state.conversation.entries.push(state::TranscriptEntry {
+                    kind: state::TranscriptEntryKind::Error,
+                    text: "No coordinator connected.".to_string(),
+                    timestamp: timestamp_now(),
+                });
+            }
+        }
+    }
+
+    // Cancel turn
+    if state.conversation.cancel_requested {
+        state.conversation.cancel_requested = false;
+        if let Some(tx) = cmd_tx {
+            let _ = tx.send(CoordinatorCommand::CancelTurn);
+        }
+    }
+
+    // Permission response
+    if let Some(option_id) = state.conversation.permission_response.take() {
+        if let (Some(tx), Some(dialog)) = (cmd_tx, state.conversation.permission_dialog.take()) {
+            let _ = tx.send(CoordinatorCommand::RespondPermission {
+                request_id: dialog.request_id,
+                outcome: PermissionOutcome::Selected(option_id),
+            });
+        }
+    }
+
+    // Permission cancel
+    if state.conversation.permission_cancel_requested {
+        state.conversation.permission_cancel_requested = false;
+        if let (Some(tx), Some(dialog)) = (cmd_tx, state.conversation.permission_dialog.take()) {
+            let _ = tx.send(CoordinatorCommand::RespondPermission {
+                request_id: dialog.request_id,
+                outcome: PermissionOutcome::Cancelled,
+            });
+        }
+    }
+}
+
+fn timestamp_now() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs();
+    let h = (secs / 3600) % 24;
+    let m = (secs / 60) % 60;
+    let s = secs % 60;
+    format!("{h:02}:{m:02}:{s:02}")
+}
+
+fn truncate_str_static(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len.saturating_sub(3)])
     }
 }
