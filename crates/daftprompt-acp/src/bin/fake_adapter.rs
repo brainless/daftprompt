@@ -34,6 +34,10 @@ fn fixture(name: &str) -> &'static str {
         "session_update_stream" => include_str!("../../fixtures/session_update_stream.jsonl"),
         "prompt_response" => include_str!("../../fixtures/prompt_response.json"),
         "permission_request" => include_str!("../../fixtures/permission_request.json"),
+        "session_update_thinking" => include_str!("../../fixtures/session_update_thinking.jsonl"),
+        "session_update_plan" => include_str!("../../fixtures/session_update_plan.jsonl"),
+        "session_update_tool_call" => include_str!("../../fixtures/session_update_tool_call.jsonl"),
+        "session_update_tool_update" => include_str!("../../fixtures/session_update_tool_update.jsonl"),
         other => panic!("unknown fixture {other}"),
     }
 }
@@ -45,6 +49,7 @@ enum Mode {
     StderrNoise,
     EarlyExit,
     Hang,
+    PermissionFlow,
 }
 
 impl Mode {
@@ -54,6 +59,7 @@ impl Mode {
             Ok("stderr_noise") => Mode::StderrNoise,
             Ok("early_exit") => Mode::EarlyExit,
             Ok("hang") => Mode::Hang,
+            Ok("permission_flow") => Mode::PermissionFlow,
             _ => Mode::Normal,
         }
     }
@@ -271,6 +277,56 @@ async fn main() {
                             "id": "unknown-request-fixture-0001",
                             "method": "session/unknown_request_kind",
                             "params": { "sessionId": session_id }
+                        }),
+                    )
+                    .await;
+                }
+
+                if mode == Mode::PermissionFlow {
+                    // permission_flow mode: send a permission request before
+                    // the normal prompt response, wait for the client's
+                    // answer, then continue with the normal stream + response.
+                    let permission_request: Value =
+                        serde_json::from_str(fixture("permission_request")).unwrap();
+                    let mut permission_request = permission_request;
+                    permission_request
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("_comment");
+                    permission_request["params"]["sessionId"] = json!(session_id);
+                    let permission_request_id = permission_request["id"].clone();
+                    write_line(&mut stdout, &permission_request).await;
+
+                    let mut chosen_option_id = String::from("reject_once");
+                    while let Some(next_line) = rx.recv().await {
+                        if next_line.trim().is_empty() {
+                            continue;
+                        }
+                        let Ok(reply): Result<Value, _> = serde_json::from_str(&next_line) else {
+                            continue;
+                        };
+                        if reply.get("id") == Some(&permission_request_id) {
+                            if let Some(opt) = reply["result"]["outcome"]["optionId"].as_str() {
+                                chosen_option_id = opt.to_string();
+                            }
+                            break;
+                        }
+                    }
+
+                    write_line(
+                        &mut stdout,
+                        &json!({
+                            "jsonrpc": "2.0",
+                            "method": "session/update",
+                            "params": {
+                                "sessionId": session_id,
+                                "update": {
+                                    "sessionUpdate": "tool_call_update",
+                                    "toolCallId": "exec-fixture-0001",
+                                    "status": if chosen_option_id == "reject_once" { "failed" } else { "completed" },
+                                    "_meta": { "fixture": { "chosenOptionId": chosen_option_id } }
+                                }
+                            }
                         }),
                     )
                     .await;

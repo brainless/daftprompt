@@ -78,6 +78,17 @@ fn launch_fake_adapter() -> (AcpClient, daftprompt_acp::AcpEvents) {
     )
 }
 
+fn launch_fake_adapter_with_mode(mode: &str) -> (AcpClient, daftprompt_acp::AcpEvents) {
+    let profile = AdapterLaunchProfile::new(fake_adapter_path()).env("FAKE_ADAPTER_MODE", mode);
+    AcpClient::launch(
+        profile,
+        AcpClientConfig {
+            request_timeout: Duration::from_secs(5),
+            ..AcpClientConfig::default()
+        },
+    )
+}
+
 fn setup_coordinator() -> (
     mpsc::UnboundedSender<CoordinatorCommand>,
     mpsc::UnboundedReceiver<CoordinatorEvent>,
@@ -86,6 +97,23 @@ fn setup_coordinator() -> (
     let (indexer, repo_dir) = setup_test_indexer();
     let store = ConversationStore::open_in_memory().expect("in-memory store");
     let (acp_client, acp_events) = launch_fake_adapter();
+    let config = CoordinatorConfig {
+        retrieval_limit_per_source: 5,
+        budget: SelectionBudget::default(),
+        request_timeout: Duration::from_secs(5),
+    };
+    let (cmd_tx, evt_rx) = start_coordinator(indexer, store, acp_client, acp_events, config);
+    (cmd_tx, evt_rx, repo_dir)
+}
+
+fn setup_coordinator_with_mode(mode: &str) -> (
+    mpsc::UnboundedSender<CoordinatorCommand>,
+    mpsc::UnboundedReceiver<CoordinatorEvent>,
+    tempfile::TempDir,
+) {
+    let (indexer, repo_dir) = setup_test_indexer();
+    let store = ConversationStore::open_in_memory().expect("in-memory store");
+    let (acp_client, acp_events) = launch_fake_adapter_with_mode(mode);
     let config = CoordinatorConfig {
         retrieval_limit_per_source: 5,
         budget: SelectionBudget::default(),
@@ -261,6 +289,98 @@ async fn cancel_turn_transitions_to_cancelled() {
         Some("Cancelled"),
         "expected Cancelled stop reason, got {:?}",
         completed
+    );
+
+    let _ = cmd_tx.send(CoordinatorCommand::Shutdown);
+}
+
+#[tokio::test]
+async fn permission_flow_emits_permission_required_and_completes() {
+    let (cmd_tx, mut evt_rx, _repo) = setup_coordinator_with_mode("permission_flow");
+
+    // Wait for SessionCreated
+    let _ = collect_until(&mut evt_rx, |e| {
+        matches!(e, CoordinatorEvent::SessionCreated { .. })
+    })
+    .await;
+
+    // Submit a prompt — the permission_flow adapter will send a
+    // session/request_permission before answering.
+    cmd_tx
+        .send(CoordinatorCommand::SubmitPrompt {
+            original: "please do something".to_string(),
+        })
+        .unwrap();
+
+    // Collect until PermissionRequired is emitted.
+    let permission_events = collect_until(&mut evt_rx, |e| {
+        matches!(e, CoordinatorEvent::PermissionRequired { .. })
+    })
+    .await;
+
+    let permission = permission_events
+        .iter()
+        .find_map(|e| match e {
+            CoordinatorEvent::PermissionRequired {
+                request_id,
+                options_json,
+                ..
+            } => Some((request_id.clone(), options_json.clone())),
+            _ => None,
+        })
+        .expect("expected PermissionRequired event");
+
+    // Respond with allow_once (one of the options the fixture offers).
+    cmd_tx
+        .send(CoordinatorCommand::RespondPermission {
+            request_id: permission.0,
+            outcome: daftprompt_acp::PermissionOutcome::Selected("allow_once".to_string()),
+        })
+        .unwrap();
+
+    // Collect until TurnCompleted.
+    let turn_events = collect_until(&mut evt_rx, |e| {
+        matches!(e, CoordinatorEvent::TurnCompleted { .. })
+    })
+    .await;
+
+    let completed = turn_events
+        .iter()
+        .find_map(|e| match e {
+            CoordinatorEvent::TurnCompleted { stop_reason, .. } => Some(stop_reason.as_str()),
+            _ => None,
+        });
+    assert_eq!(
+        completed,
+        Some("EndTurn"),
+        "expected EndTurn after permission granted, got {:?}",
+        completed
+    );
+
+    let _ = cmd_tx.send(CoordinatorCommand::Shutdown);
+}
+
+#[tokio::test]
+async fn adapter_exit_during_prompt_emits_turn_failed() {
+    let (cmd_tx, mut evt_rx, _repo) = setup_coordinator_with_mode("early_exit");
+
+    // The early_exit adapter dies right after initialize, before
+    // session/new. The coordinator should emit AdapterError or
+    // TurnFailed depending on when the exit is detected.
+    let early_events = collect_until(&mut evt_rx, |e| {
+        matches!(
+            e,
+            CoordinatorEvent::AdapterError { .. } | CoordinatorEvent::TurnFailed { .. }
+        )
+    })
+    .await;
+
+    assert!(
+        early_events.iter().any(|e| matches!(
+            e,
+            CoordinatorEvent::AdapterError { .. } | CoordinatorEvent::TurnFailed { .. }
+        )),
+        "expected an AdapterError or TurnFailed event when the adapter exits early"
     );
 
     let _ = cmd_tx.send(CoordinatorCommand::Shutdown);

@@ -403,3 +403,45 @@ fn assert_early_exit_shaped(error: &AcpError) {
         other => panic!("expected an early-exit-shaped error, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn permission_flow_mode_sends_permission_before_prompt_response() {
+    let (client, mut events) = launch(Some("permission_flow"));
+    client.initialize().await.unwrap();
+    let session_id = client.new_session("/tmp/daftprompt-acp-test-repo").await.unwrap();
+
+    let prompt_fut = client.prompt(session_id, "Please do something that needs permission");
+
+    let respond_fut = async {
+        // Drain events until the permission request arrives.
+        let permission_request = loop {
+            match events.recv().await {
+                Some(AcpEvent::PermissionRequested(request)) => break request,
+                Some(_) => continue,
+                None => panic!("connection closed before a permission request arrived"),
+            }
+        };
+
+        // The permission_request fixture offers allow_once, allow_always, reject_once.
+        let allow_once = permission_request
+            .options
+            .iter()
+            .find(|option| option.option_id.to_string() == "allow_once")
+            .expect("fixture always offers allow_once")
+            .option_id
+            .to_string();
+
+        client
+            .respond_permission(permission_request.id, PermissionOutcome::Selected(allow_once))
+            .await
+            .expect("responding with an offered option should succeed");
+    };
+
+    let (outcome, ()) = tokio::join!(prompt_fut, respond_fut);
+    assert_eq!(
+        outcome
+            .expect("session/prompt should succeed in permission_flow mode")
+            .stop_reason,
+        StopReason::EndTurn
+    );
+}

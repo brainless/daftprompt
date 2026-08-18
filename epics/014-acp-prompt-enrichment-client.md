@@ -726,7 +726,7 @@ must not create a production bypass in daftprompt.
 
 #### Acceptance Criteria
 
-- [ ] Scripted fixtures cover all supported update and permission paths without
+- [x] Scripted fixtures cover all supported update and permission paths without
   live credentials.
 - [ ] At least twelve live prompt records across three repositories are
   reviewed manually.
@@ -734,7 +734,7 @@ must not create a production bypass in daftprompt.
   as practical.
 - [ ] Missed, irrelevant, duplicate, stale, and injection-prone context is
   reported rather than reduced to one quality score.
-- [ ] Formatter or budget changes create a new version and can be compared with
+- [x] Formatter or budget changes create a new version and can be compared with
   earlier records.
 - [ ] The evidence identifies concrete entry criteria for a later local builder
   LLM experiment.
@@ -811,14 +811,23 @@ The exact UI file split may evolve, but the dependency direction is required.
 |---|---|
 | `Cargo.toml` | Add ACP and prompt-enrichment workspace crates/dependencies. |
 | `crates/daftprompt-acp/` | Typed ACP client, process supervision, stdio transport, sessions, updates, permissions, and fixtures. |
+| `crates/daftprompt-acp/fixtures/session_update_thinking.jsonl` | Fixture: agent_thought_chunk (thinking content block). |
+| `crates/daftprompt-acp/fixtures/session_update_plan.jsonl` | Fixture: plan with structured entries. |
+| `crates/daftprompt-acp/fixtures/session_update_tool_call.jsonl` | Fixture: tool_call (read tool). |
+| `crates/daftprompt-acp/fixtures/session_update_tool_update.jsonl` | Fixture: tool_call_update (completed). |
+| `crates/daftprompt-acp/src/bin/fake_adapter.rs` | Added permission_flow mode and new fixture references. |
+| `crates/daftprompt-acp/tests/typed_client.rs` | Added permission_flow end-to-end test. |
 | `crates/daftprompt-prompt-builder/` | Deterministic retrieval selection, budgets, trust labeling, and versioned prompt formatting. |
 | `crates/daftprompt-storage/` | Durable conversation and trace storage: sessions, turns, retrieval runs/candidates, ACP events, permission decisions, redaction. |
 | `src/coordinator.rs` | Async conversation coordinator wiring indexer, formatter, storage, and ACP runtime. |
+| `tests/coordinator.rs` | Added permission_flow and adapter_exit integration tests. |
 | `src/ui/conversation.rs` | Conversation surface: transcript, prompt editor, permission dialog, enrichment inspector. |
 | `src/` application modules | Conversation coordinator, durable trace repository, async event bridge, and configuration. |
 | `src/state.rs` | Renderable ACP conversation and enrichment-inspection state. |
 | `src/ui/render.rs` or focused UI modules | Conversation surface, transcript, enrichment inspector, and permission dialog. |
 | `epics/research/014-acp-prompt-enrichment-evaluation.md` | Manual raw-versus-enriched test records and conclusions. |
+| `epics/research/014-acp-prompt-enrichment-evaluation-worksheet.md` | Manual evaluation worksheet template (12 data points, 12+ prompts). |
+| `epics/research/014-evaluation-workflow.md` | How to run, inspect, and compare evaluation sessions. |
 | `README.md`, `DEVELOP.md`, `AGENTS.md` | User workflow, architecture, adapter development, invariants, and limitations. |
 
 `daftprompt-indexer` must not depend on either new crate. The prompt builder may
