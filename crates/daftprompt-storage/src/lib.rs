@@ -18,6 +18,35 @@ use rusqlite::{params, Connection};
 use schema::run_migrations;
 use std::path::{Path, PathBuf};
 
+/// Errors returned by the durable conversation store.
+#[derive(Debug)]
+pub enum StorageError {
+    /// Underlying SQLite failure.
+    Db(rusqlite::Error),
+    /// The enriched prompt may only be set exactly once per turn.
+    EnrichedPromptAlreadySet(i64),
+}
+
+impl std::fmt::Display for StorageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StorageError::Db(e) => write!(f, "database error: {e}"),
+            StorageError::EnrichedPromptAlreadySet(turn_id) => write!(
+                f,
+                "enriched prompt already set for turn {turn_id}; it can only be set once"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StorageError {}
+
+impl From<rusqlite::Error> for StorageError {
+    fn from(e: rusqlite::Error) -> Self {
+        StorageError::Db(e)
+    }
+}
+
 pub struct ConversationStore {
     db: Connection,
 }
@@ -319,6 +348,9 @@ impl ConversationStore {
         Ok(())
     }
 
+    /// Set the enriched prompt for a turn. The enriched prompt is set exactly
+    /// once when enrichment completes; a second call on a turn whose
+    /// `enriched_prompt` is already set is rejected rather than overwritten.
     pub fn set_enriched_prompt(
         &self,
         turn_id: i64,
@@ -326,7 +358,15 @@ impl ConversationStore {
         formatter_version: i64,
         budget_json: Option<&str>,
         retrieval_status: &str,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), StorageError> {
+        let existing: Option<String> = self.db.query_row(
+            "SELECT enriched_prompt FROM turns WHERE id = ?1",
+            params![turn_id],
+            |row| row.get(0),
+        )?;
+        if existing.is_some() {
+            return Err(StorageError::EnrichedPromptAlreadySet(turn_id));
+        }
         self.db.execute(
             "UPDATE turns SET enriched_prompt = ?1, formatter_version = ?2, budget_json = ?3, retrieval_status = ?4 WHERE id = ?5",
             params![enriched_prompt, formatter_version, budget_json, retrieval_status, turn_id],
@@ -653,6 +693,8 @@ impl ConversationStore {
         chosen_option_id: Option<&str>,
         outcome: &str,
     ) -> Result<i64> {
+        let redacted_tool = redact_secrets(tool_call_json);
+        let redacted_options = redact_secrets(offered_options_json);
         let now = Utc::now().to_rfc3339();
         self.db.execute(
             "INSERT INTO permission_decisions(event_id, turn_id, tool_call_json, offered_options_json, \
@@ -661,8 +703,8 @@ impl ConversationStore {
             params![
                 event_id,
                 turn_id,
-                tool_call_json,
-                offered_options_json,
+                redacted_tool,
+                redacted_options,
                 chosen_option_id,
                 outcome,
                 now,

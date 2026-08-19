@@ -1,10 +1,19 @@
 use daftprompt_storage::ConversationStore;
 
+/// Open a `ConversationStore` against a real database file in a temporary
+/// directory, as the migration / round-trip acceptance criterion requires.
+fn open_temp_store() -> (ConversationStore, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("conversations.db");
+    let store = ConversationStore::open(&path).unwrap();
+    (store, dir)
+}
+
 // --- Test 1: Migration test ---
 
 #[test]
 fn migration_creates_all_tables_and_version() {
-    let store = ConversationStore::open_in_memory().unwrap();
+    let (store, _dir) = open_temp_store();
 
     // Verify schema_version table exists and has version 1
     // (We go through the store's public API to confirm it works.)
@@ -23,7 +32,7 @@ fn migration_creates_all_tables_and_version() {
 
 #[test]
 fn round_trip_preserves_exact_text() {
-    let store = ConversationStore::open_in_memory().unwrap();
+    let (store, _dir) = open_temp_store();
 
     let session_id = store
         .create_session(
@@ -145,6 +154,47 @@ fn round_trip_preserves_exact_text() {
     assert_eq!(perms.len(), 1);
     assert_eq!(perms[0].chosen_option_id.as_deref(), Some("allow"));
     assert_eq!(perms[0].outcome, "selected");
+}
+
+// --- Test: enriched_prompt is set exactly once ---
+
+#[test]
+fn enriched_prompt_is_set_exactly_once() {
+    let (store, _dir) = open_temp_store();
+    let sid = store
+        .create_session("enr-once", "/tmp", None, None, None, None, None, None, None)
+        .unwrap();
+    let tid = store.create_turn(sid, "test").unwrap();
+
+    store
+        .set_enriched_prompt(
+            tid,
+            "<original-request>test</original-request>",
+            1,
+            None,
+            "ok",
+        )
+        .unwrap();
+
+    let err = store
+        .set_enriched_prompt(
+            tid,
+            "<original-request>overwrite</original-request>",
+            1,
+            None,
+            "ok",
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        daftprompt_storage::StorageError::EnrichedPromptAlreadySet(t) if t == tid
+    ));
+
+    let turn = store.get_turn(tid).unwrap().unwrap();
+    assert_eq!(
+        turn.enriched_prompt.as_deref(),
+        Some("<original-request>test</original-request>")
+    );
 }
 
 // --- Test 3: State transition test ---
@@ -361,8 +411,16 @@ fn permission_round_trip_preserves_option_ids() {
     assert_eq!(perms.len(), 1);
     assert_eq!(perms[0].chosen_option_id.as_deref(), Some("opt-allow-once"));
     assert_eq!(perms[0].outcome, "selected");
-    assert_eq!(perms[0].tool_call_json, tool_call_json);
-    assert_eq!(perms[0].offered_options_json, options_json);
+    // Permission payloads are stored through redaction (which re-serializes
+    // JSON compactly), so compare semantic equality rather than exact text.
+    let stored_tool: serde_json::Value =
+        serde_json::from_str(&perms[0].tool_call_json).unwrap();
+    let expected_tool: serde_json::Value = serde_json::from_str(tool_call_json).unwrap();
+    assert_eq!(stored_tool, expected_tool);
+    let stored_options: serde_json::Value =
+        serde_json::from_str(&perms[0].offered_options_json).unwrap();
+    let expected_options: serde_json::Value = serde_json::from_str(options_json).unwrap();
+    assert_eq!(stored_options, expected_options);
 }
 
 #[test]
@@ -389,4 +447,43 @@ fn permission_cancelled_has_null_chosen_option() {
     assert_eq!(perms.len(), 1);
     assert_eq!(perms[0].chosen_option_id, None);
     assert_eq!(perms[0].outcome, "cancelled");
+}
+
+// --- Test: permission payloads are redacted before storage ---
+
+#[test]
+fn permission_payload_secrets_are_redacted() {
+    let (store, _dir) = open_temp_store();
+    let sid = store
+        .create_session("perm-redact", "/tmp", None, None, None, None, None, None, None)
+        .unwrap();
+    let tid = store.create_turn(sid, "run").unwrap();
+    let ev_id = store
+        .append_event(sid, Some(tid), "inbound", "permission_request", None, None, r#"{}"#)
+        .unwrap();
+
+    let tool_call_json =
+        r#"{"tool": "shell", "command": "ls", "authorization": "Bearer eyJhbGciOiJIUzI1NiJ9.secret"}"#;
+    let options_json = r#"[{"id": "allow", "label": "Allow", "api_key": "AKIA1234567890ABCDEF"}]"#;
+
+    store
+        .record_permission(
+            ev_id,
+            tid,
+            tool_call_json,
+            options_json,
+            Some("allow"),
+            "selected",
+        )
+        .unwrap();
+
+    let perms = store.get_permissions_for_turn(tid).unwrap();
+    assert_eq!(perms.len(), 1);
+    let stored_tool = &perms[0].tool_call_json;
+    let stored_options = &perms[0].offered_options_json;
+    assert!(!stored_tool.contains("Bearer eyJhbGciOiJIUzI1NiJ9.secret"));
+    assert!(stored_tool.contains("[REDACTED]"));
+    assert!(stored_tool.contains("ls"));
+    assert!(!stored_options.contains("AKIA1234567890ABCDEF"));
+    assert!(stored_options.contains("[REDACTED]"));
 }

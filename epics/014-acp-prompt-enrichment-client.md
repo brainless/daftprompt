@@ -521,7 +521,23 @@ preservation of normal values), and permission round-trip (option IDs and
 cancelled outcome).
 
 `cargo check -p daftprompt-storage` and `cargo test -p daftprompt-storage`
-both pass (28/28 tests including unit tests).
+both pass (30/30 tests including unit tests).
+
+**Reopened-hardening pass (review follow-up):** three items from the review of
+Tasks 3–6 are resolved here.
+
+- `record_permission()` now passes both `tool_call_json` and
+  `offered_options_json` through `redact_secrets()` before storage, so
+  permission payloads cannot persist tokens, Bearer/Basic auth headers, or
+  credentials. Covered by `permission_payload_secrets_are_redacted`.
+- The migration and round-trip tests now open the store against a real on-disk
+  DB file in a temporary directory (via a `open_temp_store()` helper) instead
+  of `open_in_memory()`, satisfying "tests pass in a temporary directory".
+- `set_enriched_prompt()` is now single-set: it rejects overwriting a turn
+  whose `enriched_prompt` is already set with the typed
+  `StorageError::EnrichedPromptAlreadySet` instead of silently overwriting,
+  matching the epic's "set exactly once" invariant. Covered by
+  `enriched_prompt_is_set_exactly_once`.
 
 #### Acceptance Criteria
 
