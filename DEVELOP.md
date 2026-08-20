@@ -137,10 +137,10 @@ daftprompt/
 
 ```bash
 cargo test --workspace                    # all tests (207+)
-cargo test -p daftprompt-acp              # ACP client + fixtures (12 tests)
+cargo test -p daftprompt-acp              # ACP client + fixtures (18 tests)
 cargo test -p daftprompt-prompt-builder   # golden prompt tests (11 tests)
-cargo test -p daftprompt-storage          # durable store tests (28 tests)
-cargo test --test coordinator             # end-to-end coordinator tests (5 tests)
+cargo test -p daftprompt-storage          # durable store tests (30 tests)
+cargo test --test coordinator             # end-to-end coordinator tests (12 tests)
 ```
 
 The `acp-fake-adapter` binary (built automatically by tests) replays captured

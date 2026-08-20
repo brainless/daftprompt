@@ -404,6 +404,32 @@ fn assert_early_exit_shaped(error: &AcpError) {
     }
 }
 
+/// The ACP wire protocol's own `auth_required` JSON-RPC error (code -32000,
+/// `ErrorCode::AuthRequired`) must be classified as
+/// `AcpError::AuthenticationRequired`, not the generic `Protocol` variant --
+/// this is real, distinguishable protocol data (codex-acp's own
+/// `RequestError.authRequired()`), not a heuristic (Task 6).
+#[tokio::test]
+async fn auth_required_error_is_distinguishable() {
+    let (client, _events) = launch(Some("auth_required"));
+    client.initialize().await.expect("initialize should still succeed");
+
+    let error = client
+        .new_session("/tmp/daftprompt-acp-test-repo")
+        .await
+        .expect_err("session/new should fail with an auth-required error");
+
+    match error {
+        AcpError::AuthenticationRequired { message } => {
+            assert!(
+                !message.is_empty(),
+                "expected the adapter's auth-required message to be preserved"
+            );
+        }
+        other => panic!("expected AcpError::AuthenticationRequired, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn permission_flow_mode_sends_permission_before_prompt_response() {
     let (client, mut events) = launch(Some("permission_flow"));

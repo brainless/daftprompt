@@ -103,6 +103,26 @@ fn launch_fake_adapter_with_mode_and_timeout(
     )
 }
 
+/// Like `launch_fake_adapter_with_mode`, but also sets
+/// `FAKE_ADAPTER_CLOSE_MARKER` so a test can observe (via the marker file's
+/// existence) whether `session/close` was actually sent, without parsing the
+/// adapter's own stdio traffic.
+fn launch_fake_adapter_with_mode_and_close_marker(
+    mode: &str,
+    marker_path: &std::path::Path,
+) -> (AcpClient, daftprompt_acp::AcpEvents) {
+    let profile = AdapterLaunchProfile::new(fake_adapter_path())
+        .env("FAKE_ADAPTER_MODE", mode)
+        .env("FAKE_ADAPTER_CLOSE_MARKER", marker_path.to_string_lossy());
+    AcpClient::launch(
+        profile,
+        AcpClientConfig {
+            request_timeout: Duration::from_secs(5),
+            ..AcpClientConfig::default()
+        },
+    )
+}
+
 fn setup_coordinator() -> (
     mpsc::UnboundedSender<CoordinatorCommand>,
     mpsc::UnboundedReceiver<CoordinatorEvent>,
@@ -115,6 +135,7 @@ fn setup_coordinator() -> (
         retrieval_limit_per_source: 5,
         budget: SelectionBudget::default(),
         request_timeout: Duration::from_secs(5),
+        shutdown_grace: Duration::from_secs(2),
     };
     let (cmd_tx, evt_rx) = start_coordinator(indexer, store, acp_client, acp_events, config);
     (cmd_tx, evt_rx, repo_dir)
@@ -132,6 +153,32 @@ fn setup_coordinator_with_mode(mode: &str) -> (
         retrieval_limit_per_source: 5,
         budget: SelectionBudget::default(),
         request_timeout: Duration::from_secs(5),
+        shutdown_grace: Duration::from_secs(2),
+    };
+    let (cmd_tx, evt_rx) = start_coordinator(indexer, store, acp_client, acp_events, config);
+    (cmd_tx, evt_rx, repo_dir)
+}
+
+/// Like `setup_coordinator_with_mode`, but launches the fake adapter with
+/// `FAKE_ADAPTER_CLOSE_MARKER` set to `marker_path` so a test can assert
+/// whether `session/close` was sent (Task 6: capability-gated `session/close`).
+fn setup_coordinator_with_mode_and_close_marker(
+    mode: &str,
+    marker_path: &std::path::Path,
+) -> (
+    mpsc::UnboundedSender<CoordinatorCommand>,
+    mpsc::UnboundedReceiver<CoordinatorEvent>,
+    tempfile::TempDir,
+) {
+    let (indexer, repo_dir) = setup_test_indexer();
+    let store = ConversationStore::open_in_memory().expect("in-memory store");
+    let (acp_client, acp_events) =
+        launch_fake_adapter_with_mode_and_close_marker(mode, marker_path);
+    let config = CoordinatorConfig {
+        retrieval_limit_per_source: 5,
+        budget: SelectionBudget::default(),
+        request_timeout: Duration::from_secs(5),
+        shutdown_grace: Duration::from_secs(2),
     };
     let (cmd_tx, evt_rx) = start_coordinator(indexer, store, acp_client, acp_events, config);
     (cmd_tx, evt_rx, repo_dir)
@@ -157,6 +204,7 @@ fn setup_coordinator_with_store_path(
         retrieval_limit_per_source: 5,
         budget: SelectionBudget::default(),
         request_timeout,
+        shutdown_grace: Duration::from_secs(2),
     };
     let (cmd_tx, evt_rx) = start_coordinator(indexer, store, acp_client, acp_events, config);
     (cmd_tx, evt_rx, repo_dir)
@@ -184,6 +232,17 @@ where
         }
     }
     collected
+}
+
+/// Sends `Shutdown` and waits (bounded) for the coordinator to confirm it
+/// via the `done` oneshot, exercising the same real shutdown path
+/// `Application::shutdown_coordinator` uses in `src/main.rs` (Task 6).
+async fn shutdown_and_wait(cmd_tx: &mpsc::UnboundedSender<CoordinatorCommand>) {
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+    if cmd_tx.send(CoordinatorCommand::Shutdown { done: done_tx }).is_err() {
+        return;
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(5), done_rx).await;
 }
 
 #[tokio::test]
@@ -236,7 +295,7 @@ async fn submit_prompt_end_to_end() {
         });
     assert_eq!(completed, Some("EndTurn"), "expected EndTurn stop reason");
 
-    let _ = cmd_tx.send(CoordinatorCommand::Shutdown);
+    shutdown_and_wait(&cmd_tx).await;
 }
 
 #[tokio::test]
@@ -288,7 +347,7 @@ async fn double_submit_is_rejected() {
         "first turn should complete with EndTurn"
     );
 
-    let _ = cmd_tx.send(CoordinatorCommand::Shutdown);
+    shutdown_and_wait(&cmd_tx).await;
 }
 
 #[tokio::test]
@@ -330,7 +389,7 @@ async fn cancel_turn_transitions_to_cancelled() {
         completed
     );
 
-    let _ = cmd_tx.send(CoordinatorCommand::Shutdown);
+    shutdown_and_wait(&cmd_tx).await;
 }
 
 #[tokio::test]
@@ -396,7 +455,7 @@ async fn permission_flow_emits_permission_required_and_completes() {
         completed
     );
 
-    let _ = cmd_tx.send(CoordinatorCommand::Shutdown);
+    shutdown_and_wait(&cmd_tx).await;
 }
 
 #[tokio::test]
@@ -422,7 +481,7 @@ async fn adapter_exit_during_prompt_emits_turn_failed() {
         "expected an AdapterError or TurnFailed event when the adapter exits early"
     );
 
-    let _ = cmd_tx.send(CoordinatorCommand::Shutdown);
+    shutdown_and_wait(&cmd_tx).await;
 }
 
 #[tokio::test]
@@ -490,7 +549,7 @@ async fn persistence_failure_blocks_acp_dispatch() {
         "expected TurnFailed once persistence failed"
     );
 
-    let _ = cmd_tx.send(CoordinatorCommand::Shutdown);
+    shutdown_and_wait(&cmd_tx).await;
 }
 
 #[tokio::test]
@@ -546,7 +605,7 @@ async fn cancel_during_retrieval_is_processed() {
     });
     assert_eq!(completed, Some("Cancelled"));
 
-    let _ = cmd_tx.send(CoordinatorCommand::Shutdown);
+    shutdown_and_wait(&cmd_tx).await;
 }
 
 #[tokio::test]
@@ -566,6 +625,7 @@ async fn retry_turn_redispatches_failed_turn() {
         retrieval_limit_per_source: 5,
         budget: SelectionBudget::default(),
         request_timeout: Duration::from_millis(1500),
+        shutdown_grace: Duration::from_secs(2),
     };
     let (cmd_tx, mut evt_rx) = start_coordinator(indexer, store, acp_client, acp_events, config);
 
@@ -638,7 +698,7 @@ async fn retry_turn_redispatches_failed_turn() {
         "expected the retried turn to fail again (still-hanging adapter)"
     );
 
-    let _ = cmd_tx.send(CoordinatorCommand::Shutdown);
+    shutdown_and_wait(&cmd_tx).await;
 }
 
 #[tokio::test]
@@ -702,5 +762,100 @@ async fn late_events_are_not_misattributed_to_a_newer_turn() {
         }
     }
 
-    let _ = cmd_tx.send(CoordinatorCommand::Shutdown);
+    shutdown_and_wait(&cmd_tx).await;
+}
+
+/// Task 6, Design Decision #3: "Session close should be used when
+/// advertised." The fixture adapter's normal `initialize_response.json`
+/// advertises `agentCapabilities.sessionCapabilities.close`, so `Shutdown`
+/// must send `session/close` -- observed here via the fake adapter's
+/// marker-file side channel rather than by inspecting protocol traffic
+/// directly.
+#[tokio::test]
+async fn shutdown_calls_close_session_when_advertised() {
+    let marker_dir = tempfile::tempdir().expect("marker tempdir");
+    let marker_path = marker_dir.path().join("close-called");
+    let (cmd_tx, mut evt_rx, _repo) =
+        setup_coordinator_with_mode_and_close_marker("normal", &marker_path);
+
+    let _ = collect_until(&mut evt_rx, |e| {
+        matches!(e, CoordinatorEvent::SessionCreated { .. })
+    })
+    .await;
+
+    shutdown_and_wait(&cmd_tx).await;
+
+    assert!(
+        marker_path.exists(),
+        "expected session/close to be sent when the adapter advertises support for it"
+    );
+}
+
+/// The inverse of `shutdown_calls_close_session_when_advertised`: the
+/// `no_session_close` fake-adapter mode omits
+/// `agentCapabilities.sessionCapabilities.close` from its `initialize`
+/// response entirely, so `Shutdown` must skip `session/close` and go
+/// straight to `AcpClient::shutdown` instead.
+#[tokio::test]
+async fn shutdown_skips_close_session_when_not_advertised() {
+    let marker_dir = tempfile::tempdir().expect("marker tempdir");
+    let marker_path = marker_dir.path().join("close-called");
+    let (cmd_tx, mut evt_rx, _repo) =
+        setup_coordinator_with_mode_and_close_marker("no_session_close", &marker_path);
+
+    let _ = collect_until(&mut evt_rx, |e| {
+        matches!(e, CoordinatorEvent::SessionCreated { .. })
+    })
+    .await;
+
+    shutdown_and_wait(&cmd_tx).await;
+
+    assert!(
+        !marker_path.exists(),
+        "session/close must not be sent when the adapter does not advertise support for it"
+    );
+}
+
+/// Task 6: the real application-exit path must actually call
+/// `AcpClient::shutdown` and wait (bounded by the grace period) for the
+/// adapter's child process, rather than firing a non-blocking command and
+/// racing ahead. This exercises the harder case: a prompt is still
+/// in-flight (the "hang" fake-adapter mode never answers `session/prompt`)
+/// when `Shutdown` arrives. `Shutdown` must abort that in-flight prompt task
+/// -- not merely send a `session/cancel` notification and hope -- so the
+/// `Arc<AcpClient>` can be uniquely reclaimed and `.shutdown()` can run
+/// promptly, well inside the 2s `shutdown_grace` configured here and nowhere
+/// near the fake adapter's request timeout (which "hang" mode would
+/// otherwise never resolve within this test's lifetime).
+#[tokio::test]
+async fn shutdown_completes_promptly_while_a_prompt_is_hung() {
+    let (cmd_tx, mut evt_rx, _repo) = setup_coordinator_with_mode("hang");
+
+    let _ = collect_until(&mut evt_rx, |e| {
+        matches!(e, CoordinatorEvent::SessionCreated { .. })
+    })
+    .await;
+
+    cmd_tx
+        .send(CoordinatorCommand::SubmitPrompt {
+            original: "will hang forever".to_string(),
+        })
+        .unwrap();
+    // Wait until the prompt has actually been dispatched over ACP (past
+    // retrieval), so `prompt_handle` is genuinely `Some` when `Shutdown` is
+    // sent below.
+    let _ = collect_until(&mut evt_rx, |e| {
+        matches!(e, CoordinatorEvent::EnrichedPromptReady { .. })
+    })
+    .await;
+
+    let start = std::time::Instant::now();
+    shutdown_and_wait(&cmd_tx).await;
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(4),
+        "Shutdown should abort the hung in-flight prompt and complete within its \
+         configured 2s shutdown_grace, not block on the adapter ever responding; took {elapsed:?}"
+    );
 }

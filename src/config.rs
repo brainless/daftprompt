@@ -116,6 +116,7 @@ impl DaftpromptConfig {
                 per_source_quota: SourceQuota::default(),
             },
             request_timeout: Duration::from_secs(self.adapter.request_timeout_secs),
+            shutdown_grace: self.shutdown_grace_duration(),
         }
     }
 

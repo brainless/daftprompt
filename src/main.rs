@@ -604,6 +604,17 @@ impl winit::application::ApplicationHandler for Application {
                                     .expect("ConversationStore::open")
                             }
                         };
+                        // `AcpClient::launch` and `start_coordinator` call
+                        // `tokio::spawn`, which requires a runtime context on
+                        // the calling thread (`Handle::current()`); `resumed`
+                        // runs on the winit event-loop thread, not inside
+                        // `rt.block_on`, so without entering it here those
+                        // calls would panic with "there is no reactor
+                        // running". The guard only needs to be live for the
+                        // duration of the `tokio::spawn` calls themselves --
+                        // spawned tasks keep running on `rt`'s own worker
+                        // threads afterward regardless of this thread's state.
+                        let _guard = rt.enter();
                         let launch_profile = self.config.to_launch_profile();
                         let (acp_client, acp_events) = AcpClient::launch(
                             launch_profile,
@@ -622,6 +633,7 @@ impl winit::application::ApplicationHandler for Application {
                             acp_events,
                             coord_config,
                         );
+                        drop(_guard);
                         self.coordinator_cmd = Some(cmd_tx);
                         self.coordinator_evt = Some(evt_rx);
                         self.tokio_runtime = Some(rt);
@@ -1075,9 +1087,37 @@ impl Application {
         Ok(())
     }
 
+    /// Sends `Shutdown` to the coordinator and blocks (bounded by the
+    /// configured shutdown grace period) until it confirms the adapter
+    /// child process has been reaped or force-killed. Called from
+    /// `CloseRequested` and screenshot+exit -- both synchronous winit
+    /// callbacks -- so this uses `Runtime::block_on` rather than `.await`
+    /// (Task 6: "waits for the child... bounded by a grace period" must
+    /// actually block real application exit, not just fire a
+    /// non-blocking command).
     fn shutdown_coordinator(&mut self) {
-        if let Some(cmd) = self.coordinator_cmd.take() {
-            let _ = cmd.send(CoordinatorCommand::Shutdown);
+        let Some(cmd) = self.coordinator_cmd.take() else {
+            self.coordinator_evt = None;
+            return;
+        };
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        if cmd.send(CoordinatorCommand::Shutdown { done: done_tx }).is_ok() {
+            if let Some(rt) = self.tokio_runtime.as_ref() {
+                // `AcpClient::shutdown` already applies `shutdown_grace`
+                // internally; this outer bound adds a small buffer for the
+                // coordinator's own bookkeeping around that call so a stuck
+                // coordinator can never block application exit indefinitely.
+                let bound = self.config.shutdown_grace_duration() + std::time::Duration::from_secs(2);
+                match rt.block_on(tokio::time::timeout(bound, done_rx)) {
+                    Ok(Ok(())) => log::info!("Coordinator shutdown confirmed"),
+                    Ok(Err(_)) => {
+                        log::warn!("Coordinator ended without confirming shutdown")
+                    }
+                    Err(_) => log::warn!(
+                        "Coordinator shutdown did not confirm within the grace period"
+                    ),
+                }
+            }
         }
         self.coordinator_evt = None;
     }

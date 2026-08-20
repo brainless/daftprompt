@@ -50,6 +50,19 @@ enum Mode {
     EarlyExit,
     Hang,
     PermissionFlow,
+    /// Serves `initialize_response` with `agentCapabilities.sessionCapabilities.close`
+    /// removed, so daftprompt-acp/coordinator tests can prove `session/close`
+    /// is skipped when the adapter genuinely does not advertise it (Epic
+    /// 014 Task 6, Design Decision #3: "Session close should be used when
+    /// advertised").
+    NoSessionClose,
+    /// Answers `session/new` with the ACP wire protocol's own `auth_required`
+    /// JSON-RPC error (code -32000), matching codex-acp's own
+    /// `RequestError.authRequired()` call site in `CodexAcpServer.ts` when
+    /// its `authRequired()` check fails and no default auth request is
+    /// configured. Used to prove `AcpError::AuthenticationRequired` is
+    /// reached through real protocol data, not a heuristic (Task 6).
+    AuthRequired,
 }
 
 impl Mode {
@@ -60,6 +73,8 @@ impl Mode {
             Ok("early_exit") => Mode::EarlyExit,
             Ok("hang") => Mode::Hang,
             Ok("permission_flow") => Mode::PermissionFlow,
+            Ok("no_session_close") => Mode::NoSessionClose,
+            Ok("auth_required") => Mode::AuthRequired,
             _ => Mode::Normal,
         }
     }
@@ -126,7 +141,13 @@ async fn main() {
 
         match method {
             "initialize" => {
-                let resp: Value = serde_json::from_str(fixture("initialize_response")).unwrap();
+                let mut resp: Value = serde_json::from_str(fixture("initialize_response")).unwrap();
+                if mode == Mode::NoSessionClose {
+                    resp["result"]["agentCapabilities"]["sessionCapabilities"]
+                        .as_object_mut()
+                        .expect("sessionCapabilities is an object in the fixture")
+                        .remove("close");
+                }
                 let resp = with_id(resp, id.as_ref().unwrap());
                 write_line(&mut stdout, &resp).await;
 
@@ -149,6 +170,22 @@ async fn main() {
                 }
             }
             "session/new" => {
+                if mode == Mode::AuthRequired {
+                    write_line(
+                        &mut stdout,
+                        &json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {
+                                "code": -32000,
+                                "message": "Authentication required but no default auth request provided"
+                            }
+                        }),
+                    )
+                    .await;
+                    continue;
+                }
+
                 let resp: Value = serde_json::from_str(fixture("session_new_response")).unwrap();
                 let resp = with_id(resp, id.as_ref().unwrap());
                 write_line(&mut stdout, &resp).await;
@@ -382,6 +419,13 @@ async fn main() {
                 // behavior in the Task 0 spike notes.
             }
             "session/close" => {
+                // Test-observable marker: writes an empty file at
+                // `FAKE_ADAPTER_CLOSE_MARKER`, if set, so a test can assert
+                // whether `session/close` was (not) sent without needing to
+                // parse this process's stdio traffic itself.
+                if let Ok(marker_path) = env::var("FAKE_ADAPTER_CLOSE_MARKER") {
+                    let _ = std::fs::write(marker_path, b"");
+                }
                 write_line(&mut stdout, &json!({"jsonrpc":"2.0","id": id, "result": {}})).await;
             }
             "" => {

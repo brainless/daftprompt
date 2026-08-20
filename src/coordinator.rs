@@ -13,7 +13,7 @@ use daftprompt_prompt_builder::{
     RetrievalSnapshot, RetrievalStatus, SelectionBudget,
 };
 use daftprompt_storage::ConversationStore;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 
 // ── Types ──
@@ -22,6 +22,9 @@ pub struct CoordinatorConfig {
     pub retrieval_limit_per_source: usize,
     pub budget: SelectionBudget,
     pub request_timeout: Duration,
+    /// Bound applied to [`AcpClient::shutdown`] on the real application exit
+    /// path (Design Decision #8, Task 6). Not consulted by anything else.
+    pub shutdown_grace: Duration,
 }
 
 impl Default for CoordinatorConfig {
@@ -30,6 +33,7 @@ impl Default for CoordinatorConfig {
             retrieval_limit_per_source: 10,
             budget: SelectionBudget::default(),
             request_timeout: Duration::from_secs(60),
+            shutdown_grace: Duration::from_secs(10),
         }
     }
 }
@@ -47,7 +51,12 @@ pub enum CoordinatorCommand {
         request_id: PermissionRequestId,
         outcome: PermissionOutcome,
     },
-    Shutdown,
+    /// Cancels in-flight work, closes the session (if advertised), and calls
+    /// [`AcpClient::shutdown`] to reap or force-kill the adapter child
+    /// process. `done` fires once that is confirmed, bounded by
+    /// [`CoordinatorConfig::shutdown_grace`], so a real caller can block
+    /// application exit on it (Task 6).
+    Shutdown { done: oneshot::Sender<()> },
 }
 
 pub enum CoordinatorEvent {
@@ -115,6 +124,7 @@ pub enum AdapterErrorKind {
     InvalidPermissionOption,
     UnknownPermissionRequest,
     ShuttingDown,
+    AuthenticationRequired,
     Other,
 }
 
@@ -134,6 +144,9 @@ impl AdapterErrorKind {
             }
             daftprompt_acp::AcpError::UnknownPermissionRequest => Self::UnknownPermissionRequest,
             daftprompt_acp::AcpError::ShuttingDown => Self::ShuttingDown,
+            daftprompt_acp::AcpError::AuthenticationRequired { .. } => {
+                Self::AuthenticationRequired
+            }
             daftprompt_acp::AcpError::Internal(_) => Self::Other,
         }
     }
@@ -150,8 +163,30 @@ impl AdapterErrorKind {
             Self::InvalidPermissionOption => "Invalid permission option",
             Self::UnknownPermissionRequest => "Unknown permission request",
             Self::ShuttingDown => "Shutting down",
+            Self::AuthenticationRequired => "Authentication required",
             Self::Other => "Adapter error",
         }
+    }
+}
+
+/// Builds the transcript-facing error message for an ACP failure, adding an
+/// actionable authentication hint for [`daftprompt_acp::AcpError::AuthenticationRequired`]
+/// (the ACP wire protocol's `auth_required` JSON-RPC error). daftprompt has
+/// no interactive authentication UI (Epic 014 non-goals), so the hint points
+/// at codex-acp's documented non-interactive auth flow instead: the
+/// `CODEX_API_KEY`/`OPENAI_API_KEY` environment variables, or a
+/// `DEFAULT_AUTH_REQUEST` configured for the adapter process (see
+/// `~/Projects/codex-acp/README.md`'s "Authentication" section). Every other
+/// error kind falls back to the plain `Display` message.
+fn authentication_error_message(error: &daftprompt_acp::AcpError, context: &str) -> String {
+    match error {
+        daftprompt_acp::AcpError::AuthenticationRequired { .. } => format!(
+            "{context}: {error}. This adapter requires authentication before it can \
+             process prompts. Set CODEX_API_KEY or OPENAI_API_KEY in the adapter's \
+             environment (--adapter-env), or configure DEFAULT_AUTH_REQUEST, before \
+             starting a conversation."
+        ),
+        _ => format!("{context}: {error}"),
     }
 }
 
@@ -216,7 +251,7 @@ async fn run(
         Ok(info) => info,
         Err(e) => {
             let _ = events.send(CoordinatorEvent::AdapterError {
-                error: format!("ACP initialize failed: {e}"),
+                error: authentication_error_message(&e, "ACP initialize failed"),
                 kind: AdapterErrorKind::from_acp_error(&e),
             });
             return;
@@ -228,7 +263,7 @@ async fn run(
         Ok(id) => id,
         Err(e) => {
             let _ = events.send(CoordinatorEvent::AdapterError {
-                error: format!("ACP session/new failed: {e}"),
+                error: authentication_error_message(&e, "ACP session/new failed"),
                 kind: AdapterErrorKind::from_acp_error(&e),
             });
             return;
@@ -277,6 +312,18 @@ async fn run(
         "Coordinator started: session_db_id={session_db_id}, acp_session={acp_session_id}"
     );
 
+    // Design Decision #3: "Session close should be used when advertised."
+    // `agentCapabilities.sessionCapabilities.close` is `Some(..)` (even
+    // `Some(SessionCloseCapabilities::default())`) only when the adapter
+    // actually advertises `session/close` support; `None` means it was
+    // omitted from the response, i.e. not advertised.
+    let session_close_supported = init_info
+        .agent_capabilities
+        .session_capabilities
+        .close
+        .is_some();
+    let shutdown_grace = config.shutdown_grace;
+
     // Wrap acp_client in Arc so spawned prompt tasks can share it.
     let acp_client = Arc::new(acp_client);
 
@@ -302,6 +349,7 @@ async fn run(
     let mut dispatched_turn_id: Option<i64> = None;
     let mut pending_permissions: HashMap<PermissionRequestId, PendingPermission> = HashMap::new();
     let mut running = true;
+    let mut shutdown_done: Option<oneshot::Sender<()>> = None;
 
     while running {
         let command = tokio::select! {
@@ -485,15 +533,71 @@ async fn run(
                 }
             }
 
-            CoordinatorCommand::Shutdown => {
-                // If a prompt is in flight, cancel it first.
-                if prompt_handle.is_some() {
+            CoordinatorCommand::Shutdown { done } => {
+                // `AcpClient::shutdown` takes `self` by value, but `acp_client`
+                // is an `Arc` shared with the in-flight prompt task's spawned
+                // future (see `finish_preparation`/`RetryTurn`). It must be
+                // the sole owner before it can call `.shutdown()` below, so
+                // every clone has to be dropped first. `prepare_handle`
+                // never clones `acp_client` (retrieval only touches the
+                // indexer), so only `prompt_handle` matters here: abort it
+                // and await the `JoinHandle` so the aborted task -- and the
+                // `Arc` clone it was holding -- is actually gone, not just
+                // requested-to-stop, before `Arc::try_unwrap` is attempted.
+                if let Some(handle) = prompt_handle.take() {
                     let _ = acp_client.cancel(acp_session_id.clone());
+                    handle.abort();
+                    let _ = handle.await;
                 }
-                let _ = acp_client.close_session(acp_session_id.clone()).await;
+                if let Some(handle) = prepare_handle.take() {
+                    handle.abort();
+                    let _ = handle.await;
+                }
+
+                if session_close_supported {
+                    let _ = acp_client.close_session(acp_session_id.clone()).await;
+                }
+
                 running = false;
+                shutdown_done = Some(done);
             }
         }
+    }
+
+    // Every place that clones `acp_client` (the `RetryTurn` command handler
+    // and `finish_preparation`) immediately stores the resulting task's
+    // `JoinHandle` in `prompt_handle`, and `prepare_handle` never clones it
+    // at all -- so aborting and awaiting both handles above (on the
+    // `Shutdown` path) or simply never having started a turn (on the
+    // `commands.recv() => None` path, e.g. `cmd_tx` dropped without an
+    // explicit `Shutdown`) leaves `acp_client` uniquely owned here. Fall
+    // back to a short bounded wait rather than asserting, in case that
+    // invariant is ever violated by a future change.
+    let acp_client = match Arc::try_unwrap(acp_client) {
+        Ok(client) => Some(client),
+        Err(shared) => {
+            let deadline = Instant::now() + shutdown_grace;
+            loop {
+                if Arc::strong_count(&shared) == 1 {
+                    break Arc::try_unwrap(shared).ok();
+                }
+                if Instant::now() >= deadline {
+                    log::warn!(
+                        "AcpClient still shared at shutdown after grace period; adapter process may not be reaped"
+                    );
+                    break None;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    };
+    if let Some(client) = acp_client {
+        if let Err(e) = client.shutdown(shutdown_grace).await {
+            log::warn!("AcpClient::shutdown did not complete cleanly: {e}");
+        }
+    }
+    if let Some(done) = shutdown_done {
+        let _ = done.send(());
     }
 }
 

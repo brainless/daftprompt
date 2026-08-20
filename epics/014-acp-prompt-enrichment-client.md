@@ -745,7 +745,7 @@ unimplemented, separately-scoped follow-up, not addressed here.
   Authentication-required is still not distinguishable because
   `daftprompt-acp`'s `AcpError` has no such variant (see Task 6).
 
-### Task 6: Add configuration and lifecycle handling — DONE
+### Task 6: Add configuration and lifecycle handling — DONE (hardened)
 
 Add explicit configuration for the adapter executable, arguments, permitted
 environment overrides, request timeout, retrieval budgets, and trace location.
@@ -782,6 +782,55 @@ adapter identity in the transcript system message.
 
 `cargo check --workspace` passes. `cargo test --workspace` passes (199/199).
 
+**Reopened-hardening pass (review follow-up):** three items from the review of
+Tasks 3-6 are resolved here, plus one latent bug found while fixing them.
+
+- **Bounded shutdown fallback was implemented but never invoked.**
+  `AcpClient::shutdown(grace)` (cancel, wait, force-kill) existed in
+  `daftprompt-acp` but only its own tests called it; real application exit
+  just sent a coordinator command and moved on, dropping `AcpClient` without
+  ever calling `.shutdown()`. Fixed: `CoordinatorCommand::Shutdown` now
+  carries a `oneshot::Sender<()>`; its handler aborts and awaits any
+  in-flight prompt/prepare task (so no other clone of the shared
+  `Arc<AcpClient>` outlives it), reclaims sole ownership via
+  `Arc::try_unwrap` (falling back to a bounded `strong_count` poll), calls
+  `.shutdown(shutdown_grace)`, and signals the oneshot. `src/main.rs`'s
+  `shutdown_coordinator()` now blocks on that signal (via
+  `Runtime::block_on` + an outer timeout) from both `CloseRequested` and
+  screenshot+exit, so real application exit genuinely waits for the adapter
+  child to be reaped or force-killed instead of racing ahead.
+- **`session/close` is now gated on advertised capability**, per Design
+  Decision #3: the coordinator reads
+  `init_info.agent_capabilities.session_capabilities.close.is_some()` once
+  at startup and only calls `close_session()` during `Shutdown` if the
+  adapter actually advertised support.
+- **Authentication-required is now genuinely detectable and surfaced.**
+  Confirmed this is real protocol data, not a heuristic: the ACP wire
+  protocol has its own `auth_required` JSON-RPC error (code -32000,
+  `ErrorCode::AuthRequired`), which codex-acp returns from `session/new`
+  when its internal auth check fails and no default auth request is
+  configured. Added `AcpError::AuthenticationRequired` (classified in
+  `AcpError::from_connection_error`), a matching `AdapterErrorKind`, and an
+  actionable transcript message pointing at codex-acp's non-interactive auth
+  flow (`CODEX_API_KEY`/`OPENAI_API_KEY` via `--adapter-env`, or
+  `DEFAULT_AUTH_REQUEST`) since daftprompt has no interactive auth UI
+  (non-goal).
+- **Bonus fix, found while wiring the above:** `AcpClient::launch` and
+  `start_coordinator` call `tokio::spawn` from `resumed()`, which runs on the
+  winit event-loop thread outside any `rt.block_on` context. Without a
+  runtime entered on that thread this panics ("there is no reactor running")
+  the moment a real adapter executable is actually found — meaning the
+  previous shutdown gap was masked in practice because a real launch never
+  got far enough to exercise it. Fixed with `let _guard = rt.enter();`
+  around the launch/coordinator-start calls in `src/main.rs`.
+- New/updated tests: `crates/daftprompt-acp/tests/typed_client.rs` gained
+  `auth_required_error_is_distinguishable`; `tests/coordinator.rs` gained
+  `shutdown_calls_close_session_when_advertised`,
+  `shutdown_skips_close_session_when_not_advertised`, and
+  `shutdown_completes_promptly_while_a_prompt_is_hung` (now 12/12 in that
+  file); `acp-fake-adapter` gained `auth_required` and `no_session_close`
+  modes to support them.
+
 #### Acceptance Criteria
 
 - [x] daftprompt can launch an installed `codex-acp` or an explicitly configured
@@ -791,11 +840,16 @@ adapter identity in the transcript system message.
 - [x] Adapter version and initialization metadata are displayed and recorded.
 - [x] Existing authentication may be used without daftprompt reading or storing
   credential files.
-- [x] Authentication-required is explained; interactive authentication UI is
-  explicitly deferred.
-- [x] Closing a session uses `session/close` when advertised.
-- [x] Application exit cancels active work, closes stdin, waits for the child,
-  and applies a bounded forced-termination fallback.
+- [x] Authentication-required is explained (via the real ACP `auth_required`
+  error, not a heuristic) with an actionable non-interactive-auth message;
+  interactive authentication UI remains explicitly deferred (non-goal).
+- [x] Closing a session uses `session/close` when advertised (now actually
+  checked against `agent_capabilities.session_capabilities.close`, not called
+  unconditionally).
+- [x] Application exit cancels active work, waits for the child, and applies a
+  bounded forced-termination fallback (`AcpClient::shutdown` is now actually
+  invoked and awaited on the real exit path, not just implemented and tested
+  in isolation).
 
 ### Task 7: Add replayable fixtures and manual evaluation workflow
 

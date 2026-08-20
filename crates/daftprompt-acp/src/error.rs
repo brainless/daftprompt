@@ -62,6 +62,20 @@ pub enum AcpError {
         negotiated: u16,
     },
 
+    /// The adapter reported that authentication is required before it can
+    /// process this request. This is the ACP wire protocol's own
+    /// `auth_required` JSON-RPC error (`ErrorCode::AuthRequired`, code
+    /// -32000 per the schema) -- a real, distinguishable signal, not a
+    /// heuristic. codex-acp returns this from `session/new` (and
+    /// potentially other requests) when its own `authRequired()` check
+    /// fails and no default auth request is configured (see
+    /// `CodexAcpServer.ts`'s `RequestError.authRequired()` call sites).
+    #[error("adapter requires authentication: {message}")]
+    AuthenticationRequired {
+        /// The adapter's error message, if any.
+        message: String,
+    },
+
     /// A well-formed JSON-RPC error response was returned by the adapter.
     #[error("adapter protocol error {code}: {message}")]
     Protocol {
@@ -106,6 +120,12 @@ impl AcpError {
     /// returned future into a distinguishable [`AcpError`] variant.
     #[must_use]
     pub fn from_connection_error(error: agent_client_protocol::Error) -> Self {
+        if error.code == agent_client_protocol::ErrorCode::AuthRequired {
+            return AcpError::AuthenticationRequired {
+                message: error.message.clone(),
+            };
+        }
+
         let detail = error
             .data
             .as_ref()
