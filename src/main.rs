@@ -12,6 +12,7 @@ use config::{AdapterArgs, DaftpromptConfig};
 use coordinator::{start_coordinator, CoordinatorCommand, CoordinatorEvent};
 use daftprompt_acp::{AcpClient, AcpClientConfig, PermissionOutcome};
 use daftprompt_indexer::{CommitData, Indexer, IndexerConfig, SymbolKind, UnifiedSearchHit};
+use daftprompt_prompt_builder::{RetrievalStatus, TruncationReason};
 use daftprompt_storage::ConversationStore;
 use state::AppState;
 use tokio::sync::mpsc;
@@ -1152,16 +1153,45 @@ fn apply_coordinator_event(event: CoordinatorEvent, state: &mut AppState) {
             enriched,
             ..
         } => {
+            let included_excerpts = enriched
+                .included
+                .iter()
+                .map(|excerpt| state::InspectorExcerpt {
+                    rank: excerpt.rank,
+                    source: excerpt.source.as_str().to_string(),
+                    identifier: excerpt.identifier.clone(),
+                    match_type: format!("{:?}", excerpt.match_type),
+                    text: excerpt.text.clone(),
+                    truncated: excerpt.truncated,
+                    truncation_reason: excerpt.truncation_reason.map(truncation_reason_label),
+                })
+                .collect();
+            let excluded_candidates = enriched
+                .excluded
+                .iter()
+                .map(|candidate| state::InspectorExcluded {
+                    rank: candidate.rank,
+                    source: candidate.source.as_str().to_string(),
+                    identifier: candidate.identifier.clone(),
+                    reason: candidate.reason.as_label(),
+                })
+                .collect();
+            let retrieval_status = match &enriched.retrieval_status {
+                RetrievalStatus::Ok => "ok".to_string(),
+                RetrievalStatus::Empty => "empty".to_string(),
+                RetrievalStatus::Error { message } => format!("error: {message}"),
+            };
+
             state.conversation.enrichment_inspector =
                 Some(state::EnrichmentInspectorState {
                     original_prompt: original,
-                    enriched_prompt: enriched,
-                    included_excerpts: Vec::new(),
-                    excluded_candidates: Vec::new(),
-                    retrieval_status: "ok".to_string(),
-                    formatter_version: 1,
-                    total_char_budget: 0,
-                    per_excerpt_char_limit: 0,
+                    enriched_prompt: enriched.text.clone(),
+                    included_excerpts,
+                    excluded_candidates,
+                    retrieval_status,
+                    formatter_version: enriched.formatter_version,
+                    total_char_budget: enriched.budget.total_char_budget,
+                    per_excerpt_char_limit: enriched.budget.per_excerpt_char_limit,
                 });
         }
         CoordinatorEvent::AcpSessionUpdate { update_json, .. } => {
@@ -1228,11 +1258,11 @@ fn apply_coordinator_event(event: CoordinatorEvent, state: &mut AppState) {
                 timestamp: timestamp_now(),
             });
         }
-        CoordinatorEvent::AdapterError { error } => {
+        CoordinatorEvent::AdapterError { error, kind } => {
             state.conversation.adapter_status.connected = false;
             state.conversation.entries.push(state::TranscriptEntry {
                 kind: state::TranscriptEntryKind::Error,
-                text: format!("Adapter error: {error}"),
+                text: format!("[{}] {error}", kind.label()),
                 timestamp: timestamp_now(),
             });
         }
@@ -1241,7 +1271,15 @@ fn apply_coordinator_event(event: CoordinatorEvent, state: &mut AppState) {
 
 /// Parse a session update JSON and add the appropriate transcript entry.
 fn parse_session_update(json: &str, state: &mut AppState) {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+    // The coordinator forwards `serde_json::to_string(&SessionUpdate)`
+    // (`daftprompt_acp::SessionUpdate`, an internally-tagged enum with
+    // `#[serde(tag = "sessionUpdate", rename_all = "snake_case")]`), so
+    // `"sessionUpdate"` is a *string* discriminator like
+    // `"agent_message_chunk"`, not a nested object with its own `"type"`
+    // field. Deserializing straight into the already-correct typed
+    // representation (re-exported by daftprompt-acp so this crate does not
+    // need its own ACP SDK dependency) avoids hand-rolling that shape again.
+    let Ok(update) = serde_json::from_str::<daftprompt_acp::SessionUpdate>(json) else {
         state.conversation.entries.push(state::TranscriptEntry {
             kind: state::TranscriptEntryKind::Unknown("raw".to_string()),
             text: truncate_str_static(json, 200).to_string(),
@@ -1250,76 +1288,87 @@ fn parse_session_update(json: &str, state: &mut AppState) {
         return;
     };
 
-    let update_type = v
-        .get("sessionUpdate")
-        .and_then(|u| u.get("type").or_else(|| u.get("updateType")))
-        .and_then(|t| t.as_str())
-        .unwrap_or("");
-
-    match update_type {
-        "message" => {
-            if let Some(content) = v
-                .get("sessionUpdate")
-                .and_then(|u| u.get("content"))
-                .and_then(|c| c.as_array())
-            {
-                for block in content {
-                    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                        let kind = if block.get("type").and_then(|t| t.as_str()) == Some("thinking")
-                        {
-                            state::TranscriptEntryKind::Thought
-                        } else {
-                            state::TranscriptEntryKind::AgentText
-                        };
-                        state.conversation.entries.push(state::TranscriptEntry {
-                            kind,
-                            text: text.to_string(),
-                            timestamp: timestamp_now(),
-                        });
-                    }
-                }
-            } else if let Some(text) = v
-                .get("sessionUpdate")
-                .and_then(|u| u.get("text"))
-                .and_then(|t| t.as_str())
-            {
-                state.conversation.entries.push(state::TranscriptEntry {
-                    kind: state::TranscriptEntryKind::AgentText,
-                    text: text.to_string(),
-                    timestamp: timestamp_now(),
-                });
-            }
+    match update {
+        daftprompt_acp::SessionUpdate::UserMessageChunk(chunk) => {
+            push_content_block_entry(state, state::TranscriptEntryKind::UserPrompt, &chunk.content);
         }
-        "toolCall" => {
-            let tool_name = v
-                .get("sessionUpdate")
-                .and_then(|u| u.get("toolName").or_else(|| u.get("name")))
-                .and_then(|n| n.as_str())
-                .unwrap_or("unknown tool");
+        daftprompt_acp::SessionUpdate::AgentMessageChunk(chunk) => {
+            push_content_block_entry(state, state::TranscriptEntryKind::AgentText, &chunk.content);
+        }
+        daftprompt_acp::SessionUpdate::AgentThoughtChunk(chunk) => {
+            push_content_block_entry(state, state::TranscriptEntryKind::Thought, &chunk.content);
+        }
+        daftprompt_acp::SessionUpdate::ToolCall(tool_call) => {
             state.conversation.entries.push(state::TranscriptEntry {
                 kind: state::TranscriptEntryKind::ToolCall,
-                text: tool_name.to_string(),
+                text: format!("{} ({:?})", tool_call.title, tool_call.status),
                 timestamp: timestamp_now(),
             });
         }
-        "toolCallUpdate" => {
-            let tool_name = v
-                .get("sessionUpdate")
-                .and_then(|u| u.get("toolName").or_else(|| u.get("name")))
-                .and_then(|n| n.as_str())
-                .unwrap_or("unknown tool");
+        daftprompt_acp::SessionUpdate::ToolCallUpdate(tool_call_update) => {
+            let title = tool_call_update
+                .fields
+                .title
+                .clone()
+                .unwrap_or_else(|| tool_call_update.tool_call_id.to_string());
+            let status = tool_call_update
+                .fields
+                .status
+                .map(|s| format!("{s:?}"))
+                .unwrap_or_else(|| "updated".to_string());
             state.conversation.entries.push(state::TranscriptEntry {
                 kind: state::TranscriptEntryKind::ToolCallUpdate,
-                text: tool_name.to_string(),
+                text: format!("{title}: {status}"),
                 timestamp: timestamp_now(),
             });
         }
-        _ => {
+        daftprompt_acp::SessionUpdate::Plan(plan) => {
+            let summary = if plan.entries.is_empty() {
+                "(empty plan)".to_string()
+            } else {
+                plan.entries
+                    .iter()
+                    .map(|entry| format!("[{:?}] {}", entry.status, entry.content))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            };
             state.conversation.entries.push(state::TranscriptEntry {
-                kind: state::TranscriptEntryKind::Unknown(
-                    update_type.to_string(),
-                ),
+                kind: state::TranscriptEntryKind::Plan,
+                text: summary,
+                timestamp: timestamp_now(),
+            });
+        }
+        other => {
+            state.conversation.entries.push(state::TranscriptEntry {
+                kind: state::TranscriptEntryKind::Unknown(format!("{other:?}")),
                 text: truncate_str_static(json, 200).to_string(),
+                timestamp: timestamp_now(),
+            });
+        }
+    }
+}
+
+/// Extracts the text of a streamed content chunk (only `ContentBlock::Text`
+/// carries renderable text today; images/audio/resource links have no plain
+/// text and are surfaced as a non-fatal `Unknown` entry instead of being
+/// dropped, per Design Decision #3).
+fn push_content_block_entry(
+    state: &mut AppState,
+    kind: state::TranscriptEntryKind,
+    content: &daftprompt_acp::ContentBlock,
+) {
+    match content {
+        daftprompt_acp::ContentBlock::Text(text_content) => {
+            state.conversation.entries.push(state::TranscriptEntry {
+                kind,
+                text: text_content.text.clone(),
+                timestamp: timestamp_now(),
+            });
+        }
+        other => {
+            state.conversation.entries.push(state::TranscriptEntry {
+                kind: state::TranscriptEntryKind::Unknown(format!("{other:?}")),
+                text: String::new(),
                 timestamp: timestamp_now(),
             });
         }
@@ -1392,10 +1441,107 @@ fn timestamp_now() -> String {
     format!("{h:02}:{m:02}:{s:02}")
 }
 
+fn truncation_reason_label(reason: TruncationReason) -> String {
+    match reason {
+        TruncationReason::PerExcerptLimit => "per_excerpt_limit".to_string(),
+        TruncationReason::TotalBudgetRemaining => "total_budget_remaining".to_string(),
+    }
+}
+
 fn truncate_str_static(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
         format!("{}...", &s[..max_len.saturating_sub(3)])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Realistic wire payloads matching `SessionUpdate`'s actual internal
+    // tagging (`#[serde(tag = "sessionUpdate", rename_all = "snake_case")]`
+    // on `agent_client_protocol::schema::v1::SessionUpdate`): the
+    // `sessionUpdate` key is the variant discriminator string itself, not a
+    // nested object with its own `type`/`updateType` field. This is the bug
+    // `parse_session_update` used to get wrong -- every one of these used to
+    // fall through to the `Unknown` branch.
+
+    #[test]
+    fn parses_agent_message_chunk() {
+        let json = r#"{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello there"}}"#;
+        let mut state = AppState::new((800, 600));
+        parse_session_update(json, &mut state);
+
+        assert_eq!(state.conversation.entries.len(), 1);
+        let entry = &state.conversation.entries[0];
+        assert!(matches!(entry.kind, state::TranscriptEntryKind::AgentText));
+        assert_eq!(entry.text, "Hello there");
+    }
+
+    #[test]
+    fn parses_agent_thought_chunk() {
+        let json = r#"{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking..."}}"#;
+        let mut state = AppState::new((800, 600));
+        parse_session_update(json, &mut state);
+
+        assert_eq!(state.conversation.entries.len(), 1);
+        let entry = &state.conversation.entries[0];
+        assert!(matches!(entry.kind, state::TranscriptEntryKind::Thought));
+        assert_eq!(entry.text, "thinking...");
+    }
+
+    #[test]
+    fn parses_tool_call() {
+        let json = r#"{"sessionUpdate":"tool_call","toolCallId":"call_1","title":"Read file","status":"in_progress"}"#;
+        let mut state = AppState::new((800, 600));
+        parse_session_update(json, &mut state);
+
+        assert_eq!(state.conversation.entries.len(), 1);
+        let entry = &state.conversation.entries[0];
+        assert!(matches!(entry.kind, state::TranscriptEntryKind::ToolCall));
+        assert!(entry.text.contains("Read file"));
+        assert!(entry.text.contains("InProgress"));
+    }
+
+    #[test]
+    fn parses_tool_call_update() {
+        let json = r#"{"sessionUpdate":"tool_call_update","toolCallId":"call_1","status":"completed","title":"Read file"}"#;
+        let mut state = AppState::new((800, 600));
+        parse_session_update(json, &mut state);
+
+        assert_eq!(state.conversation.entries.len(), 1);
+        let entry = &state.conversation.entries[0];
+        assert!(matches!(entry.kind, state::TranscriptEntryKind::ToolCallUpdate));
+        assert!(entry.text.contains("Read file"));
+        assert!(entry.text.contains("Completed"));
+    }
+
+    #[test]
+    fn parses_plan() {
+        let json = r#"{"sessionUpdate":"plan","entries":[
+            {"content":"Step 1","priority":"high","status":"pending"},
+            {"content":"Step 2","priority":"medium","status":"in_progress"}
+        ]}"#;
+        let mut state = AppState::new((800, 600));
+        parse_session_update(json, &mut state);
+
+        assert_eq!(state.conversation.entries.len(), 1);
+        let entry = &state.conversation.entries[0];
+        assert!(matches!(entry.kind, state::TranscriptEntryKind::Plan));
+        assert!(entry.text.contains("Step 1"));
+        assert!(entry.text.contains("Step 2"));
+    }
+
+    #[test]
+    fn malformed_json_becomes_unknown_not_a_panic() {
+        let json = "not json at all";
+        let mut state = AppState::new((800, 600));
+        parse_session_update(json, &mut state);
+
+        assert_eq!(state.conversation.entries.len(), 1);
+        let entry = &state.conversation.entries[0];
+        assert!(matches!(entry.kind, state::TranscriptEntryKind::Unknown(_)));
     }
 }

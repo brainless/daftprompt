@@ -53,6 +53,6 @@ pub use launch::AdapterLaunchProfile;
 // their own direct dependency on the ACP SDK crate; see the module docs
 // above for why this crate stays the only *Cargo.toml* dependent on it.
 pub use agent_client_protocol::schema::v1::{
-    AgentCapabilities, AuthMethod, PermissionOption, PermissionOptionId, PermissionOptionKind,
-    SessionUpdate, StopReason, ToolCall, ToolCallUpdate,
+    AgentCapabilities, AuthMethod, ContentBlock, PermissionOption, PermissionOptionId,
+    PermissionOptionKind, SessionUpdate, StopReason, ToolCall, ToolCallUpdate,
 };

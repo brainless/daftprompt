@@ -239,7 +239,6 @@ pub enum TranscriptEntryKind {
     ToolCall,
     ToolCallUpdate,
     Thought,
-    #[allow(dead_code)]
     Plan,
     SystemMessage,
     Error,

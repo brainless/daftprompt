@@ -667,6 +667,47 @@ pub fn render_conversation(core: &mut AkarCore, layout: &mut Layout, state: &mut
                 );
                 y_offset += ENTRY_LINE_HEIGHT + 2.0;
             }
+
+            // Excluded/truncated candidates summary (Task 5 acceptance:
+            // "Retrieval omissions and truncation are visible, not silently
+            // discarded").
+            for excluded in inspector.excluded_candidates.iter().take(3) {
+                if iy + y_offset > inspector_rect[1] + inspector_rect[3] - ENTRY_LINE_HEIGHT {
+                    break;
+                }
+                let excluded_node = layout.new_leaf(Style {
+                    position: Position::Absolute,
+                    inset: Rect {
+                        left: length(ix + 12.0),
+                        top: length(iy + y_offset),
+                        right: auto(),
+                        bottom: auto(),
+                    },
+                    size: Size {
+                        width: length(iw - 12.0),
+                        height: length(ENTRY_LINE_HEIGHT),
+                    },
+                    ..Default::default()
+                });
+                layout.compute(
+                    excluded_node,
+                    (Some(iw - 12.0), Some(ENTRY_LINE_HEIGHT)),
+                    |_, _, _, _, _| akar_layout::Size::ZERO,
+                );
+                let excluded_text = format!(
+                    "excluded #{} [{}] {} ({})",
+                    excluded.rank, excluded.source, excluded.identifier, excluded.reason,
+                );
+                label(
+                    core,
+                    &*layout,
+                    excluded_node,
+                    &excluded_text,
+                    theme.warning,
+                    &theme,
+                );
+                y_offset += ENTRY_LINE_HEIGHT + 2.0;
+            }
         }
     }
 

@@ -70,7 +70,11 @@ pub enum CoordinatorEvent {
     EnrichedPromptReady {
         turn_id: i64,
         original: String,
-        enriched: String,
+        /// The full enriched prompt, not just its rendered text, so the UI
+        /// can also show which candidates were included/excluded and why
+        /// (Task 5 acceptance: "Retrieval omissions and truncation are
+        /// visible, not silently discarded").
+        enriched: EnrichedPrompt,
     },
     AcpSessionUpdate {
         turn_id: i64,
@@ -91,7 +95,64 @@ pub enum CoordinatorEvent {
     },
     AdapterError {
         error: String,
+        kind: AdapterErrorKind,
     },
+}
+
+/// A coarse, UI-renderable classification of an [`CoordinatorEvent::AdapterError`],
+/// distinguishing the [`daftprompt_acp::AcpError`] variants that already carry
+/// distinguishable structure instead of collapsing everything to `Display`
+/// text. Errors that do not originate from the ACP runtime boundary (e.g. a
+/// conversation-storage failure while creating a session) use `Other`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdapterErrorKind {
+    Timeout,
+    MalformedMessage,
+    BrokenPipe,
+    EarlyExit,
+    UnsupportedProtocolVersion,
+    Protocol,
+    InvalidPermissionOption,
+    UnknownPermissionRequest,
+    ShuttingDown,
+    Other,
+}
+
+impl AdapterErrorKind {
+    fn from_acp_error(error: &daftprompt_acp::AcpError) -> Self {
+        match error {
+            daftprompt_acp::AcpError::Timeout { .. } => Self::Timeout,
+            daftprompt_acp::AcpError::MalformedMessage { .. } => Self::MalformedMessage,
+            daftprompt_acp::AcpError::BrokenPipe { .. } => Self::BrokenPipe,
+            daftprompt_acp::AcpError::EarlyExit { .. } => Self::EarlyExit,
+            daftprompt_acp::AcpError::UnsupportedProtocolVersion { .. } => {
+                Self::UnsupportedProtocolVersion
+            }
+            daftprompt_acp::AcpError::Protocol { .. } => Self::Protocol,
+            daftprompt_acp::AcpError::InvalidPermissionOption { .. } => {
+                Self::InvalidPermissionOption
+            }
+            daftprompt_acp::AcpError::UnknownPermissionRequest => Self::UnknownPermissionRequest,
+            daftprompt_acp::AcpError::ShuttingDown => Self::ShuttingDown,
+            daftprompt_acp::AcpError::Internal(_) => Self::Other,
+        }
+    }
+
+    /// Short label used as a transcript-entry prefix, e.g. "[Timeout]".
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Timeout => "Timeout",
+            Self::MalformedMessage => "Malformed message",
+            Self::BrokenPipe => "Broken pipe",
+            Self::EarlyExit => "Process exited",
+            Self::UnsupportedProtocolVersion => "Unsupported protocol version",
+            Self::Protocol => "Protocol error",
+            Self::InvalidPermissionOption => "Invalid permission option",
+            Self::UnknownPermissionRequest => "Unknown permission request",
+            Self::ShuttingDown => "Shutting down",
+            Self::Other => "Adapter error",
+        }
+    }
 }
 
 type PromptHandle = JoinHandle<Result<PromptOutcome, daftprompt_acp::AcpError>>;
@@ -156,6 +217,7 @@ async fn run(
         Err(e) => {
             let _ = events.send(CoordinatorEvent::AdapterError {
                 error: format!("ACP initialize failed: {e}"),
+                kind: AdapterErrorKind::from_acp_error(&e),
             });
             return;
         }
@@ -167,6 +229,7 @@ async fn run(
         Err(e) => {
             let _ = events.send(CoordinatorEvent::AdapterError {
                 error: format!("ACP session/new failed: {e}"),
+                kind: AdapterErrorKind::from_acp_error(&e),
             });
             return;
         }
@@ -188,6 +251,7 @@ async fn run(
         Err(e) => {
             let _ = events.send(CoordinatorEvent::AdapterError {
                 error: format!("Failed to create session in storage: {e}"),
+                kind: AdapterErrorKind::Other,
             });
             return;
         }
@@ -416,6 +480,7 @@ async fn run(
                 if let Err(e) = acp_client.respond_permission(request_id, outcome).await {
                     let _ = events.send(CoordinatorEvent::AdapterError {
                         error: format!("Failed to respond to permission request: {e}"),
+                        kind: AdapterErrorKind::from_acp_error(&e),
                     });
                 }
             }
@@ -551,7 +616,7 @@ fn finish_preparation(
     let _ = events.send(CoordinatorEvent::EnrichedPromptReady {
         turn_id,
         original: prepared.original.clone(),
-        enriched: prepared.enriched.text.clone(),
+        enriched: prepared.enriched.clone(),
     });
 
     // Spawn the ACP prompt as a background task so the main loop continues

@@ -653,7 +653,7 @@ unexercised; see Task 5 for the retry command's UI wiring status.
   retry, and late-event-isolation are covered (9 tests); explicit no-context
   and process-restart scenarios are still not exercised.
 
-### Task 5: Add a minimal conversation UI — DONE
+### Task 5: Add a minimal conversation UI — DONE (hardened)
 
 Added `src/ui/conversation.rs` (~820 lines) as a focused ACP conversation
 surface coexisting with the canvas. Toggled via Tab key. Full-window
@@ -690,19 +690,60 @@ PermissionDialogState, EnrichmentInspectorState).
 
 `cargo check --workspace` passes. Existing tests unaffected.
 
+**Reopened-hardening pass (review follow-up):** three items from the review of
+Tasks 3-6 are resolved here.
+
+- **Session-update parsing was silently broken.** `parse_session_update()` in
+  `src/main.rs` looked for a nested `sessionUpdate.type` field, but the real
+  `agent-client-protocol` `SessionUpdate` type is internally tagged
+  (`#[serde(tag = "sessionUpdate", rename_all = "snake_case")]`), so
+  `"sessionUpdate"` is itself the variant discriminator string (e.g.
+  `"agent_message_chunk"`) rather than an object. Every real update was
+  falling through to the `Unknown` branch and rendering as raw truncated
+  JSON instead of agent text, thoughts, tool calls, tool call updates, and
+  plans. Fixed by deserializing directly into `daftprompt_acp::SessionUpdate`
+  (already re-exported by the ACP boundary crate, so `main.rs` still has no
+  direct ACP SDK dependency) and matching its real variants. 6 new unit
+  tests in `src/main.rs` cover each known kind plus the malformed-JSON
+  fallback.
+- **Excluded/truncated candidates were dead code.** `excluded_candidates` was
+  hardcoded to `Vec::new()` and `InspectorExcluded`'s fields were never
+  populated. `CoordinatorEvent::EnrichedPromptReady` now carries the full
+  typed `EnrichedPrompt` (was just its rendered text), and `main.rs` maps
+  `enriched.included`/`enriched.excluded` into real inspector entries with
+  rank, source, identifier, and reason; `src/ui/conversation.rs` renders the
+  excluded list instead of only a count.
+- **Adapter/turn failures collapsed to one generic string.** Added
+  `AdapterErrorKind` (Timeout, MalformedMessage, BrokenPipe, EarlyExit,
+  UnsupportedProtocolVersion, Protocol, InvalidPermissionOption,
+  UnknownPermissionRequest, ShuttingDown, Other), derived from
+  `daftprompt_acp::AcpError`'s existing variants. `CoordinatorEvent::AdapterError`
+  now carries a `kind` alongside the message, and the transcript prefixes the
+  error text with its label (e.g. `[Timeout] ...`). No "authentication-required"
+  kind was added since `AcpError` has no such variant today; see Task 6 for
+  the actual auth-required gap.
+
+Retained scope decision: clipboard/"copyable" prompt support remains an
+unimplemented, separately-scoped follow-up, not addressed here.
+
 #### Acceptance Criteria
 
 - [x] The UI remains responsive during retrieval and a live Codex turn.
 - [x] Streaming chunks appear in protocol order without duplicating completed
-  messages.
+  messages (now genuinely exercised — updates are correctly classified
+  instead of falling through to `Unknown`).
 - [x] Unknown updates have a non-fatal diagnostic rendering.
 - [x] Send is disabled while a prompt is active; cancel remains available.
 - [x] Permission choices exactly match adapter option IDs and no option is
   pre-approved.
-- [x] Original and enriched prompts are separately inspectable and copyable.
-- [x] Retrieval omissions and truncation are visible, not silently discarded.
-- [x] Adapter launch, authentication-required, protocol, timeout, and process
-  exit failures are distinguishable to the user.
+- [~] Original and enriched prompts are separately inspectable. "Copyable"
+  (clipboard) is not implemented; tracked as a follow-up, not blocking.
+- [x] Retrieval omissions and truncation are visible, not silently discarded
+  (previously dead code — `excluded_candidates` was hardcoded empty).
+- [~] Protocol, timeout, broken-pipe, early-exit, and other typed
+  `AcpError` kinds are now distinguishable to the user via `AdapterErrorKind`.
+  Authentication-required is still not distinguishable because
+  `daftprompt-acp`'s `AcpError` has no such variant (see Task 6).
 
 ### Task 6: Add configuration and lifecycle handling — DONE
 
