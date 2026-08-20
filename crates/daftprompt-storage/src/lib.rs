@@ -390,6 +390,32 @@ impl ConversationStore {
         Ok(())
     }
 
+    /// Reset a failed turn (whose enriched prompt was retained) back to
+    /// 'running' so the coordinator can re-dispatch its enriched prompt,
+    /// and return the retained enriched prompt text for that re-dispatch.
+    ///
+    /// Only a turn in the terminal 'failed' state with a retained enriched
+    /// prompt is retryable; anything else returns `Ok(None)` and leaves the
+    /// turn untouched. This is intentionally separate from
+    /// [`Self::transition_turn`] (which forbids terminal->terminal moves):
+    /// retry is an explicit, exclusive coordinator path, not a general state
+    /// transition.
+    pub fn retry_turn(&self, turn_id: i64) -> Result<Option<String>> {
+        let Some(turn) = self.get_turn(turn_id)? else {
+            return Ok(None);
+        };
+        if turn.state != "failed" || turn.enriched_prompt.is_none() {
+            return Ok(None);
+        }
+        let enriched = turn.enriched_prompt.unwrap();
+        self.db.execute(
+            "UPDATE turns SET state = 'running', error_message = NULL, completed_at = NULL \
+             WHERE id = ?1",
+            params![turn_id],
+        )?;
+        Ok(Some(enriched))
+    }
+
     pub fn get_turn(&self, turn_id: i64) -> Result<Option<TurnRow>> {
         let mut stmt = self.db.prepare(
             "SELECT id, session_id, state, original_prompt, enriched_prompt, formatter_version, \

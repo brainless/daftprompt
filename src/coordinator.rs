@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -35,6 +36,12 @@ impl Default for CoordinatorConfig {
 
 pub enum CoordinatorCommand {
     SubmitPrompt { original: String },
+    /// Re-dispatch a turn left in the terminal 'failed' state with a
+    /// retained enriched prompt (see `ConversationStore::retry_turn`).
+    /// Not yet sent by the UI (that wiring is a separate task); covered by
+    /// coordinator integration tests.
+    #[allow(dead_code)]
+    RetryTurn { turn_id: i64 },
     CancelTurn,
     RespondPermission {
         request_id: PermissionRequestId,
@@ -88,6 +95,29 @@ pub enum CoordinatorEvent {
 }
 
 type PromptHandle = JoinHandle<Result<PromptOutcome, daftprompt_acp::AcpError>>;
+
+/// The result of the off-loop retrieval + enrichment step (Task 4 item 3):
+/// running in its own spawned task so the main command loop stays free to
+/// process a concurrent `CancelTurn` while retrieval is in flight.
+struct PreparedPrompt {
+    original: String,
+    limit: usize,
+    outcome: RetrievalOutcome,
+    enriched: EnrichedPrompt,
+    retrieval_latency_ms: i64,
+}
+
+type PrepareHandle = JoinHandle<PreparedPrompt>;
+
+/// Context recorded for a pending `session/request_permission` reverse
+/// request so `RespondPermission` can persist the decision (Task 4 item 5)
+/// once it is known, correlated back to the turn and event that produced it.
+struct PendingPermission {
+    turn_id: i64,
+    event_id: i64,
+    tool_call_json: String,
+    options_json: String,
+}
 
 // ── Public entry point ──
 
@@ -186,10 +216,27 @@ async fn run(
     // Wrap acp_client in Arc so spawned prompt tasks can share it.
     let acp_client = Arc::new(acp_client);
 
-    // Main command loop — races commands, ACP events, and in-flight prompt results.
+    // Main command loop — races commands, ACP events, in-flight retrieval
+    // preparation, and in-flight prompt results.
     let mut active_turn_id: Option<i64> = None;
     let mut active_cancelled: bool = false;
+    let mut prepare_handle: Option<PrepareHandle> = None;
     let mut prompt_handle: Option<PromptHandle> = None;
+    // The turn whose ACP request stream incoming `session/update`/permission
+    // events currently belong to. This is deliberately distinct from
+    // `active_turn_id`: `active_turn_id` becomes Some(turn_id) as soon as a
+    // turn is created (before retrieval even starts), but `dispatched_turn_id`
+    // only moves forward when a NEW turn's `session/prompt` call actually
+    // goes out. Without this split, a turn cancelled while a *later* turn is
+    // still preparing would have its late `session/update` events attributed
+    // to that later turn once it starts (both would share `active_turn_id`'s
+    // value at different times) even though the later turn never issued the
+    // request that produced them. Tagging events by `dispatched_turn_id`
+    // instead means a late event either lands on the turn that actually
+    // caused it (if no newer dispatch has begun yet) or is silently outside
+    // any turn once a newer dispatch takes over — never misattributed.
+    let mut dispatched_turn_id: Option<i64> = None;
+    let mut pending_permissions: HashMap<PermissionRequestId, PendingPermission> = HashMap::new();
     let mut running = true;
 
     while running {
@@ -208,13 +255,58 @@ async fn run(
                 handle_prompt_result(turn_id, cancelled, result, &store, &events);
                 continue;
             }
+            // If retrieval + enrichment is in flight, race it too, so a
+            // concurrent CancelTurn is still processed while it runs.
+            result = async {
+                match prepare_handle.as_mut() {
+                    Some(h) => (&mut *h).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                prepare_handle = None;
+                let turn_id = active_turn_id.expect("active_turn_id was Some while preparing");
+                match result {
+                    Ok(prepared) => {
+                        finish_preparation(
+                            turn_id,
+                            prepared,
+                            active_cancelled,
+                            &store,
+                            &acp_client,
+                            &acp_session_id,
+                            &events,
+                            &mut prompt_handle,
+                            &mut dispatched_turn_id,
+                        );
+                        if prompt_handle.is_none() {
+                            // Either persistence failed or the turn was
+                            // cancelled while preparing; no ACP dispatch
+                            // happened, so the turn is already terminal.
+                            active_turn_id = None;
+                            active_cancelled = false;
+                        }
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Retrieval task panicked: {e}");
+                        let _ = store.set_turn_error(turn_id, &error_msg);
+                        let _ = store.transition_turn(turn_id, "failed");
+                        let _ = events.send(CoordinatorEvent::TurnFailed {
+                            turn_id,
+                            error: error_msg,
+                        });
+                        active_turn_id = None;
+                        active_cancelled = false;
+                    }
+                }
+                continue;
+            }
             cmd = commands.recv() => match cmd {
                 Some(cmd) => cmd,
                 None => break,
             },
             event = acp_events.recv() => match event {
                 Some(event) => {
-                    handle_acp_event(&event, active_turn_id, &store, &events);
+                    handle_acp_event(&event, dispatched_turn_id, session_db_id, &store, &events, &mut pending_permissions);
                     continue;
                 }
                 None => continue,
@@ -239,98 +331,55 @@ async fn run(
                     }
                 };
                 active_turn_id = Some(turn_id);
+                active_cancelled = false;
                 let _ = events.send(CoordinatorEvent::TurnStarted { turn_id });
 
-                // Retrieval (blocking, off render thread)
-                let query = original.clone();
-                let limit = config.retrieval_limit_per_source;
-                let indexer_clone = indexer.clone();
-                let retrieval_start = Instant::now();
-                let search_result =
-                    tokio::task::spawn_blocking(move || {
-                        let indexer = indexer_clone.blocking_lock();
-                        indexer.search_all_hybrid(&query, limit)
-                    })
-                    .await;
+                prepare_handle = Some(spawn_prepare_task(
+                    indexer.clone(),
+                    original,
+                    config.retrieval_limit_per_source,
+                    config.budget.clone(),
+                ));
+            }
 
-                let retrieval_latency_ms = retrieval_start.elapsed().as_millis() as i64;
-
-                let outcome = match search_result {
-                    Ok(Ok(result)) => {
-                        let snapshot =
-                            RetrievalSnapshot::from_all_source_result(&original, limit, &result);
-                        RetrievalOutcome::Ok(snapshot)
-                    }
-                    Ok(Err(e)) => RetrievalOutcome::Error {
-                        query: original.clone(),
-                        message: e.to_string(),
-                    },
-                    Err(e) => RetrievalOutcome::Error {
-                        query: original.clone(),
-                        message: format!("Search task panicked: {e}"),
-                    },
-                };
-
-                let candidate_count = match &outcome {
-                    RetrievalOutcome::Ok(snapshot) => snapshot.candidates.len(),
-                    _ => 0,
-                };
-
-                // Enrichment
-                let original_prompt = OriginalPrompt::new(&original);
-                let enriched = build_enriched_prompt(&original_prompt, &outcome, &config.budget);
-                let included_count = enriched.included.len();
-
-                // Persist retrieval and enriched prompt
-                persist_retrieval(
-                    &store,
-                    turn_id,
-                    &original,
-                    limit,
-                    &outcome,
-                    &enriched,
-                    retrieval_latency_ms,
-                );
-
-                // Transition to running
-                if let Err(e) = store.transition_turn(turn_id, "running") {
-                    let _ = events.send(CoordinatorEvent::TurnFailed {
-                        turn_id,
-                        error: format!("Failed to transition turn to running: {e}"),
-                    });
-                    active_turn_id = None;
+            CoordinatorCommand::RetryTurn { turn_id } => {
+                if active_turn_id.is_some() {
+                    log::warn!(
+                        "Rejecting RetryTurn for turn {turn_id}: a turn is already active"
+                    );
                     continue;
                 }
 
-                let retrieval_status = match &outcome {
-                    RetrievalOutcome::Ok(_) => "ok",
-                    RetrievalOutcome::Error { .. } => "error",
-                };
-                let _ = events.send(CoordinatorEvent::RetrievalCompleted {
-                    turn_id,
-                    status: retrieval_status.to_string(),
-                    candidate_count,
-                    included_count,
-                });
-                let _ = events.send(CoordinatorEvent::EnrichedPromptReady {
-                    turn_id,
-                    original: original.clone(),
-                    enriched: enriched.text.clone(),
-                });
+                match store.retry_turn(turn_id) {
+                    Ok(Some(enriched_text)) => {
+                        active_turn_id = Some(turn_id);
+                        active_cancelled = false;
+                        let _ = events.send(CoordinatorEvent::TurnStarted { turn_id });
 
-                // Spawn the ACP prompt as a background task so the main loop
-                // continues processing commands (CancelTurn, etc.).
-                let client = acp_client.clone();
-                let session_id = acp_session_id.clone();
-                let text = enriched.text.clone();
-                let handle = tokio::spawn(async move {
-                    client.prompt(session_id, text).await
-                });
-
-                prompt_handle = Some(handle);
+                        dispatched_turn_id = Some(turn_id);
+                        let client = acp_client.clone();
+                        let session_id = acp_session_id.clone();
+                        let handle = tokio::spawn(async move {
+                            client.prompt(session_id, enriched_text).await
+                        });
+                        prompt_handle = Some(handle);
+                    }
+                    Ok(None) => {
+                        log::info!(
+                            "RetryTurn: turn {turn_id} is not retryable (not failed or no retained enriched prompt)"
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("RetryTurn: failed to reset turn {turn_id}: {e}");
+                    }
+                }
             }
 
             CoordinatorCommand::CancelTurn => {
+                // Covers both "preparing" (prepare_handle in flight) and
+                // "running" (prompt_handle in flight): either way the turn
+                // is finalized as Cancelled once its in-flight handle is
+                // awaited by the select! branches above.
                 if active_turn_id.is_some() && !active_cancelled {
                     active_cancelled = true;
                     if let Some(turn_id) = active_turn_id {
@@ -344,9 +393,31 @@ async fn run(
                 request_id,
                 outcome,
             } => {
-                let _ = acp_client
-                    .respond_permission(request_id, outcome)
-                    .await;
+                let (outcome_str, chosen_option_id) = match &outcome {
+                    PermissionOutcome::Selected(id) => ("selected", Some(id.as_str())),
+                    PermissionOutcome::Cancelled => ("cancelled", None),
+                };
+
+                if let Some(pending) = pending_permissions.remove(&request_id) {
+                    let _ = store.record_permission(
+                        pending.event_id,
+                        pending.turn_id,
+                        &pending.tool_call_json,
+                        &pending.options_json,
+                        chosen_option_id,
+                        outcome_str,
+                    );
+                } else {
+                    log::warn!(
+                        "RespondPermission: no pending permission request tracked for this id"
+                    );
+                }
+
+                if let Err(e) = acp_client.respond_permission(request_id, outcome).await {
+                    let _ = events.send(CoordinatorEvent::AdapterError {
+                        error: format!("Failed to respond to permission request: {e}"),
+                    });
+                }
             }
 
             CoordinatorCommand::Shutdown => {
@@ -361,6 +432,144 @@ async fn run(
     }
 }
 
+/// Spawns the retrieval + enrichment step as its own task so the main
+/// command loop can keep racing `CancelTurn` and ACP events while it runs
+/// (Task 4 item 3).
+fn spawn_prepare_task(
+    indexer: Arc<Mutex<Indexer>>,
+    original: String,
+    limit: usize,
+    budget: SelectionBudget,
+) -> PrepareHandle {
+    tokio::spawn(async move {
+        let retrieval_start = Instant::now();
+        let query = original.clone();
+        let search_result = tokio::task::spawn_blocking(move || {
+            let indexer = indexer.blocking_lock();
+            indexer.search_all_hybrid(&query, limit)
+        })
+        .await;
+
+        let retrieval_latency_ms = retrieval_start.elapsed().as_millis() as i64;
+
+        let outcome = match search_result {
+            Ok(Ok(result)) => {
+                let snapshot = RetrievalSnapshot::from_all_source_result(&original, limit, &result);
+                RetrievalOutcome::Ok(snapshot)
+            }
+            Ok(Err(e)) => RetrievalOutcome::Error {
+                query: original.clone(),
+                message: e.to_string(),
+            },
+            Err(e) => RetrievalOutcome::Error {
+                query: original.clone(),
+                message: format!("Search task panicked: {e}"),
+            },
+        };
+
+        let original_prompt = OriginalPrompt::new(&original);
+        let enriched = build_enriched_prompt(&original_prompt, &outcome, &budget);
+
+        PreparedPrompt {
+            original,
+            limit,
+            outcome,
+            enriched,
+            retrieval_latency_ms,
+        }
+    })
+}
+
+/// Handles the result of the retrieval + enrichment step once it completes:
+/// persists the retrieval run and enriched prompt, then either dispatches
+/// the ACP prompt (setting `prompt_handle`) or finalizes the turn without
+/// dispatching (persistence failure or a cancellation that arrived while
+/// preparing). Persistence failure must block ACP dispatch (Task 4 item 2).
+#[allow(clippy::too_many_arguments)]
+fn finish_preparation(
+    turn_id: i64,
+    prepared: PreparedPrompt,
+    cancelled: bool,
+    store: &ConversationStore,
+    acp_client: &Arc<AcpClient>,
+    acp_session_id: &AcpSessionId,
+    events: &mpsc::UnboundedSender<CoordinatorEvent>,
+    prompt_handle: &mut Option<PromptHandle>,
+    dispatched_turn_id: &mut Option<i64>,
+) {
+    if cancelled {
+        let _ = events.send(CoordinatorEvent::TurnCompleted {
+            turn_id,
+            stop_reason: "Cancelled".to_string(),
+        });
+        return;
+    }
+
+    let candidate_count = match &prepared.outcome {
+        RetrievalOutcome::Ok(snapshot) => snapshot.candidates.len(),
+        _ => 0,
+    };
+    let included_count = prepared.enriched.included.len();
+
+    if let Err(e) = persist_retrieval(
+        store,
+        turn_id,
+        &prepared.original,
+        prepared.limit,
+        &prepared.outcome,
+        &prepared.enriched,
+        prepared.retrieval_latency_ms,
+    ) {
+        let error_msg = format!("Failed to persist retrieval/enriched prompt: {e}");
+        let _ = store.set_turn_error(turn_id, &error_msg);
+        let _ = store.transition_turn(turn_id, "failed");
+        let _ = events.send(CoordinatorEvent::TurnFailed {
+            turn_id,
+            error: error_msg,
+        });
+        return;
+    }
+
+    if let Err(e) = store.transition_turn(turn_id, "running") {
+        let _ = events.send(CoordinatorEvent::TurnFailed {
+            turn_id,
+            error: format!("Failed to transition turn to running: {e}"),
+        });
+        return;
+    }
+
+    let retrieval_status = match &prepared.outcome {
+        RetrievalOutcome::Ok(_) => "ok",
+        RetrievalOutcome::Error { .. } => "error",
+    };
+    let _ = events.send(CoordinatorEvent::RetrievalCompleted {
+        turn_id,
+        status: retrieval_status.to_string(),
+        candidate_count,
+        included_count,
+    });
+    let _ = events.send(CoordinatorEvent::EnrichedPromptReady {
+        turn_id,
+        original: prepared.original.clone(),
+        enriched: prepared.enriched.text.clone(),
+    });
+
+    // Spawn the ACP prompt as a background task so the main loop continues
+    // processing commands (CancelTurn, etc.). This is also the one place a
+    // new turn's ACP stream identity comes into existence, matching the
+    // `dispatched_turn_id` invariant documented on it above.
+    *dispatched_turn_id = Some(turn_id);
+    let client = acp_client.clone();
+    let session_id = acp_session_id.clone();
+    let text = prepared.enriched.text.clone();
+    let handle = tokio::spawn(async move { client.prompt(session_id, text).await });
+    *prompt_handle = Some(handle);
+}
+
+/// Persists the retrieval run, its candidates, and the enriched prompt for a
+/// turn. Returns an error if any of these writes fail, so the caller can
+/// block ACP dispatch rather than silently sending an unrecorded prompt
+/// (Design Decision #4, Task 4 item 2).
 fn persist_retrieval(
     store: &ConversationStore,
     turn_id: i64,
@@ -369,7 +578,7 @@ fn persist_retrieval(
     outcome: &RetrievalOutcome,
     enriched: &EnrichedPrompt,
     latency_ms: i64,
-) {
+) -> anyhow::Result<()> {
     let retrieval_status = match outcome {
         RetrievalOutcome::Ok(_) => "ok",
         RetrievalOutcome::Error { .. } => "error",
@@ -385,47 +594,45 @@ fn persist_retrieval(
             _ => None,
         },
         Some(latency_ms),
-    );
+    )?;
 
-    if let Ok(run_id) = run_id {
-        if let RetrievalOutcome::Ok(snapshot) = outcome {
-            for (rank, candidate) in snapshot.candidates.iter().enumerate() {
-                let included = enriched
-                    .included
-                    .iter()
-                    .any(|e| e.identifier == candidate.identifier && e.rank == rank + 1);
-                let location_json = match &candidate.location {
-                    ExcerptLocation::Code {
-                        file_path,
-                        line_start,
-                        line_end,
-                    } => format!(
-                        r#"{{"Code":{{"file_path":"{}","line_start":{},"line_end":{}}}}}"#,
-                        file_path, line_start, line_end
-                    ),
-                    ExcerptLocation::Document { file_path } => {
-                        format!(r#"{{"Document":{{"file_path":"{}"}}}}"#, file_path)
-                    }
-                    ExcerptLocation::Commit { short_hash } => {
-                        format!(r#"{{"Commit":{{"short_hash":"{}"}}}}"#, short_hash)
-                    }
-                };
-                let _ = store.insert_retrieval_candidate(
-                    run_id,
-                    &candidate.identifier,
-                    candidate.source.as_str(),
-                    rank as i64 + 1,
-                    candidate.score as f64,
-                    &format!("{:?}", candidate.match_type),
-                    &candidate.text,
-                    &location_json,
-                    included,
-                    None,
-                    None,
-                    None,
-                    None,
-                );
-            }
+    if let RetrievalOutcome::Ok(snapshot) = outcome {
+        for (rank, candidate) in snapshot.candidates.iter().enumerate() {
+            let included = enriched
+                .included
+                .iter()
+                .any(|e| e.identifier == candidate.identifier && e.rank == rank + 1);
+            let location_json = match &candidate.location {
+                ExcerptLocation::Code {
+                    file_path,
+                    line_start,
+                    line_end,
+                } => format!(
+                    r#"{{"Code":{{"file_path":"{}","line_start":{},"line_end":{}}}}}"#,
+                    file_path, line_start, line_end
+                ),
+                ExcerptLocation::Document { file_path } => {
+                    format!(r#"{{"Document":{{"file_path":"{}"}}}}"#, file_path)
+                }
+                ExcerptLocation::Commit { short_hash } => {
+                    format!(r#"{{"Commit":{{"short_hash":"{}"}}}}"#, short_hash)
+                }
+            };
+            store.insert_retrieval_candidate(
+                run_id,
+                &candidate.identifier,
+                candidate.source.as_str(),
+                rank as i64 + 1,
+                candidate.score as f64,
+                &format!("{:?}", candidate.match_type),
+                &candidate.text,
+                &location_json,
+                included,
+                None,
+                None,
+                None,
+                None,
+            )?;
         }
     }
 
@@ -435,13 +642,16 @@ fn persist_retrieval(
         RetrievalStatus::Error { .. } => "error",
     };
 
-    let _ = store.set_enriched_prompt(
+    // set_enriched_prompt returns StorageError, not anyhow::Error; StorageError
+    // implements std::error::Error so `?` converts it via anyhow's blanket From.
+    store.set_enriched_prompt(
         turn_id,
         &enriched.text,
         enriched.formatter_version as i64,
         None,
         retrieval_status_str,
-    );
+    )?;
+    Ok(())
 }
 
 fn handle_prompt_result(
@@ -497,9 +707,11 @@ fn handle_prompt_result(
 
 fn handle_acp_event(
     event: &AcpEvent,
-    active_turn_id: Option<i64>,
+    dispatched_turn_id: Option<i64>,
+    session_db_id: i64,
     store: &ConversationStore,
     events: &mpsc::UnboundedSender<CoordinatorEvent>,
+    pending_permissions: &mut HashMap<PermissionRequestId, PendingPermission>,
 ) {
     match event {
         AcpEvent::SessionUpdate {
@@ -507,7 +719,7 @@ fn handle_acp_event(
             ..
         } => {
             let update_json = serde_json::to_string(update).unwrap_or_default();
-            if let Some(turn_id) = active_turn_id {
+            if let Some(turn_id) = dispatched_turn_id {
                 let _ = events.send(CoordinatorEvent::AcpSessionUpdate {
                     turn_id,
                     update_json,
@@ -518,7 +730,7 @@ fn handle_acp_event(
             update: SessionUpdateKind::Unknown(diag),
             ..
         } => {
-            if let Some(turn_id) = active_turn_id {
+            if let Some(turn_id) = dispatched_turn_id {
                 let _ = events.send(CoordinatorEvent::AcpSessionUpdate {
                     turn_id,
                     update_json: diag.raw.clone(),
@@ -531,16 +743,26 @@ fn handle_acp_event(
             let options_json =
                 serde_json::to_string(&request.options).unwrap_or_default();
 
-            if let Some(turn_id) = active_turn_id {
-                let _ = store.append_event(
-                    turn_id,
+            if let Some(turn_id) = dispatched_turn_id {
+                if let Ok(event_id) = store.append_event(
+                    session_db_id,
                     Some(turn_id),
-                    "incoming",
+                    "inbound",
                     "permission_request",
                     Some("session/request_permission"),
                     None,
                     &tool_call_json,
-                );
+                ) {
+                    pending_permissions.insert(
+                        request.id.clone(),
+                        PendingPermission {
+                            turn_id,
+                            event_id,
+                            tool_call_json: tool_call_json.clone(),
+                            options_json: options_json.clone(),
+                        },
+                    );
+                }
             }
 
             let _ = events.send(CoordinatorEvent::PermissionRequired {

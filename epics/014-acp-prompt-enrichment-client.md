@@ -555,7 +555,7 @@ Tasks 3–6 are resolved here.
   records.
 - [x] Migration and round-trip tests pass in a temporary directory.
 
-### Task 4: Build the application conversation coordinator — DONE
+### Task 4: Build the application conversation coordinator — DONE (hardened)
 
 Added `src/coordinator.rs` as the single async submission service connecting
 the indexer, prompt builder, storage, and ACP runtime. The coordinator owns
@@ -595,21 +595,63 @@ TurnStarted), and cancellation (CancelTurn → TurnCompleted with Cancelled).
 `cargo check --workspace` passes. `cargo test --test coordinator` passes
 (3/3).
 
+**Reopened-hardening pass (review follow-up):** five items from the review of
+Tasks 3-6 are resolved here.
+
+- Wired the previously-dead `ConversationStore::retry_turn()` into a new
+  `CoordinatorCommand::RetryTurn`, which re-dispatches a terminal `failed`
+  turn's retained enriched prompt through `session/prompt` and emits a fresh
+  `TurnStarted`.
+- `persist_retrieval()` now returns `Result` instead of swallowing storage
+  errors with `let _ =`; a persistence failure transitions the turn to
+  `failed` and blocks the ACP prompt from ever being dispatched, closing the
+  "persistence-before-send" gap.
+- Retrieval + enrichment now runs in its own spawned task
+  (`spawn_prepare_task`) raced in the main `tokio::select!` loop instead of
+  being awaited inline in the `SubmitPrompt` arm, so `CancelTurn` is
+  processed while retrieval is still in flight.
+- Incoming ACP events are now tagged by a `dispatched_turn_id` that only
+  advances when a turn's `session/prompt` call actually goes out, separate
+  from `active_turn_id` (which is set as soon as a turn is created). A
+  cancelled turn's late events can no longer land on a newer turn that has
+  not yet dispatched.
+- `RespondPermission` now persists the decision via `store.record_permission()`
+  (correlated to its turn through a `pending_permissions` map populated when
+  the request first arrives) and reports adapter errors instead of discarding
+  them with `let _ =`. Also fixed a latent bug in the earlier permission-event
+  write: it passed `turn_id` where `session_id` was expected and used the
+  event direction string `"incoming"`, which the schema's CHECK constraint
+  rejects as `"inbound"`.
+- 4 new integration tests in `tests/coordinator.rs` (now 9/9):
+  `persistence_failure_blocks_acp_dispatch`,
+  `cancel_during_retrieval_is_processed`, `retry_turn_redispatches_failed_turn`,
+  `late_events_are_not_misattributed_to_a_newer_turn`.
+
+The UI-side "retry" trigger and a small number of end-to-end scenarios listed
+in the original acceptance criteria (explicit no-context, restart) remain
+unexercised; see Task 5 for the retry command's UI wiring status.
+
 #### Acceptance Criteria
 
 - [x] Every ordinary UI submission uses the mandatory enrichment path.
-- [x] The enriched prompt is persisted before `session/prompt` is sent.
+- [x] The enriched prompt is persisted before `session/prompt` is sent
+  (persistence failure now blocks dispatch instead of being ignored).
 - [x] Retrieval failure is visible, recorded, and falls back to the deterministic
   no-context envelope.
-- [x] ACP dispatch failure retains a retryable failed turn and its evidence.
+- [x] ACP dispatch failure retains a retryable failed turn and its evidence
+  (`CoordinatorCommand::RetryTurn` re-dispatches it; UI trigger is a follow-up).
 - [x] Only one active prompt per session is allowed.
 - [x] Cancel targets the active session and leaves late events unable to finish
-  a later turn.
+  a later turn (`dispatched_turn_id` isolation).
 - [x] Permission requests suspend only the affected interaction and are resolved
-  through typed application commands.
-- [x] No retrieval or ACP IO runs on the render thread.
-- [x] Scripted end-to-end tests exercise success, no-context, permission,
-  cancellation, adapter exit, and restart flows.
+  through typed application commands (decision now persisted).
+- [x] No retrieval or ACP IO runs on the render thread (retrieval now off the
+  command loop too, via `spawn_prepare_task`).
+- [ ] Scripted end-to-end tests exercise success, no-context, permission,
+  cancellation, adapter exit, and restart flows. Success, permission,
+  cancellation, adapter-exit, persistence-failure, cancel-during-retrieval,
+  retry, and late-event-isolation are covered (9 tests); explicit no-context
+  and process-restart scenarios are still not exercised.
 
 ### Task 5: Add a minimal conversation UI — DONE
 
