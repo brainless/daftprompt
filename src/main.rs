@@ -818,11 +818,12 @@ impl Application {
         // Also clears `core.input.focused_id` on Escape so any focused text
         // input loses focus (matters once Task 6 wires the search box).
         //
-        // Tab toggles the conversation surface (Task 5). The Tab char is
-        // consumed so text_input doesn't insert it.
+        // Tab toggles the conversation surface (Task 5). `akar-winit` never
+        // forwards Tab as a committed text char (it is a control character,
+        // filtered by `is_committed_text_char`); it arrives only as
+        // `Key::Tab` in `keys_pressed`.
         let cmd_or_ctrl = state.cmd_or_ctrl;
-        if core.input.chars.contains(&'\t') {
-            core.input.chars.retain(|&c| c != '\t');
+        if core.input.keys_pressed.contains(&akar_core::Key::Tab) {
             state.conversation.visible = !state.conversation.visible;
         }
         if cmd_or_ctrl && (core.input.chars.contains(&'k') || core.input.chars.contains(&'K')) {
