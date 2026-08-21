@@ -203,6 +203,8 @@ pub struct ConversationState {
     pub cancel_requested: bool,
     pub permission_response: Option<String>,
     pub permission_cancel_requested: bool,
+    prompt_copy_requested: Option<PromptCopyRequest>,
+    pub clipboard_feedback: Option<ClipboardFeedback>,
 }
 
 impl Default for ConversationState {
@@ -222,8 +224,62 @@ impl Default for ConversationState {
             cancel_requested: false,
             permission_response: None,
             permission_cancel_requested: false,
+            prompt_copy_requested: None,
+            clipboard_feedback: None,
         }
     }
+}
+
+impl ConversationState {
+    pub fn request_prompt_copy(&mut self, target: InspectorPromptKind) {
+        let Some(inspector) = self.enrichment_inspector.as_ref() else {
+            return;
+        };
+        let text = match target {
+            InspectorPromptKind::Original => inspector.original_prompt.clone(),
+            InspectorPromptKind::Enriched => inspector.enriched_prompt.clone(),
+        };
+        self.prompt_copy_requested = Some(PromptCopyRequest { target, text });
+        self.clipboard_feedback = None;
+    }
+
+    /// Takes a pending inspector copy request together with the complete,
+    /// unmodified prompt artifact. The inspector preview is deliberately not
+    /// involved, because it is shortened for display.
+    pub fn take_prompt_copy_request(&mut self) -> Option<(InspectorPromptKind, String)> {
+        self.prompt_copy_requested
+            .take()
+            .map(|request| (request.target, request.text))
+    }
+}
+
+struct PromptCopyRequest {
+    target: InspectorPromptKind,
+    text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InspectorPromptKind {
+    Original,
+    Enriched,
+}
+
+impl InspectorPromptKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Original => "original",
+            Self::Enriched => "enriched",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClipboardFeedback {
+    Copied(InspectorPromptKind),
+    Failed {
+        target: InspectorPromptKind,
+        message: String,
+    },
 }
 
 pub struct TranscriptEntry {
@@ -309,3 +365,48 @@ pub struct InspectorExcluded {
     pub reason: String,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn inspector(original_prompt: &str, enriched_prompt: &str) -> EnrichmentInspectorState {
+        EnrichmentInspectorState {
+            original_prompt: original_prompt.to_string(),
+            enriched_prompt: enriched_prompt.to_string(),
+            included_excerpts: Vec::new(),
+            excluded_candidates: Vec::new(),
+            retrieval_status: "ok".to_string(),
+            formatter_version: 1,
+            total_char_budget: 8_000,
+            per_excerpt_char_limit: 1_500,
+        }
+    }
+
+    #[test]
+    fn copy_request_returns_exact_original_prompt() {
+        let exact = "  keep whitespace\nUnicode: λ漢字\n";
+        let mut state = ConversationState::default();
+        state.enrichment_inspector = Some(inspector(exact, "enriched"));
+        state.request_prompt_copy(InspectorPromptKind::Original);
+        state.enrichment_inspector = Some(inspector("a later prompt", "later enriched"));
+
+        assert_eq!(
+            state.take_prompt_copy_request(),
+            Some((InspectorPromptKind::Original, exact.to_string()))
+        );
+        assert!(state.prompt_copy_requested.is_none());
+    }
+
+    #[test]
+    fn copy_request_returns_exact_enriched_prompt() {
+        let exact = "<prompt>\n  context & request\n</prompt>\n";
+        let mut state = ConversationState::default();
+        state.enrichment_inspector = Some(inspector("original", exact));
+        state.request_prompt_copy(InspectorPromptKind::Enriched);
+
+        assert_eq!(
+            state.take_prompt_copy_request(),
+            Some((InspectorPromptKind::Enriched, exact.to_string()))
+        );
+    }
+}

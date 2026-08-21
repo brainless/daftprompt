@@ -104,6 +104,17 @@ impl AdapterLaunchProfile {
         &self.env
     }
 
+    /// Executable followed by the exact argument vector used for launch.
+    ///
+    /// Environment overrides are intentionally not included: they can contain
+    /// credentials and must never enter durable conversation metadata.
+    #[must_use]
+    pub(crate) fn command_argv(&self) -> Vec<String> {
+        std::iter::once(self.command.to_string_lossy().into_owned())
+            .chain(self.args.iter().cloned())
+            .collect()
+    }
+
     /// A profile for an installed `codex-acp` executable on `PATH`, taking no
     /// arguments. This is the primary supported path once a packaged binary
     /// is available (see the Task 0 findings' §11 "known gap" note); it has

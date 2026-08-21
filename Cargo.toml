@@ -24,6 +24,7 @@ daftprompt-acp = { path = "crates/daftprompt-acp" }
 daftprompt-prompt-builder = { path = "crates/daftprompt-prompt-builder" }
 daftprompt-storage = { path = "crates/daftprompt-storage" }
 anyhow = "1"
+arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 dotenvy = "0.15"
 llm-sdk = { path = "../llm-sdk" }
 schemars = "0.8"

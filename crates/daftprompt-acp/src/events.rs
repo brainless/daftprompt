@@ -25,6 +25,14 @@ pub type AcpSessionId = SessionId;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PermissionRequestId(pub(crate) String);
 
+impl PermissionRequestId {
+    /// Stable application-level correlation value for durable traces.
+    /// This is minted by daftprompt-acp and is not the SDK's JSON-RPC id.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A reverse request from the adapter asking the user to approve or reject a
 /// tool call.
 #[derive(Debug, Clone)]

@@ -30,6 +30,7 @@ const ENTRY_GAP: f32 = 8.0;
 const BUTTON_WIDTH: f32 = 70.0;
 const BADGE_WIDTH: f32 = 80.0;
 const CLOSE_BUTTON_WIDTH: f32 = 32.0;
+const COPY_BUTTON_WIDTH: f32 = 112.0;
 
 /// Renders the conversation panel (full-window overlay).
 ///
@@ -522,10 +523,12 @@ pub fn render_conversation(core: &mut AkarCore, layout: &mut Layout, state: &mut
             _pad: [0.0; 2],
         });
 
+        let mut copy_requested = None;
         if let Some(inspector) = &state.conversation.enrichment_inspector {
             let ix = inspector_rect[0] + PAD;
             let iy = inspector_rect[1] + PAD;
             let iw = inspector_rect[2] - PAD * 2.0;
+            let preview_width = (iw - COPY_BUTTON_WIDTH - 8.0).max(0.0);
 
             let mut y_offset = 0.0;
 
@@ -539,14 +542,14 @@ pub fn render_conversation(core: &mut AkarCore, layout: &mut Layout, state: &mut
                     bottom: auto(),
                 },
                 size: Size {
-                    width: length(iw),
+                    width: length(preview_width),
                     height: length(ENTRY_LINE_HEIGHT),
                 },
                 ..Default::default()
             });
             layout.compute(
                 orig_node,
-                (Some(iw), Some(ENTRY_LINE_HEIGHT)),
+                (Some(preview_width), Some(ENTRY_LINE_HEIGHT)),
                 |_, _, _, _, _| akar_layout::Size::ZERO,
             );
             let orig_text = format!("Original: {}", truncate_str(&inspector.original_prompt, 80));
@@ -558,6 +561,48 @@ pub fn render_conversation(core: &mut AkarCore, layout: &mut Layout, state: &mut
                 theme.neutral_content,
                 &theme,
             );
+
+            let orig_copy_node = layout.new_leaf(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(ix + iw - COPY_BUTTON_WIDTH),
+                    top: length(iy + y_offset - 4.0),
+                    right: auto(),
+                    bottom: auto(),
+                },
+                size: Size {
+                    width: length(COPY_BUTTON_WIDTH),
+                    height: length(26.0),
+                },
+                ..Default::default()
+            });
+            layout.compute(
+                orig_copy_node,
+                (Some(COPY_BUTTON_WIDTH), Some(26.0)),
+                |_, _, _, _, _| akar_layout::Size::ZERO,
+            );
+            let orig_copy_label = if matches!(
+                state.conversation.clipboard_feedback,
+                Some(state::ClipboardFeedback::Copied(
+                    state::InspectorPromptKind::Original
+                ))
+            ) {
+                "Copied!"
+            } else {
+                "Copy original"
+            };
+            if button(
+                core,
+                &*layout,
+                orig_copy_node,
+                orig_copy_label,
+                ButtonVariant::Ghost,
+                &theme,
+            )
+            .clicked
+            {
+                copy_requested = Some(state::InspectorPromptKind::Original);
+            }
             y_offset += ENTRY_LINE_HEIGHT + 4.0;
 
             // Enriched prompt label
@@ -570,14 +615,14 @@ pub fn render_conversation(core: &mut AkarCore, layout: &mut Layout, state: &mut
                     bottom: auto(),
                 },
                 size: Size {
-                    width: length(iw),
+                    width: length(preview_width),
                     height: length(ENTRY_LINE_HEIGHT),
                 },
                 ..Default::default()
             });
             layout.compute(
                 enriched_node,
-                (Some(iw), Some(ENTRY_LINE_HEIGHT)),
+                (Some(preview_width), Some(ENTRY_LINE_HEIGHT)),
                 |_, _, _, _, _| akar_layout::Size::ZERO,
             );
             let enriched_text = format!("Enriched: {}", truncate_str(&inspector.enriched_prompt, 80));
@@ -589,6 +634,48 @@ pub fn render_conversation(core: &mut AkarCore, layout: &mut Layout, state: &mut
                 theme.base_content,
                 &theme,
             );
+
+            let enriched_copy_node = layout.new_leaf(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(ix + iw - COPY_BUTTON_WIDTH),
+                    top: length(iy + y_offset - 4.0),
+                    right: auto(),
+                    bottom: auto(),
+                },
+                size: Size {
+                    width: length(COPY_BUTTON_WIDTH),
+                    height: length(26.0),
+                },
+                ..Default::default()
+            });
+            layout.compute(
+                enriched_copy_node,
+                (Some(COPY_BUTTON_WIDTH), Some(26.0)),
+                |_, _, _, _, _| akar_layout::Size::ZERO,
+            );
+            let enriched_copy_label = if matches!(
+                state.conversation.clipboard_feedback,
+                Some(state::ClipboardFeedback::Copied(
+                    state::InspectorPromptKind::Enriched
+                ))
+            ) {
+                "Copied!"
+            } else {
+                "Copy enriched"
+            };
+            if button(
+                core,
+                &*layout,
+                enriched_copy_node,
+                enriched_copy_label,
+                ButtonVariant::Ghost,
+                &theme,
+            )
+            .clicked
+            {
+                copy_requested = Some(state::InspectorPromptKind::Enriched);
+            }
             y_offset += ENTRY_LINE_HEIGHT + 4.0;
 
             // Retrieval status
@@ -627,6 +714,47 @@ pub fn render_conversation(core: &mut AkarCore, layout: &mut Layout, state: &mut
                 &theme,
             );
             y_offset += ENTRY_LINE_HEIGHT + 4.0;
+
+            if let Some(feedback) = &state.conversation.clipboard_feedback {
+                let (feedback_text, feedback_color) = match feedback {
+                    state::ClipboardFeedback::Copied(target) => (
+                        format!("Copied the {} prompt to the clipboard.", target.label()),
+                        theme.success,
+                    ),
+                    state::ClipboardFeedback::Failed { target, message } => (
+                        format!("Could not copy the {} prompt: {message}", target.label()),
+                        theme.error,
+                    ),
+                };
+                let feedback_node = layout.new_leaf(Style {
+                    position: Position::Absolute,
+                    inset: Rect {
+                        left: length(ix),
+                        top: length(iy + y_offset),
+                        right: auto(),
+                        bottom: auto(),
+                    },
+                    size: Size {
+                        width: length(iw),
+                        height: length(ENTRY_LINE_HEIGHT),
+                    },
+                    ..Default::default()
+                });
+                layout.compute(
+                    feedback_node,
+                    (Some(iw), Some(ENTRY_LINE_HEIGHT)),
+                    |_, _, _, _, _| akar_layout::Size::ZERO,
+                );
+                label(
+                    core,
+                    &*layout,
+                    feedback_node,
+                    &truncate_str(&feedback_text, 140),
+                    feedback_color,
+                    &theme,
+                );
+                y_offset += ENTRY_LINE_HEIGHT + 4.0;
+            }
 
             // Included excerpts summary
             for excerpt in inspector.included_excerpts.iter().take(3) {
@@ -708,6 +836,9 @@ pub fn render_conversation(core: &mut AkarCore, layout: &mut Layout, state: &mut
                 );
                 y_offset += ENTRY_LINE_HEIGHT + 2.0;
             }
+        }
+        if let Some(target) = copy_requested {
+            state.conversation.request_prompt_copy(target);
         }
     }
 
@@ -855,9 +986,25 @@ fn render_permission_dialog(core: &mut AkarCore, layout: &mut Layout, state: &mu
 }
 
 fn truncate_str(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    if s.chars().count() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        let visible: String = s.chars().take(max_len.saturating_sub(3)).collect();
+        format!("{visible}...")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_str;
+
+    #[test]
+    fn prompt_preview_truncates_unicode_at_character_boundaries() {
+        assert_eq!(truncate_str("λ漢字abcdef", 6), "λ漢字...");
+    }
+
+    #[test]
+    fn prompt_preview_does_not_modify_short_text() {
+        assert_eq!(truncate_str("  exact\n", 20), "  exact\n");
     }
 }

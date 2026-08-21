@@ -166,6 +166,8 @@ untrusted reference material and safely delimited.
   - The enriched prompt sent to the agent
   - Which excerpts were included or excluded and why
   - Retrieval budget and status
+- Use the separate **Copy** buttons to copy the complete original or enriched
+  prompt; the inspector shows success or clipboard-error feedback.
 
 ### Permissions
 

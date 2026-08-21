@@ -136,11 +136,11 @@ daftprompt/
 ### Testing
 
 ```bash
-cargo test --workspace                    # all tests (207+)
+cargo test --workspace                    # all tests (234)
 cargo test -p daftprompt-acp              # ACP client + fixtures (18 tests)
 cargo test -p daftprompt-prompt-builder   # golden prompt tests (11 tests)
-cargo test -p daftprompt-storage          # durable store tests (30 tests)
-cargo test --test coordinator             # end-to-end coordinator tests (12 tests)
+cargo test -p daftprompt-storage          # durable store tests (31 tests)
+cargo test --test coordinator             # end-to-end coordinator tests (18 tests)
 ```
 
 The `acp-fake-adapter` binary (built automatically by tests) replays captured
@@ -153,7 +153,7 @@ fixtures without network access or Codex credentials.
 cargo run -- --repo ~/your-project
 
 # Or from a local codex-acp source clone
-cargo run -- --repo ~/your-project --adapter npm --adapter-args "run,start,--prefix,~/Projects/codex-acp"
+cargo run -- --repo ~/your-project --adapter npm --adapter-args "run,start,--prefix,$HOME/Projects/codex-acp"
 ```
 
 Press Tab to open the conversation panel. See

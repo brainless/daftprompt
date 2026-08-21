@@ -5,8 +5,8 @@ use daftprompt::coordinator::{
     start_coordinator, CoordinatorCommand, CoordinatorConfig, CoordinatorEvent,
 };
 use daftprompt_acp::{AcpClient, AcpClientConfig, AdapterLaunchProfile};
-use daftprompt_indexer::{Indexer, IndexerConfig};
-use daftprompt_prompt_builder::SelectionBudget;
+use daftprompt_indexer::{CommitData, Indexer, IndexerConfig};
+use daftprompt_prompt_builder::{RetrievalStatus, SelectionBudget, SourceQuota};
 use daftprompt_storage::ConversationStore;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
@@ -65,6 +65,43 @@ fn setup_test_indexer() -> (Arc<Mutex<Indexer>>, tempfile::TempDir) {
     };
     let indexer = Indexer::new(repo_dir.path(), &config).expect("Indexer::new");
     (Arc::new(Mutex::new(indexer)), repo_dir)
+}
+
+fn setup_test_indexer_with_commits(
+    commits: &[CommitData],
+) -> (Arc<Mutex<Indexer>>, tempfile::TempDir, tempfile::TempDir) {
+    let repo_dir = tempfile::tempdir().expect("repo tempdir");
+    std::process::Command::new("git")
+        .current_dir(repo_dir.path())
+        .args(["init"])
+        .output()
+        .expect("git init");
+    std::process::Command::new("git")
+        .current_dir(repo_dir.path())
+        .args(["config", "user.email", "test@test.com"])
+        .output()
+        .expect("git config email");
+    std::process::Command::new("git")
+        .current_dir(repo_dir.path())
+        .args(["config", "user.name", "Test"])
+        .output()
+        .expect("git config name");
+    std::process::Command::new("git")
+        .current_dir(repo_dir.path())
+        .args(["commit", "--allow-empty", "-m", "init"])
+        .output()
+        .expect("git commit");
+
+    let cache_dir = tempfile::tempdir().expect("cache tempdir");
+    let config = IndexerConfig {
+        cache_dir: Some(cache_dir.path().to_path_buf()),
+        model_name: String::new(),
+    };
+    let mut indexer = Indexer::new(repo_dir.path(), &config).expect("Indexer::new");
+    indexer
+        .index_commits(commits)
+        .expect("index deterministic commit candidates");
+    (Arc::new(Mutex::new(indexer)), repo_dir, cache_dir)
 }
 
 fn launch_fake_adapter() -> (AcpClient, daftprompt_acp::AcpEvents) {
@@ -296,6 +333,523 @@ async fn submit_prompt_end_to_end() {
     assert_eq!(completed, Some("EndTurn"), "expected EndTurn stop reason");
 
     shutdown_and_wait(&cmd_tx).await;
+}
+
+#[tokio::test]
+async fn session_uses_indexed_repo_cwd_and_persists_launch_initialize_metadata() {
+    let (indexer, repo_dir) = setup_test_indexer();
+    let canonical_repo = std::fs::canonicalize(repo_dir.path()).expect("canonical repo path");
+
+    let trace_dir = tempfile::tempdir().expect("trace tempdir");
+    let trace_path = trace_dir.path().join("conversation.db");
+    let cwd_marker = trace_dir.path().join("session-new-cwd.txt");
+    let store = ConversationStore::open(&trace_path).expect("file-backed store");
+
+    let adapter_path = fake_adapter_path();
+    let adapter_arg = "argument with spaces";
+    let profile = AdapterLaunchProfile::new(&adapter_path)
+        .arg(adapter_arg)
+        .env(
+            "FAKE_ADAPTER_NEW_SESSION_CWD_MARKER",
+            cwd_marker.to_string_lossy(),
+        );
+    let (acp_client, acp_events) = AcpClient::launch(
+        profile,
+        AcpClientConfig {
+            request_timeout: Duration::from_secs(5),
+            ..AcpClientConfig::default()
+        },
+    );
+    let config = CoordinatorConfig {
+        retrieval_limit_per_source: 5,
+        budget: SelectionBudget::default(),
+        request_timeout: Duration::from_secs(5),
+        shutdown_grace: Duration::from_secs(2),
+    };
+    let (cmd_tx, mut evt_rx) =
+        start_coordinator(indexer, store, acp_client, acp_events, config);
+
+    let session_events = collect_until(&mut evt_rx, |event| {
+        matches!(event, CoordinatorEvent::SessionCreated { .. })
+    })
+    .await;
+    let session_db_id = session_events
+        .iter()
+        .find_map(|event| match event {
+            CoordinatorEvent::SessionCreated { session_db_id, .. } => Some(*session_db_id),
+            _ => None,
+        })
+        .expect("coordinator should create a durable session");
+
+    let adapter_received_cwd =
+        std::fs::read_to_string(&cwd_marker).expect("fake adapter should capture session/new cwd");
+    assert_eq!(adapter_received_cwd, canonical_repo.to_string_lossy());
+
+    shutdown_and_wait(&cmd_tx).await;
+    drop(cmd_tx);
+    drop(evt_rx);
+
+    let store = ConversationStore::open(&trace_path).expect("reopen conversation store");
+    let session = store
+        .get_session(session_db_id)
+        .expect("read durable session")
+        .expect("durable session row");
+    let expected_command = serde_json::to_string(&[
+        adapter_path.to_string_lossy().into_owned(),
+        adapter_arg.to_string(),
+    ])
+    .expect("serialize expected adapter argv");
+
+    assert_eq!(session.cwd, canonical_repo.to_string_lossy());
+    assert_eq!(
+        session.adapter_command.as_deref(),
+        Some(expected_command.as_str())
+    );
+    assert_eq!(
+        session.adapter_name.as_deref(),
+        Some("@agentclientprotocol/codex-acp")
+    );
+    assert_eq!(session.adapter_version.as_deref(), Some("1.4.0"));
+    assert_eq!(session.protocol_version.as_deref(), Some("v1"));
+
+    let capabilities: serde_json::Value = serde_json::from_str(
+        session
+            .capabilities_json
+            .as_deref()
+            .expect("capabilities should be durable"),
+    )
+    .expect("capabilities JSON");
+    assert_eq!(capabilities["loadSession"], true);
+    assert!(capabilities["sessionCapabilities"]["close"].is_object());
+
+    let auth_methods: serde_json::Value = serde_json::from_str(
+        session
+            .auth_methods_json
+            .as_deref()
+            .expect("auth methods should be durable"),
+    )
+    .expect("auth methods JSON");
+    assert_eq!(auth_methods[0]["id"], "api-key");
+    assert_eq!(auth_methods[1]["id"], "chat-gpt");
+}
+
+#[tokio::test]
+async fn empty_retrieval_sends_explicit_no_context_envelope() {
+    let (cmd_tx, mut evt_rx, _repo) = setup_coordinator();
+
+    let _ = collect_until(&mut evt_rx, |e| {
+        matches!(e, CoordinatorEvent::SessionCreated { .. })
+    })
+    .await;
+
+    // The test index contains no indexed items, so an ordinary natural-language
+    // request deterministically exercises successful retrieval with zero hits.
+    let original = "explain the nonexistent quasar subsystem";
+    cmd_tx
+        .send(CoordinatorCommand::SubmitPrompt {
+            original: original.to_string(),
+        })
+        .unwrap();
+
+    let turn_events = collect_until(&mut evt_rx, |e| {
+        matches!(e, CoordinatorEvent::TurnCompleted { .. })
+    })
+    .await;
+
+    assert!(turn_events.iter().any(|event| matches!(
+        event,
+        CoordinatorEvent::RetrievalCompleted {
+            status,
+            candidate_count: 0,
+            included_count: 0,
+            ..
+        } if status == "ok"
+    )));
+
+    let enriched = turn_events
+        .iter()
+        .find_map(|event| match event {
+            CoordinatorEvent::EnrichedPromptReady {
+                original: recorded_original,
+                enriched,
+                ..
+            } => Some((recorded_original, enriched)),
+            _ => None,
+        })
+        .expect("expected the no-context enriched prompt to be emitted");
+
+    assert_eq!(
+        enriched.0, original,
+        "the original prompt must remain exact"
+    );
+    assert!(matches!(
+        enriched.1.retrieval_status,
+        RetrievalStatus::Empty
+    ));
+    assert!(enriched.1.text.contains("status=\"empty\""));
+    assert!(enriched.1.text.contains("<no-results/>"));
+    assert!(enriched.1.included.is_empty());
+    assert!(enriched.1.excluded.is_empty());
+    assert!(
+        turn_events.iter().any(|event| matches!(
+            event,
+            CoordinatorEvent::TurnCompleted { stop_reason, .. } if stop_reason == "EndTurn"
+        )),
+        "the adapter should receive and complete the no-context prompt"
+    );
+
+    shutdown_and_wait(&cmd_tx).await;
+}
+
+#[tokio::test]
+async fn inbound_updates_and_diagnostics_are_durable_ordered_and_redacted() {
+    let trace_dir = tempfile::tempdir().expect("trace tempdir");
+    let trace_path = trace_dir.path().join("durable-events.db");
+    let (cmd_tx, mut evt_rx, _repo) =
+        setup_coordinator_with_store_path(&trace_path, Duration::from_secs(5));
+
+    let session_events = collect_until(&mut evt_rx, |event| {
+        matches!(event, CoordinatorEvent::SessionCreated { .. })
+    })
+    .await;
+    let (session_db_id, acp_session_id) = session_events
+        .iter()
+        .find_map(|event| match event {
+            CoordinatorEvent::SessionCreated {
+                session_db_id,
+                acp_session_id,
+                ..
+            } => Some((*session_db_id, acp_session_id.clone())),
+            _ => None,
+        })
+        .expect("durable session identity");
+
+    cmd_tx
+        .send(CoordinatorCommand::SubmitPrompt {
+            original: "TRIGGER_UNKNOWN_UPDATE durable trace".to_string(),
+        })
+        .unwrap();
+
+    let turn_events = collect_until(&mut evt_rx, |event| {
+        matches!(
+            event,
+            CoordinatorEvent::AcpSessionUpdate { update_json, .. }
+                if update_json.contains("Say the single word")
+        )
+    })
+    .await;
+    let turn_id = turn_events
+        .iter()
+        .find_map(|event| match event {
+            CoordinatorEvent::TurnStarted { turn_id } => Some(*turn_id),
+            _ => None,
+        })
+        .expect("turn id");
+
+    if !turn_events
+        .iter()
+        .any(|event| matches!(event, CoordinatorEvent::TurnCompleted { .. }))
+    {
+        let _ = collect_until(&mut evt_rx, |event| {
+            matches!(event, CoordinatorEvent::TurnCompleted { .. })
+        })
+        .await;
+    }
+
+    shutdown_and_wait(&cmd_tx).await;
+    drop(cmd_tx);
+    drop(evt_rx);
+
+    let store = ConversationStore::open(&trace_path).expect("reopen durable event store");
+    let persisted = store
+        .get_events_for_session(session_db_id)
+        .expect("read durable ACP events");
+    assert!(persisted.len() >= 12, "expected the full fixture stream");
+
+    for (index, event) in persisted.iter().enumerate() {
+        assert_eq!(event.sequence, index as i64 + 1);
+        assert_eq!(event.session_id, session_db_id);
+        assert_eq!(event.turn_id, Some(turn_id));
+        assert_eq!(event.direction, "inbound");
+        assert_eq!(event.correlation_id.as_deref(), Some(acp_session_id.as_str()));
+    }
+
+    let unknown_update = persisted
+        .iter()
+        .find(|event| event.event_kind == "session_update_unknown")
+        .expect("unknown session/update should be durable");
+    assert_eq!(unknown_update.method.as_deref(), Some("session/update"));
+    assert!(unknown_update.payload_json.contains("[REDACTED]"));
+    assert!(!unknown_update.payload_json.contains("sk-durable-event-secret"));
+
+    let unknown_notification = persisted
+        .iter()
+        .find(|event| {
+            event.method.as_deref() == Some("session/unknown_notification_kind")
+        })
+        .expect("unknown notification diagnostic should be durable");
+    assert_eq!(unknown_notification.event_kind, "diagnostic");
+    assert!(unknown_notification.payload_json.contains("[REDACTED]"));
+    assert!(!unknown_notification
+        .payload_json
+        .contains("durable-diagnostic-secret"));
+
+    let unknown_request = persisted
+        .iter()
+        .find(|event| event.method.as_deref() == Some("session/unknown_request_kind"))
+        .expect("unknown request diagnostic should be durable");
+    assert_eq!(unknown_request.event_kind, "diagnostic");
+
+    let agent_chunk = persisted
+        .iter()
+        .find(|event| event.event_kind == "agent_message_chunk")
+        .expect("ordinary streamed agent response should be durable");
+    assert_eq!(agent_chunk.method.as_deref(), Some("session/update"));
+    let payload: serde_json::Value =
+        serde_json::from_str(&agent_chunk.payload_json).expect("known update payload JSON");
+    assert_eq!(payload["sessionId"], acp_session_id);
+    assert_eq!(payload["update"]["sessionUpdate"], "agent_message_chunk");
+}
+
+#[tokio::test]
+async fn inbound_event_persistence_failures_are_surfaced_without_panicking() {
+    let trace_dir = tempfile::tempdir().expect("trace tempdir");
+    let trace_path = trace_dir.path().join("broken-events.db");
+    let (cmd_tx, mut evt_rx, _repo) =
+        setup_coordinator_with_store_path(&trace_path, Duration::from_secs(5));
+
+    let _ = collect_until(&mut evt_rx, |event| {
+        matches!(event, CoordinatorEvent::SessionCreated { .. })
+    })
+    .await;
+
+    let breaker = rusqlite::Connection::open(&trace_path).expect("second trace connection");
+    breaker
+        .execute_batch("DROP TABLE acp_events;")
+        .expect("remove event table to force a deterministic write failure");
+    drop(breaker);
+
+    cmd_tx
+        .send(CoordinatorCommand::SubmitPrompt {
+            original: "exercise trace persistence failure".to_string(),
+        })
+        .unwrap();
+
+    let events = collect_until(&mut evt_rx, |event| {
+        matches!(event, CoordinatorEvent::PersistenceError { .. })
+    })
+    .await;
+    assert!(events.iter().any(|event| matches!(
+        event,
+        CoordinatorEvent::PersistenceError { error }
+            if error.contains("Failed to persist inbound ACP event")
+                && error.contains("no such table: acp_events")
+    )));
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, CoordinatorEvent::AcpSessionUpdate { .. })),
+        "a trace write failure must not suppress the live streamed update");
+
+    shutdown_and_wait(&cmd_tx).await;
+}
+
+#[tokio::test]
+async fn deterministic_selection_decisions_round_trip_from_file_backed_trace() {
+    let commits = (1..=5)
+        .map(|rank| CommitData {
+            sha: format!("selection-sha-{rank}"),
+            short_hash: format!("sel{rank}"),
+            author_name: "Trace Tester".to_string(),
+            time: "2026-08-20T00:00:00Z".to_string(),
+            message_title: format!(
+                "durabletrace candidate {rank} with deliberately oversized retrieval text"
+            ),
+            message_body: "additional deterministic selection evidence".to_string(),
+        })
+        .collect::<Vec<_>>();
+    let (indexer, _repo_dir, _cache_dir) = setup_test_indexer_with_commits(&commits);
+
+    let trace_dir = tempfile::tempdir().expect("trace tempdir");
+    let trace_path = trace_dir.path().join("selection-decisions.db");
+    let store = ConversationStore::open(&trace_path).expect("file-backed store");
+    let (acp_client, acp_events) = launch_fake_adapter();
+    let budget = SelectionBudget {
+        total_char_budget: 25,
+        per_excerpt_char_limit: 10,
+        per_source_quota: SourceQuota {
+            code: 5,
+            document: 5,
+            git_log: 5,
+        },
+    };
+    let config = CoordinatorConfig {
+        retrieval_limit_per_source: 5,
+        budget: budget.clone(),
+        request_timeout: Duration::from_secs(5),
+        shutdown_grace: Duration::from_secs(2),
+    };
+    let (cmd_tx, mut evt_rx) =
+        start_coordinator(indexer, store, acp_client, acp_events, config);
+
+    let _ = collect_until(&mut evt_rx, |event| {
+        matches!(event, CoordinatorEvent::SessionCreated { .. })
+    })
+    .await;
+    cmd_tx
+        .send(CoordinatorCommand::SubmitPrompt {
+            original: "durabletrace".to_string(),
+        })
+        .unwrap();
+    let turn_events = collect_until(&mut evt_rx, |event| {
+        matches!(event, CoordinatorEvent::TurnCompleted { .. })
+    })
+    .await;
+    let turn_id = turn_events
+        .iter()
+        .find_map(|event| match event {
+            CoordinatorEvent::TurnStarted { turn_id } => Some(*turn_id),
+            _ => None,
+        })
+        .expect("turn id");
+
+    shutdown_and_wait(&cmd_tx).await;
+    drop(cmd_tx);
+    drop(evt_rx);
+
+    let store = ConversationStore::open(&trace_path).expect("reopen selection trace");
+    let turn = store
+        .get_turn(turn_id)
+        .expect("read turn")
+        .expect("durable turn");
+    let stored_budget: serde_json::Value = serde_json::from_str(
+        turn.budget_json.as_deref().expect("selection budget should be durable"),
+    )
+    .expect("budget JSON");
+    assert_eq!(stored_budget["total_char_budget"], budget.total_char_budget);
+    assert_eq!(
+        stored_budget["per_excerpt_char_limit"],
+        budget.per_excerpt_char_limit
+    );
+
+    let runs = store
+        .get_retrieval_runs_for_turn(turn_id)
+        .expect("read retrieval run");
+    assert_eq!(runs.len(), 1);
+    let candidates = store
+        .get_candidates_for_run(runs[0].id)
+        .expect("read candidate decisions");
+    assert_eq!(candidates.len(), 5);
+    for (index, candidate) in candidates.iter().enumerate() {
+        assert_eq!(candidate.rank, index as i64 + 1);
+        assert_eq!(candidate.source, "git_log");
+        assert_eq!(candidate.match_type, "Hybrid");
+        assert!(candidate.score > 0.0);
+        assert!(candidate.text.contains("durabletrace candidate"));
+        let location: serde_json::Value =
+            serde_json::from_str(&candidate.location_json).expect("location JSON");
+        assert!(location["Commit"]["short_hash"].is_string());
+    }
+
+    assert_eq!(candidates[0].rank, 1);
+    assert!(candidates[0].included);
+    assert_eq!(candidates[0].truncated, Some(true));
+    assert_eq!(
+        candidates[0].truncation_reason.as_deref(),
+        Some("per_excerpt_limit")
+    );
+    assert!(candidates[0].original_len.unwrap() > 10);
+    assert!(candidates[0].exclusion_reason.is_none());
+
+    assert!(candidates[1].included);
+    assert_eq!(
+        candidates[1].truncation_reason.as_deref(),
+        Some("per_excerpt_limit")
+    );
+    assert!(candidates[2].included);
+    assert_eq!(
+        candidates[2].truncation_reason.as_deref(),
+        Some("total_budget_remaining")
+    );
+    assert_eq!(candidates[2].truncated, Some(true));
+
+    for candidate in &candidates[3..] {
+        assert!(!candidate.included);
+        assert_eq!(candidate.truncated, Some(false));
+        assert!(candidate.truncation_reason.is_none());
+        assert_eq!(
+            candidate.exclusion_reason.as_deref(),
+            Some("total_budget_exhausted")
+        );
+        assert!(candidate.original_len.unwrap() > 10);
+    }
+}
+
+#[tokio::test]
+async fn adapter_process_restart_supports_a_new_prompt_round_trip() {
+    let (first_cmd_tx, mut first_evt_rx, first_repo) = setup_coordinator();
+
+    let first_session = collect_until(&mut first_evt_rx, |e| {
+        matches!(e, CoordinatorEvent::SessionCreated { .. })
+    })
+    .await;
+    assert!(
+        first_session
+            .iter()
+            .any(|event| matches!(event, CoordinatorEvent::SessionCreated { .. })),
+        "expected the first adapter process to create a session"
+    );
+
+    first_cmd_tx
+        .send(CoordinatorCommand::SubmitPrompt {
+            original: "before adapter restart".to_string(),
+        })
+        .unwrap();
+    let first_turn = collect_until(&mut first_evt_rx, |e| {
+        matches!(e, CoordinatorEvent::TurnCompleted { .. })
+    })
+    .await;
+    assert!(first_turn.iter().any(|event| matches!(
+        event,
+        CoordinatorEvent::TurnCompleted { stop_reason, .. } if stop_reason == "EndTurn"
+    )));
+
+    // This waits for AcpClient::shutdown to reap the first child before a
+    // fresh coordinator launches a replacement adapter process below.
+    shutdown_and_wait(&first_cmd_tx).await;
+    drop(first_cmd_tx);
+    drop(first_evt_rx);
+    drop(first_repo);
+
+    let (second_cmd_tx, mut second_evt_rx, _second_repo) = setup_coordinator();
+    let second_session = collect_until(&mut second_evt_rx, |e| {
+        matches!(e, CoordinatorEvent::SessionCreated { .. })
+    })
+    .await;
+    assert!(
+        second_session
+            .iter()
+            .any(|event| matches!(event, CoordinatorEvent::SessionCreated { .. })),
+        "expected the restarted adapter process to create a fresh session"
+    );
+
+    second_cmd_tx
+        .send(CoordinatorCommand::SubmitPrompt {
+            original: "after adapter restart".to_string(),
+        })
+        .unwrap();
+    let second_turn = collect_until(&mut second_evt_rx, |e| {
+        matches!(e, CoordinatorEvent::TurnCompleted { .. })
+    })
+    .await;
+    assert!(
+        second_turn.iter().any(|event| matches!(
+            event,
+            CoordinatorEvent::TurnCompleted { stop_reason, .. } if stop_reason == "EndTurn"
+        )),
+        "the restarted adapter process should complete a prompt"
+    );
+
+    shutdown_and_wait(&second_cmd_tx).await;
 }
 
 #[tokio::test]

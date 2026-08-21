@@ -142,11 +142,52 @@ pub fn insert_vectors_into(
     Ok(())
 }
 
+/// Build an FTS5 query from user-authored text without exposing FTS syntax.
+///
+/// Each alphanumeric run becomes a quoted FTS token, so punctuation such as
+/// commas, apostrophes, parentheses, and quotes is treated as a separator
+/// instead of being parsed by the `MATCH` expression. A structurally valid
+/// uppercase `OR` is retained for the explicit broadening syntax already used
+/// by the search API; every other word, including FTS keywords, is quoted.
+fn build_fts_query(input: &str) -> Option<String> {
+    let tokens: Vec<&str> = input
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect();
+
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let has_valid_or_structure = tokens.first() != Some(&"OR")
+        && tokens.last() != Some(&"OR")
+        && !tokens
+            .windows(2)
+            .any(|pair| pair[0] == "OR" && pair[1] == "OR");
+
+    Some(
+        tokens
+            .iter()
+            .map(|token| {
+                if has_valid_or_structure && *token == "OR" {
+                    "OR".to_string()
+                } else {
+                    format!("\"{token}\"")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
 pub fn search_fts(db: &Connection, query: &str, limit: usize) -> anyhow::Result<Vec<(i64, f64)>> {
+    let Some(query) = build_fts_query(query) else {
+        return Ok(Vec::new());
+    };
     let mut stmt = db.prepare(
         "SELECT rowid, rank FROM items_fts WHERE items_fts MATCH ? ORDER BY rank LIMIT ?",
     )?;
-    let rows = stmt.query_map(rusqlite::params![query, limit as i64], |row| {
+    let rows = stmt.query_map(rusqlite::params![&query, limit as i64], |row| {
         Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
     })?;
     let mut results = Vec::new();
@@ -181,6 +222,9 @@ pub fn search_fts_filtered(
     source_type: &str,
     limit: usize,
 ) -> anyhow::Result<Vec<(i64, f64)>> {
+    let Some(query) = build_fts_query(query) else {
+        return Ok(Vec::new());
+    };
     let mut stmt = db.prepare(
         "SELECT items.id, items_fts.rank \
          FROM items_fts \
@@ -188,9 +232,10 @@ pub fn search_fts_filtered(
          WHERE items_fts MATCH ? AND items.source_type = ? \
          ORDER BY items_fts.rank LIMIT ?",
     )?;
-    let rows = stmt.query_map(rusqlite::params![query, source_type, limit as i64], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
-    })?;
+    let rows = stmt.query_map(
+        rusqlite::params![&query, source_type, limit as i64],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)),
+    )?;
     let mut results = Vec::new();
     for row in rows {
         results.push(row?);
@@ -503,6 +548,75 @@ mod tests {
         let db = Connection::open_in_memory().unwrap();
         init_schema(&db, 384).unwrap();
         db
+    }
+
+    #[test]
+    fn fts_query_quotes_natural_punctuation_deterministically() {
+        assert_eq!(
+            build_fts_query("How does the provider's checkout, validation work?"),
+            Some(
+                "\"How\" \"does\" \"the\" \"provider\" \"s\" \"checkout\" \"validation\" \"work\""
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            build_fts_query("checkout OR validation"),
+            Some("\"checkout\" OR \"validation\"".to_string())
+        );
+        assert_eq!(build_fts_query("OR, OR"), Some("\"OR\" \"OR\"".to_string()));
+        assert_eq!(build_fts_query(", '... ?"), None);
+    }
+
+    #[test]
+    fn fts_search_accepts_commas_and_apostrophes_and_keeps_source_filtering() {
+        let db = test_db();
+        insert_items(
+            &db,
+            "code",
+            &[ItemRow {
+                identifier: "src/checkout.rs::validate".to_string(),
+                text: "The provider's checkout, validation flow".to_string(),
+                author: None,
+                metadata: None,
+            }],
+        )
+        .unwrap();
+        insert_items(
+            &db,
+            "document",
+            &[ItemRow {
+                identifier: "README.md".to_string(),
+                text: "The provider's checkout, validation flow".to_string(),
+                author: None,
+                metadata: None,
+            }],
+        )
+        .unwrap();
+
+        let all = search_fts(&db, "provider's checkout, validation", 10).unwrap();
+        assert_eq!(all.len(), 2);
+
+        let code = search_fts_filtered(
+            &db,
+            "How does provider's checkout, validation work?",
+            "code",
+            10,
+        )
+        .unwrap();
+        assert!(
+            code.is_empty(),
+            "unmatched natural words still use AND semantics"
+        );
+
+        let code = search_fts_filtered(&db, "provider's checkout, validation", "code", 10).unwrap();
+        let documents =
+            search_fts_filtered(&db, "provider's checkout, validation", "document", 10).unwrap();
+        let commits =
+            search_fts_filtered(&db, "provider's checkout, validation", "commit", 10).unwrap();
+        assert_eq!(code.len(), 1);
+        assert_eq!(documents.len(), 1);
+        assert!(commits.is_empty());
+        assert!(search_fts(&db, ", '... ?", 10).unwrap().is_empty());
     }
 
     #[test]

@@ -106,6 +106,12 @@ pub enum CoordinatorEvent {
         error: String,
         kind: AdapterErrorKind,
     },
+    /// A durable trace write failed. This is distinct from an adapter
+    /// transport failure: the live session may still be usable, but the
+    /// transcript must make the resulting evidence gap explicit.
+    PersistenceError {
+        error: String,
+    },
 }
 
 /// A coarse, UI-renderable classification of an [`CoordinatorEvent::AdapterError`],
@@ -210,7 +216,7 @@ type PrepareHandle = JoinHandle<PreparedPrompt>;
 /// once it is known, correlated back to the turn and event that produced it.
 struct PendingPermission {
     turn_id: i64,
-    event_id: i64,
+    event_id: Option<i64>,
     tool_call_json: String,
     options_json: String,
 }
@@ -246,6 +252,14 @@ async fn run(
     mut commands: mpsc::UnboundedReceiver<CoordinatorCommand>,
     events: mpsc::UnboundedSender<CoordinatorEvent>,
 ) {
+    // The indexer owns the canonical repository identity. Reading the path
+    // from it prevents ACP session cwd from drifting to daftprompt's process
+    // cwd or an adapter-specific cwd (for example npm's `--prefix` directory).
+    let repository_path = {
+        let indexer = indexer.lock().await;
+        indexer.repo_path().to_path_buf()
+    };
+
     // Initialize ACP connection
     let init_info = match acp_client.initialize().await {
         Ok(info) => info,
@@ -259,7 +273,7 @@ async fn run(
     };
 
     // Create ACP session
-    let acp_session_id: AcpSessionId = match acp_client.new_session(".").await {
+    let acp_session_id: AcpSessionId = match acp_client.new_session(&repository_path).await {
         Ok(id) => id,
         Err(e) => {
             let _ = events.send(CoordinatorEvent::AdapterError {
@@ -270,17 +284,58 @@ async fn run(
         }
     };
 
+    // Persist the exact launch and negotiation provenance. `adapter_command`
+    // is a JSON argv array so arguments containing whitespace remain
+    // reconstructable; adapter environment overrides are intentionally absent.
+    let adapter_command = match serde_json::to_string(acp_client.launch_command_argv()) {
+        Ok(command) => command,
+        Err(e) => {
+            let _ = events.send(CoordinatorEvent::AdapterError {
+                error: format!("Failed to serialize adapter launch command: {e}"),
+                kind: AdapterErrorKind::Other,
+            });
+            return;
+        }
+    };
+    let adapter_name = init_info.agent_info.as_ref().map(|info| info.name.clone());
+    let adapter_version = init_info
+        .agent_info
+        .as_ref()
+        .map(|info| info.version.clone());
+    let protocol_version = format!("v{}", init_info.protocol_version.as_u16());
+    let capabilities_json = match serde_json::to_string(&init_info.agent_capabilities) {
+        Ok(capabilities) => capabilities,
+        Err(e) => {
+            let _ = events.send(CoordinatorEvent::AdapterError {
+                error: format!("Failed to serialize adapter capabilities: {e}"),
+                kind: AdapterErrorKind::Other,
+            });
+            return;
+        }
+    };
+    let auth_methods_json = match serde_json::to_string(&init_info.auth_methods) {
+        Ok(auth_methods) => auth_methods,
+        Err(e) => {
+            let _ = events.send(CoordinatorEvent::AdapterError {
+                error: format!("Failed to serialize adapter authentication methods: {e}"),
+                kind: AdapterErrorKind::Other,
+            });
+            return;
+        }
+    };
+    let repository_path_text = repository_path.to_string_lossy();
+
     // Persist session and emit event
     let session_db_id = match store.create_session(
         "coordinator",
-        ".",
-        None,
-        None,
-        None,
+        &repository_path_text,
+        Some(&adapter_command),
+        adapter_name.as_deref(),
+        adapter_version.as_deref(),
         Some(&acp_session_id.to_string()),
-        None,
-        None,
-        None,
+        Some(&protocol_version),
+        Some(&capabilities_json),
+        Some(&auth_methods_json),
     ) {
         Ok(id) => id,
         Err(e) => {
@@ -295,17 +350,9 @@ async fn run(
     let _ = events.send(CoordinatorEvent::SessionCreated {
         session_db_id,
         acp_session_id: acp_session_id.to_string(),
-        adapter_name: init_info
-            .agent_info
-            .as_ref()
-            .map(|i| i.name.clone())
-            .unwrap_or_default(),
-        adapter_version: init_info
-            .agent_info
-            .as_ref()
-            .map(|i| i.version.clone())
-            .unwrap_or_default(),
-        protocol_version: format!("v{}", init_info.protocol_version.as_u16()),
+        adapter_name: adapter_name.unwrap_or_default(),
+        adapter_version: adapter_version.unwrap_or_default(),
+        protocol_version,
     });
 
     log::info!(
@@ -418,7 +465,19 @@ async fn run(
             },
             event = acp_events.recv() => match event {
                 Some(event) => {
-                    handle_acp_event(&event, dispatched_turn_id, session_db_id, &store, &events, &mut pending_permissions);
+                    if let Err(error) = handle_acp_event(
+                        &event,
+                        dispatched_turn_id,
+                        &acp_session_id,
+                        session_db_id,
+                        &store,
+                        &events,
+                        &mut pending_permissions,
+                    ) {
+                        let _ = events.send(CoordinatorEvent::PersistenceError {
+                            error: format!("Failed to persist inbound ACP event: {error}"),
+                        });
+                    }
                     continue;
                 }
                 None => continue,
@@ -511,14 +570,20 @@ async fn run(
                 };
 
                 if let Some(pending) = pending_permissions.remove(&request_id) {
-                    let _ = store.record_permission(
-                        pending.event_id,
-                        pending.turn_id,
-                        &pending.tool_call_json,
-                        &pending.options_json,
-                        chosen_option_id,
-                        outcome_str,
-                    );
+                    if let Some(event_id) = pending.event_id {
+                        if let Err(error) = store.record_permission(
+                            event_id,
+                            pending.turn_id,
+                            &pending.tool_call_json,
+                            &pending.options_json,
+                            chosen_option_id,
+                            outcome_str,
+                        ) {
+                            let _ = events.send(CoordinatorEvent::PersistenceError {
+                                error: format!("Failed to persist permission decision: {error}"),
+                            });
+                        }
+                    }
                 } else {
                     log::warn!(
                         "RespondPermission: no pending permission request tracked for this id"
@@ -766,41 +831,83 @@ fn persist_retrieval(
     )?;
 
     if let RetrievalOutcome::Ok(snapshot) = outcome {
-        for (rank, candidate) in snapshot.candidates.iter().enumerate() {
-            let included = enriched
+        for candidate in &snapshot.candidates {
+            let selected = enriched
                 .included
                 .iter()
-                .any(|e| e.identifier == candidate.identifier && e.rank == rank + 1);
+                .find(|excerpt| {
+                    excerpt.rank == candidate.rank
+                        && excerpt.identifier == candidate.identifier
+                        && excerpt.source == candidate.source
+                });
+            let excluded = enriched
+                .excluded
+                .iter()
+                .find(|excluded| {
+                    excluded.rank == candidate.rank
+                        && excluded.identifier == candidate.identifier
+                        && excluded.source == candidate.source
+                });
+
+            let (included, truncated, truncation_reason, original_len, exclusion_reason) =
+                match (selected, excluded) {
+                    (Some(selected), None) => (
+                        true,
+                        Some(selected.truncated),
+                        selected.truncation_reason.map(|reason| reason.as_label()),
+                        Some(selected.original_len as i64),
+                        None,
+                    ),
+                    (None, Some(excluded)) => (
+                        false,
+                        Some(false),
+                        None,
+                        Some(candidate.text.chars().count() as i64),
+                        Some(excluded.reason.as_label()),
+                    ),
+                    (Some(_), Some(_)) => anyhow::bail!(
+                        "retrieval candidate at rank {} was both included and excluded",
+                        candidate.rank
+                    ),
+                    (None, None) => anyhow::bail!(
+                        "retrieval candidate at rank {} had no deterministic selection decision",
+                        candidate.rank
+                    ),
+                };
             let location_json = match &candidate.location {
                 ExcerptLocation::Code {
                     file_path,
                     line_start,
                     line_end,
-                } => format!(
-                    r#"{{"Code":{{"file_path":"{}","line_start":{},"line_end":{}}}}}"#,
-                    file_path, line_start, line_end
-                ),
-                ExcerptLocation::Document { file_path } => {
-                    format!(r#"{{"Document":{{"file_path":"{}"}}}}"#, file_path)
-                }
-                ExcerptLocation::Commit { short_hash } => {
-                    format!(r#"{{"Commit":{{"short_hash":"{}"}}}}"#, short_hash)
-                }
-            };
+                } => serde_json::json!({
+                    "Code": {
+                        "file_path": file_path,
+                        "line_start": line_start,
+                        "line_end": line_end,
+                    }
+                }),
+                ExcerptLocation::Document { file_path } => serde_json::json!({
+                    "Document": { "file_path": file_path }
+                }),
+                ExcerptLocation::Commit { short_hash } => serde_json::json!({
+                    "Commit": { "short_hash": short_hash }
+                }),
+            }
+            .to_string();
             store.insert_retrieval_candidate(
                 run_id,
                 &candidate.identifier,
                 candidate.source.as_str(),
-                rank as i64 + 1,
+                candidate.rank as i64,
                 candidate.score as f64,
                 &format!("{:?}", candidate.match_type),
                 &candidate.text,
                 &location_json,
                 included,
-                None,
-                None,
-                None,
-                None,
+                truncated,
+                truncation_reason,
+                original_len,
+                exclusion_reason.as_deref(),
             )?;
         }
     }
@@ -813,11 +920,21 @@ fn persist_retrieval(
 
     // set_enriched_prompt returns StorageError, not anyhow::Error; StorageError
     // implements std::error::Error so `?` converts it via anyhow's blanket From.
+    let budget_json = serde_json::json!({
+        "total_char_budget": enriched.budget.total_char_budget,
+        "per_excerpt_char_limit": enriched.budget.per_excerpt_char_limit,
+        "per_source_quota": {
+            "code": enriched.budget.per_source_quota.code,
+            "document": enriched.budget.per_source_quota.document,
+            "git_log": enriched.budget.per_source_quota.git_log,
+        }
+    })
+    .to_string();
     store.set_enriched_prompt(
         turn_id,
         &enriched.text,
         enriched.formatter_version as i64,
-        None,
+        Some(&budget_json),
         retrieval_status_str,
     )?;
     Ok(())
@@ -877,34 +994,76 @@ fn handle_prompt_result(
 fn handle_acp_event(
     event: &AcpEvent,
     dispatched_turn_id: Option<i64>,
+    expected_acp_session_id: &AcpSessionId,
     session_db_id: i64,
     store: &ConversationStore,
     events: &mpsc::UnboundedSender<CoordinatorEvent>,
     pending_permissions: &mut HashMap<PermissionRequestId, PendingPermission>,
-) {
+) -> anyhow::Result<()> {
     match event {
         AcpEvent::SessionUpdate {
+            session_id,
             update: SessionUpdateKind::Known(update),
-            ..
         } => {
-            let update_json = serde_json::to_string(update).unwrap_or_default();
-            if let Some(turn_id) = dispatched_turn_id {
+            let update_value = serde_json::to_value(update)?;
+            let event_kind = update_value
+                .get("sessionUpdate")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("session_update_unknown")
+                .to_string();
+            let update_json = serde_json::to_string(&update_value)?;
+            let turn_id = correlated_turn_id(
+                session_id,
+                expected_acp_session_id,
+                dispatched_turn_id,
+            );
+            let payload = serde_json::json!({
+                "sessionId": session_id.to_string(),
+                "update": update_value,
+            })
+            .to_string();
+            let persist_result = store.append_event(
+                session_db_id,
+                turn_id,
+                "inbound",
+                &event_kind,
+                Some("session/update"),
+                Some(&session_id.to_string()),
+                &payload,
+            );
+            if let Some(turn_id) = turn_id {
                 let _ = events.send(CoordinatorEvent::AcpSessionUpdate {
                     turn_id,
                     update_json,
                 });
             }
+            persist_result?;
         }
         AcpEvent::SessionUpdate {
+            session_id,
             update: SessionUpdateKind::Unknown(diag),
-            ..
         } => {
-            if let Some(turn_id) = dispatched_turn_id {
+            let turn_id = correlated_turn_id(
+                session_id,
+                expected_acp_session_id,
+                dispatched_turn_id,
+            );
+            let persist_result = store.append_event(
+                session_db_id,
+                turn_id,
+                "inbound",
+                "session_update_unknown",
+                Some("session/update"),
+                Some(&session_id.to_string()),
+                &diag.raw,
+            );
+            if let Some(turn_id) = turn_id {
                 let _ = events.send(CoordinatorEvent::AcpSessionUpdate {
                     turn_id,
                     update_json: diag.raw.clone(),
                 });
             }
+            persist_result?;
         }
         AcpEvent::PermissionRequested(request) => {
             let tool_call_json =
@@ -912,26 +1071,30 @@ fn handle_acp_event(
             let options_json =
                 serde_json::to_string(&request.options).unwrap_or_default();
 
-            if let Some(turn_id) = dispatched_turn_id {
-                if let Ok(event_id) = store.append_event(
-                    session_db_id,
-                    Some(turn_id),
-                    "inbound",
-                    "permission_request",
-                    Some("session/request_permission"),
-                    None,
-                    &tool_call_json,
-                ) {
-                    pending_permissions.insert(
-                        request.id.clone(),
-                        PendingPermission {
-                            turn_id,
-                            event_id,
-                            tool_call_json: tool_call_json.clone(),
-                            options_json: options_json.clone(),
-                        },
-                    );
-                }
+            let turn_id = correlated_turn_id(
+                &request.session_id,
+                expected_acp_session_id,
+                dispatched_turn_id,
+            );
+            let persist_result = store.append_event(
+                session_db_id,
+                turn_id,
+                "inbound",
+                "permission_request",
+                Some("session/request_permission"),
+                Some(request.id.as_str()),
+                &tool_call_json,
+            );
+            if let Some(turn_id) = turn_id {
+                pending_permissions.insert(
+                    request.id.clone(),
+                    PendingPermission {
+                        turn_id,
+                        event_id: persist_result.as_ref().ok().copied(),
+                        tool_call_json: tool_call_json.clone(),
+                        options_json: options_json.clone(),
+                    },
+                );
             }
 
             let _ = events.send(CoordinatorEvent::PermissionRequired {
@@ -939,9 +1102,52 @@ fn handle_acp_event(
                 tool_call_json,
                 options_json,
             });
+            persist_result?;
         }
         AcpEvent::Diagnostic(diag) => {
+            let method = diagnostic_method(&diag.label);
+            let diagnostic_session_id = diagnostic_session_id(&diag.raw);
+            let turn_id = diagnostic_session_id
+                .as_deref()
+                .filter(|session_id| *session_id == expected_acp_session_id.to_string())
+                .and(dispatched_turn_id);
+            store.append_event(
+                session_db_id,
+                turn_id,
+                "inbound",
+                "diagnostic",
+                method.as_deref(),
+                diagnostic_session_id.as_deref(),
+                &diag.raw,
+            )?;
             log::debug!("ACP diagnostic: {}: {}", diag.label, diag.raw);
         }
     }
+    Ok(())
+}
+
+fn correlated_turn_id(
+    event_session_id: &AcpSessionId,
+    expected_session_id: &AcpSessionId,
+    dispatched_turn_id: Option<i64>,
+) -> Option<i64> {
+    (event_session_id == expected_session_id)
+        .then_some(dispatched_turn_id)
+        .flatten()
+}
+
+fn diagnostic_method(label: &str) -> Option<String> {
+    label
+        .strip_prefix("unknown-notification:")
+        .or_else(|| label.strip_prefix("unknown-request:"))
+        .or_else(|| label.contains('/').then_some(label))
+        .map(str::to_string)
+}
+
+fn diagnostic_session_id(raw: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()?
+        .get("sessionId")?
+        .as_str()
+        .map(str::to_string)
 }

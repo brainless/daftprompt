@@ -43,6 +43,10 @@ fn redact_value(value: &mut serde_json::Value) {
                             *val = serde_json::Value::String("[REDACTED]".to_string());
                         }
                     }
+                } else if key_lower == "sessionid" {
+                    // ACP session IDs are correlation identifiers, not
+                    // credentials. Preserve them even when their UUID shape
+                    // trips the generic long-opaque-string heuristic below.
                 } else {
                     redact_value(val);
                 }
@@ -145,6 +149,14 @@ mod tests {
         let redacted = redact_secrets(json);
         assert!(redacted.contains("hello world"));
         assert!(redacted.contains("count"));
+        assert!(!redacted.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn test_preserve_uuid_session_identifier() {
+        let json = r#"{"sessionId":"01a01050-a8b2-7a40-ab44-9e6f9400741e"}"#;
+        let redacted = redact_secrets(json);
+        assert!(redacted.contains("01a01050-a8b2-7a40-ab44-9e6f9400741e"));
         assert!(!redacted.contains("[REDACTED]"));
     }
 }

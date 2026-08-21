@@ -455,6 +455,7 @@ fn main() -> anyhow::Result<()> {
             tokio_runtime: None,
             coordinator_cmd: None,
             coordinator_evt: None,
+            clipboard: None,
         })
         .unwrap();
 
@@ -492,6 +493,9 @@ struct Application {
     tokio_runtime: Option<tokio::runtime::Runtime>,
     coordinator_cmd: Option<mpsc::UnboundedSender<CoordinatorCommand>>,
     coordinator_evt: Option<mpsc::UnboundedReceiver<CoordinatorEvent>>,
+    // Kept on the winit event-loop thread. On Linux the clipboard owner must
+    // remain alive for copied text to stay available to other applications.
+    clipboard: Option<arboard::Clipboard>,
 }
 
 impl winit::application::ApplicationHandler for Application {
@@ -954,10 +958,16 @@ impl Application {
 
         // Drain coordinator events and handle UI signals (Task 5).
         drain_coordinator_events(self.coordinator_evt.as_mut(), state);
-        handle_conversation_signals(
+        let clipboard_feedback_changed = handle_conversation_signals(
             self.coordinator_cmd.as_ref(),
+            &mut self.clipboard,
             state,
         );
+        if clipboard_feedback_changed {
+            if let Some(window) = self.window.as_ref() {
+                window.request_redraw();
+            }
+        }
 
         // Acquire the surface texture. If acquisition fails, skip the frame
         // and request another redraw — same as Task 1.
@@ -1233,6 +1243,7 @@ fn apply_coordinator_event(event: CoordinatorEvent, state: &mut AppState) {
                     total_char_budget: enriched.budget.total_char_budget,
                     per_excerpt_char_limit: enriched.budget.per_excerpt_char_limit,
                 });
+            state.conversation.clipboard_feedback = None;
         }
         CoordinatorEvent::AcpSessionUpdate { update_json, .. } => {
             parse_session_update(&update_json, state);
@@ -1303,6 +1314,13 @@ fn apply_coordinator_event(event: CoordinatorEvent, state: &mut AppState) {
             state.conversation.entries.push(state::TranscriptEntry {
                 kind: state::TranscriptEntryKind::Error,
                 text: format!("[{}] {error}", kind.label()),
+                timestamp: timestamp_now(),
+            });
+        }
+        CoordinatorEvent::PersistenceError { error } => {
+            state.conversation.entries.push(state::TranscriptEntry {
+                kind: state::TranscriptEntryKind::Error,
+                text: format!("[Trace persistence] {error}"),
                 timestamp: timestamp_now(),
             });
         }
@@ -1418,8 +1436,9 @@ fn push_content_block_entry(
 /// Handle UI signal flags set by `render_conversation`.
 fn handle_conversation_signals(
     cmd_tx: Option<&mpsc::UnboundedSender<CoordinatorCommand>>,
+    clipboard: &mut Option<arboard::Clipboard>,
     state: &mut AppState,
-) {
+) -> bool {
     // Send prompt
     if state.conversation.prompt_send_requested {
         state.conversation.prompt_send_requested = false;
@@ -1468,6 +1487,34 @@ fn handle_conversation_signals(
             });
         }
     }
+
+    let mut clipboard_feedback_changed = false;
+    if let Some((target, text)) = state.conversation.take_prompt_copy_request() {
+        state.conversation.clipboard_feedback = Some(match copy_to_clipboard(clipboard, &text) {
+            Ok(()) => state::ClipboardFeedback::Copied(target),
+            Err(message) => state::ClipboardFeedback::Failed { target, message },
+        });
+        clipboard_feedback_changed = true;
+    }
+    clipboard_feedback_changed
+}
+
+fn copy_to_clipboard(
+    clipboard: &mut Option<arboard::Clipboard>,
+    text: &str,
+) -> Result<(), String> {
+    if clipboard.is_none() {
+        *clipboard = Some(
+            arboard::Clipboard::new()
+                .map_err(|error| format!("clipboard unavailable: {error}"))?,
+        );
+    }
+
+    clipboard
+        .as_mut()
+        .expect("clipboard was initialized above")
+        .set_text(text.to_owned())
+        .map_err(|error| format!("clipboard write failed: {error}"))
 }
 
 fn timestamp_now() -> String {

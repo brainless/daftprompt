@@ -312,6 +312,11 @@ impl Indexer {
         })
     }
 
+    /// Canonical repository root this indexer was opened against.
+    pub fn repo_path(&self) -> &Path {
+        &self.repo_path
+    }
+
     pub fn index_commits(&mut self, commits: &[CommitData]) -> anyhow::Result<usize> {
         let existing = db::existing_identifiers(&self.db, "commit")?;
 
@@ -1273,6 +1278,61 @@ fn calculate_total(prices: &HashMap<String, f64>) -> f64 {
             model_name: String::new(),
         };
         Indexer::new(repo_dir, &config).expect("Indexer::new")
+    }
+
+    #[test]
+    fn unified_fts_retrieval_accepts_natural_commas_and_apostrophes() {
+        let (repo_dir, cache_dir) = setup_repo_with_files(&[("fixture.txt", "seed")]);
+        let indexer = make_indexer(repo_dir.path(), cache_dir.path());
+        let text = "The provider's checkout, validation flow";
+
+        db::insert_items(
+            &indexer.db,
+            "commit",
+            &[db::ItemRow {
+                identifier: "commit-punctuation".to_string(),
+                text: text.to_string(),
+                author: Some("Test".to_string()),
+                metadata: Some(r#"{"short_hash":"abc123"}"#.to_string()),
+            }],
+        )
+        .unwrap();
+        db::insert_items(
+            &indexer.db,
+            "code",
+            &[db::ItemRow {
+                identifier: "src/checkout.rs::validate".to_string(),
+                text: text.to_string(),
+                author: None,
+                metadata: Some(
+                    r#"{"file_path":"src/checkout.rs","line_start":1,"line_end":2,"symbol_kind":"function"}"#
+                        .to_string(),
+                ),
+            }],
+        )
+        .unwrap();
+        db::insert_items(
+            &indexer.db,
+            "document",
+            &[db::ItemRow {
+                identifier: "README.md".to_string(),
+                text: text.to_string(),
+                author: None,
+                metadata: Some(r#"{"file_path":"README.md"}"#.to_string()),
+            }],
+        )
+        .unwrap();
+
+        let results = indexer
+            .search_all_hybrid("provider's checkout, validation", 10)
+            .expect("ordinary punctuation must not become FTS5 syntax");
+
+        assert_eq!(results.combined.len(), 3);
+        assert_eq!(results.git_log.len(), 1);
+        assert_eq!(results.code.len(), 1);
+        assert_eq!(results.documents.len(), 1);
+        assert_eq!(results.code[0].file_path, "src/checkout.rs");
+        assert_eq!(results.documents[0].file_path, "README.md");
     }
 
     #[test]

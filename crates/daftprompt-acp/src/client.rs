@@ -140,6 +140,9 @@ pub struct AcpClient {
     commands: mpsc::UnboundedSender<Command>,
     task: tokio::task::JoinHandle<Result<(), AcpError>>,
     client_info: Implementation,
+    /// Executable + argv captured from the profile actually used to launch
+    /// this connection. Environment overrides are intentionally excluded.
+    launch_command_argv: Vec<String>,
     /// The connection task's terminal error, if it has already ended. Read
     /// when a command can no longer be delivered (the `commands` channel's
     /// receiver was dropped) so callers see *why* the connection ended --
@@ -182,6 +185,7 @@ impl AcpClient {
     pub fn launch(profile: AdapterLaunchProfile, config: AcpClientConfig) -> (Self, AcpEvents) {
         let (commands_tx, commands_rx) = mpsc::unbounded_channel();
         let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let launch_command_argv = profile.command_argv();
         let agent = profile.into_agent();
         let timeout = config.request_timeout;
         let client_info = Implementation::new(config.client_name, config.client_version);
@@ -202,11 +206,21 @@ impl AcpClient {
                 commands: commands_tx,
                 task,
                 client_info,
+                launch_command_argv,
                 terminal_error,
                 connection_closed,
             },
             AcpEvents { inner: events_rx },
         )
+    }
+
+    /// Executable followed by the exact arguments used to launch the adapter.
+    ///
+    /// This is safe to persist as process provenance because adapter
+    /// environment overrides are not included.
+    #[must_use]
+    pub fn launch_command_argv(&self) -> &[String] {
+        &self.launch_command_argv
     }
 
     /// The connection's recorded terminal error. Waits (briefly, and only

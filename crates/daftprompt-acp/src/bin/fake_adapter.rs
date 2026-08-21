@@ -170,6 +170,15 @@ async fn main() {
                 }
             }
             "session/new" => {
+                // Test-observable capture of the exact cwd supplied by the
+                // client. This stays opt-in so ordinary fixtures do not write
+                // outside their protocol stream.
+                if let Ok(marker_path) = env::var("FAKE_ADAPTER_NEW_SESSION_CWD_MARKER") {
+                    if let Some(cwd) = msg["params"]["cwd"].as_str() {
+                        let _ = std::fs::write(marker_path, cwd.as_bytes());
+                    }
+                }
+
                 if mode == Mode::AuthRequired {
                     write_line(
                         &mut stdout,
@@ -290,7 +299,8 @@ async fn main() {
                                 "sessionId": session_id,
                                 "update": {
                                     "sessionUpdate": "totally_unknown_kind",
-                                    "exoticField": 42
+                                    "exoticField": 42,
+                                    "apiKey": "sk-durable-event-secret-1234567890"
                                 }
                             }
                         }),
@@ -302,7 +312,11 @@ async fn main() {
                         &json!({
                             "jsonrpc": "2.0",
                             "method": "session/unknown_notification_kind",
-                            "params": { "sessionId": session_id, "note": "hi" }
+                            "params": {
+                                "sessionId": session_id,
+                                "note": "hi",
+                                "authorization": "Bearer durable-diagnostic-secret"
+                            }
                         }),
                     )
                     .await;

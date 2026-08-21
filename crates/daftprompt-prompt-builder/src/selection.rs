@@ -29,6 +29,16 @@ pub enum TruncationReason {
     TotalBudgetRemaining,
 }
 
+impl TruncationReason {
+    /// Stable storage/formatting label for this deterministic decision.
+    pub fn as_label(self) -> &'static str {
+        match self {
+            TruncationReason::PerExcerptLimit => "per_excerpt_limit",
+            TruncationReason::TotalBudgetRemaining => "total_budget_remaining",
+        }
+    }
+}
+
 /// Why a candidate was excluded entirely (zero characters included).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExclusionReason {

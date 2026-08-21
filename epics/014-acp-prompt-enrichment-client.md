@@ -1,5 +1,10 @@
 # Epic 014: ACP Prompt Enrichment Client
 
+**Status: DONE.** All implementation, documentation, fixture, and evaluation
+tasks are complete. The 12-turn/3-repository evaluation established concrete
+entry gates for any later builder-LLM experiment; those quality gates remain
+future work and are not implied to have passed by this epic's completion.
+
 ## Introduction
 
 daftprompt already searches repository code, documents, and git history through
@@ -510,7 +515,7 @@ SECRET/KEY/TOKEN/PASSWORD, Bearer/Basic auth headers, and long opaque
 strings that look like credentials. The redaction module also has a
 text-level fallback for non-JSON payloads.
 
-19 integration tests in `tests/durable_store.rs` pass in a temporary
+21 integration tests in `tests/durable_store.rs` pass in a temporary
 directory: migration (all tables exist, schema version, idempotency),
 round-trip (exact text preservation without normalization), state transitions
 (7 tests covering all legal and illegal transitions including terminal
@@ -521,7 +526,7 @@ preservation of normal values), and permission round-trip (option IDs and
 cancelled outcome).
 
 `cargo check -p daftprompt-storage` and `cargo test -p daftprompt-storage`
-both pass (30/30 tests including unit tests).
+both pass (31/31 tests including unit tests).
 
 **Reopened-hardening pass (review follow-up):** three items from the review of
 Tasks 3–6 are resolved here.
@@ -627,9 +632,13 @@ Tasks 3-6 are resolved here.
   `cancel_during_retrieval_is_processed`, `retry_turn_redispatches_failed_turn`,
   `late_events_are_not_misattributed_to_a_newer_turn`.
 
-The UI-side "retry" trigger and a small number of end-to-end scenarios listed
-in the original acceptance criteria (explicit no-context, restart) remain
-unexercised; see Task 5 for the retry command's UI wiring status.
+**Post-evaluation verification:** six additional coordinator scenarios now
+cover the gaps and defects exposed by the live evaluation: canonical indexed-
+repository cwd plus durable launch/initialization metadata, an explicit empty
+retrieval/no-context envelope, ordered/redacted durable ACP updates and
+diagnostics, visible event-persistence failure, durable deterministic selection
+and truncation decisions, and a complete adapter-process restart followed by a
+new prompt round trip. `cargo test --test coordinator` passes all 18 tests.
 
 #### Acceptance Criteria
 
@@ -647,11 +656,8 @@ unexercised; see Task 5 for the retry command's UI wiring status.
   through typed application commands (decision now persisted).
 - [x] No retrieval or ACP IO runs on the render thread (retrieval now off the
   command loop too, via `spawn_prepare_task`).
-- [ ] Scripted end-to-end tests exercise success, no-context, permission,
-  cancellation, adapter exit, and restart flows. Success, permission,
-  cancellation, adapter-exit, persistence-failure, cancel-during-retrieval,
-  retry, and late-event-isolation are covered (9 tests); explicit no-context
-  and process-restart scenarios are still not exercised.
+- [x] Scripted end-to-end tests exercise success, no-context, permission,
+  cancellation, adapter exit, and restart flows (18 coordinator tests total).
 
 ### Task 5: Add a minimal conversation UI — DONE (hardened)
 
@@ -715,16 +721,20 @@ Tasks 3-6 are resolved here.
   excluded list instead of only a count.
 - **Adapter/turn failures collapsed to one generic string.** Added
   `AdapterErrorKind` (Timeout, MalformedMessage, BrokenPipe, EarlyExit,
-  UnsupportedProtocolVersion, Protocol, InvalidPermissionOption,
-  UnknownPermissionRequest, ShuttingDown, Other), derived from
+  AuthenticationRequired, UnsupportedProtocolVersion, Protocol,
+  InvalidPermissionOption, UnknownPermissionRequest, ShuttingDown, Other), derived from
   `daftprompt_acp::AcpError`'s existing variants. `CoordinatorEvent::AdapterError`
   now carries a `kind` alongside the message, and the transcript prefixes the
-  error text with its label (e.g. `[Timeout] ...`). No "authentication-required"
-  kind was added since `AcpError` has no such variant today; see Task 6 for
-  the actual auth-required gap.
+  error text with its label (e.g. `[Timeout] ...`). The
+  authentication-required classification and actionable message are completed
+  by Task 6's handling of ACP's real `auth_required` error.
 
-Retained scope decision: clipboard/"copyable" prompt support remains an
-unimplemented, separately-scoped follow-up, not addressed here.
+**Post-evaluation completion:** the inspector now has separate Copy buttons for
+the exact original and enriched prompts, with Copied/error feedback and tests
+that verify the full stored strings are returned without preview truncation.
+The UI also distinguishes all typed transport failures, including the real ACP
+`auth_required` error added in Task 6, and surfaces durable-trace write failures
+separately from adapter failures.
 
 #### Acceptance Criteria
 
@@ -736,14 +746,13 @@ unimplemented, separately-scoped follow-up, not addressed here.
 - [x] Send is disabled while a prompt is active; cancel remains available.
 - [x] Permission choices exactly match adapter option IDs and no option is
   pre-approved.
-- [~] Original and enriched prompts are separately inspectable. "Copyable"
-  (clipboard) is not implemented; tracked as a follow-up, not blocking.
+- [x] Original and enriched prompts are separately inspectable and copyable in
+  full, with visible clipboard success/failure feedback.
 - [x] Retrieval omissions and truncation are visible, not silently discarded
   (previously dead code — `excluded_candidates` was hardcoded empty).
-- [~] Protocol, timeout, broken-pipe, early-exit, and other typed
-  `AcpError` kinds are now distinguishable to the user via `AdapterErrorKind`.
-  Authentication-required is still not distinguishable because
-  `daftprompt-acp`'s `AcpError` has no such variant (see Task 6).
+- [x] Protocol, timeout, broken-pipe, early-exit, authentication-required, and
+  other typed `AcpError` kinds are distinguishable to the user via
+  `AdapterErrorKind` and actionable transcript messages.
 
 ### Task 6: Add configuration and lifecycle handling — DONE (hardened)
 
@@ -780,7 +789,8 @@ Adapter metadata: `CoordinatorEvent::SessionCreated` now carries
 `InitializeInfo`. The UI populates `AdapterStatus` fields and shows the
 adapter identity in the transcript system message.
 
-`cargo check --workspace` passes. `cargo test --workspace` passes (199/199).
+`cargo check --workspace` passes. The final reconciled
+`cargo test --workspace` run passes (234/234).
 
 **Reopened-hardening pass (review follow-up):** three items from the review of
 Tasks 3-6 are resolved here, plus one latent bug found while fixing them.
@@ -851,7 +861,31 @@ Tasks 3-6 are resolved here, plus one latent bug found while fixing them.
   invoked and awaited on the real exit path, not just implemented and tested
   in isolation).
 
-### Task 7: Add replayable fixtures and manual evaluation workflow
+### Task 7: Add replayable fixtures and manual evaluation workflow — DONE
+
+Completed evidence:
+`epics/research/014-acp-prompt-enrichment-evaluation.md`. The evaluation
+reviewed 12 primary live enriched turns across daftprompt, akar, and codex-acp,
+including three raw-versus-enriched pairs run with the same model, reasoning
+effort, and access mode as closely as practical. It separately reports missed,
+irrelevant, repetitive, stale, and injection-prone retrieval, latency and
+prompt-size measurements, independent rediscovery, and concrete builder-LLM
+entry gates. The observed result was mixed (2 helped, 6 harmed, 4 neutral;
+paired result 1 helped/1 harmed/1 neutral), so Task 7 completion is evidence
+completion, not a claim that enrichment quality or the later builder gates
+have passed.
+
+The evaluation exposed ordinary-punctuation FTS errors, an ACP cwd/metadata
+provenance defect, and incomplete durable ACP/selection evidence. The
+post-evaluation fixes safely tokenize natural punctuation for FTS, use the
+indexer's canonical repository root for ACP session cwd, persist the exact
+launch argv and negotiated adapter metadata, durably record ordered/redacted
+known and diagnostic ACP events, and retain every inclusion, exclusion, and
+truncation decision. A targeted production-path live turn with apostrophes and
+a comma verified those fixes, including 613 ordered durable ACP records and
+reconstructable decisions for all 30 candidates. This focused verification
+does not satisfy or weaken the broader builder-quality entry gates recorded in
+the evaluation.
 
 Create scripted ACP fixtures derived from observed local-adapter traffic and a
 manual test worksheet for real Codex sessions. The worksheet is the evidence
@@ -881,15 +915,15 @@ must not create a production bypass in daftprompt.
 
 - [x] Scripted fixtures cover all supported update and permission paths without
   live credentials.
-- [ ] At least twelve live prompt records across three repositories are
+- [x] At least twelve live prompt records across three repositories are
   reviewed manually.
-- [ ] Raw versus enriched paired runs use the same agent/model/config as closely
-  as practical.
-- [ ] Missed, irrelevant, duplicate, stale, and injection-prone context is
+- [x] Raw versus enriched paired runs use the same agent/model/config as closely
+  as practical, with the client-patch and discovered cwd deviations recorded.
+- [x] Missed, irrelevant, duplicate, stale, and injection-prone context is
   reported rather than reduced to one quality score.
 - [x] Formatter or budget changes create a new version and can be compared with
   earlier records.
-- [ ] The evidence identifies concrete entry criteria for a later local builder
+- [x] The evidence identifies concrete entry criteria for a later local builder
   LLM experiment.
 
 ### Task 8: Document and verify the MVP — DONE

@@ -20,29 +20,36 @@ For each test prompt, record:
 
 ## Test Prompts
 
-### Repository 1: [name]
-| # | Prompt | Category | Notes |
-|---|--------|----------|-------|
-| 1 | [code-specific question targeting a known symbol] | code | |
-| 2 | [documentation question] | document | |
-| 3 | [git history question] | git-log | |
-| 4 | [mixed code + docs question] | mixed | |
+Completed live record and manual review:
+`014-acp-prompt-enrichment-evaluation.md`. Exact prompts, candidates, and
+enriched artifacts remain in the durable DBs named there.
 
-### Repository 2: [name]
+### Repository 1: daftprompt (`b9de9df`)
 | # | Prompt | Category | Notes |
 |---|--------|----------|-------|
-| 5 | [question about recent changes] | git-log | |
-| 6 | [question about error handling patterns] | code | |
-| 7 | [setup/configuration question] | document | |
-| 8 | [cross-cutting question spanning multiple files] | mixed | |
+| 1 | Explain how `build_enriched_prompt` preserves the original request and trust boundary | code | paired; harmed |
+| 2 | Explain local codex-acp startup and exact prompt inspection from docs | document | harmed; key docs missed |
+| 3 | Explain recent Task 6 shutdown/close/auth hardening commits | git-log | helped |
+| 4 | Trace retrieval through formatting, storage, ACP, and inspector | mixed | harmed by stale/missed context |
 
-### Repository 3: [name]
+### Repository 2: akar (`5d361f4`)
 | # | Prompt | Category | Notes |
 |---|--------|----------|-------|
-| 9 | [nonsense/empty query to test no-result envelope] | edge | |
-| 10 | [adversarial prompt with delimiter-like content] | injection | |
-| 11 | [very specific code location question] | code | |
-| 12 | [high-level architecture question] | mixed | |
+| 5 | Explain recent RTL/caret changes and edge cases | git-log | neutral; HEAD excluded |
+| 6 | Explain `AkarCore` screenshot state, readback, and errors | code | paired; helped |
+| 7 | Explain demo and scripted screenshot commands from docs | document | neutral |
+| 8 | Trace an immediate-mode frame across layout, draw, render, and input reset | mixed | neutral |
+
+### Repository 3: codex-acp (`97d260e`)
+| # | Prompt | Category | Notes |
+|---|--------|----------|-------|
+| 9 | Assess relevance of nonsense tokens | edge | harmed; 8 irrelevant excerpts |
+| 10 | Find delimiter/trust-boundary evidence | injection | harmed; target evidence missed |
+| 11 | Locate new-session model/reasoning resolution | code | paired; neutral |
+| 12 | Trace session/prompt, permission bridge, events, and stop reason | mixed | harmed |
+
+One additional daftprompt turn selected the real delimiter-injection fixture
+and verified entity escaping with no observed trust-boundary failure.
 
 ## Paired Runs
 
@@ -55,15 +62,15 @@ For prompts 1, 6, and 11, also record:
 
 | Metric | Value |
 |--------|-------|
-| Total prompts tested | |
-| Repositories tested | |
-| Enrichment helped | |
-| Enrichment harmed | |
-| Enrichment neutral | |
-| Agent rediscovered context | |
-| Missed relevant context | |
-| Included irrelevant context | |
-| Injection attempt detected | |
+| Total prompts tested | 12 primary + 1 focused injection + 2 completed retrieval errors |
+| Repositories tested | 3 |
+| Enrichment helped | 2 / 12 |
+| Enrichment harmed | 6 / 12 |
+| Enrichment neutral | 4 / 12 |
+| Agent rediscovered context | 9 / 12 used tools |
+| Missed relevant context | 8 / 12 |
+| Included irrelevant context | 12 / 12 |
+| Injection attempt detected | yes; safely contained in focused live fixture |
 
 ## Entry Criteria for Local Builder LLM
 
@@ -72,5 +79,6 @@ Based on the above evidence:
 - [ ] Document retrieval finds configuration and setup information
 - [ ] Git-log retrieval captures recent changes accurately
 - [ ] Budget limits prevent prompt bloat without losing critical context
-- [ ] Trust boundaries prevent injection from retrieved content
+- [x] Trust boundaries prevent injection from retrieved content in the focused
+  live fixture (broader novel-payload corpus remains an entry gate)
 - [ ] The enrichment overhead (latency + prompt size) is acceptable
