@@ -853,6 +853,64 @@ async fn adapter_process_restart_supports_a_new_prompt_round_trip() {
 }
 
 #[tokio::test]
+async fn repeated_launches_use_unique_app_session_ids_in_the_same_conversation_db() {
+    let trace_dir = tempfile::tempdir().expect("trace tempdir");
+    let trace_path = trace_dir.path().join("conversation.db");
+
+    let (first_cmd_tx, mut first_evt_rx, _first_repo) =
+        setup_coordinator_with_store_path(&trace_path, Duration::from_secs(5));
+    let first_events = collect_until(&mut first_evt_rx, |event| {
+        matches!(event, CoordinatorEvent::SessionCreated { .. })
+    })
+    .await;
+    assert!(
+        first_events
+            .iter()
+            .any(|event| matches!(event, CoordinatorEvent::SessionCreated { .. })),
+        "expected the first launch to create a durable session"
+    );
+    shutdown_and_wait(&first_cmd_tx).await;
+    drop(first_cmd_tx);
+    drop(first_evt_rx);
+
+    let (second_cmd_tx, mut second_evt_rx, _second_repo) =
+        setup_coordinator_with_store_path(&trace_path, Duration::from_secs(5));
+    let second_events = collect_until(&mut second_evt_rx, |event| {
+        matches!(
+            event,
+            CoordinatorEvent::SessionCreated { .. } | CoordinatorEvent::AdapterError { .. }
+        )
+    })
+    .await;
+    assert!(
+        second_events
+            .iter()
+            .any(|event| matches!(event, CoordinatorEvent::SessionCreated { .. })),
+        "expected the second launch against the same DB to create a fresh session"
+    );
+    assert!(
+        !second_events
+            .iter()
+            .any(|event| matches!(event, CoordinatorEvent::AdapterError { .. })),
+        "the second launch must not collide with the first app_session_id"
+    );
+    shutdown_and_wait(&second_cmd_tx).await;
+    drop(second_cmd_tx);
+    drop(second_evt_rx);
+
+    let db = rusqlite::Connection::open(&trace_path).expect("open conversation DB for assertion");
+    let (session_count, distinct_app_session_count): (i64, i64) = db
+        .query_row(
+            "SELECT COUNT(*), COUNT(DISTINCT app_session_id) FROM acp_sessions",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("count durable sessions");
+    assert_eq!(session_count, 2);
+    assert_eq!(distinct_app_session_count, 2);
+}
+
+#[tokio::test]
 async fn double_submit_is_rejected() {
     let (cmd_tx, mut evt_rx, _repo) = setup_coordinator();
 

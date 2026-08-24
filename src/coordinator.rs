@@ -326,8 +326,14 @@ async fn run(
     let repository_path_text = repository_path.to_string_lossy();
 
     // Persist session and emit event
+    // `app_session_id` is a durable, UNIQUE identifier. A fixed value here
+    // lets the first application launch succeed but makes every later launch
+    // against the same per-repository conversation DB fail its INSERT. Keep
+    // it independent of the adapter's session ID so both identities retain
+    // their meaning in traces.
+    let app_session_id = format!("daftprompt-{}", uuid::Uuid::new_v4());
     let session_db_id = match store.create_session(
-        "coordinator",
+        &app_session_id,
         &repository_path_text,
         Some(&adapter_command),
         adapter_name.as_deref(),

@@ -638,7 +638,17 @@ repository cwd plus durable launch/initialization metadata, an explicit empty
 retrieval/no-context envelope, ordered/redacted durable ACP updates and
 diagnostics, visible event-persistence failure, durable deterministic selection
 and truncation decisions, and a complete adapter-process restart followed by a
-new prompt round trip. `cargo test --test coordinator` passes all 18 tests.
+new prompt round trip. With the repeated-launch regression below,
+`cargo test --test coordinator` passes all 19 tests.
+
+**Post-MVP repeated-launch fix:** production startup previously passed the
+literal `"coordinator"` as the durable `app_session_id`, even though that
+column is unique. The first launch against a repository succeeded and every
+later launch failed while creating its conversation record. Coordinator
+startup now generates a distinct UUID-backed application-session ID, and a
+file-backed regression test launches two coordinators sequentially against the
+same conversation DB and verifies that both durable session rows are created
+with distinct IDs.
 
 #### Acceptance Criteria
 
