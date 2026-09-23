@@ -16,6 +16,20 @@ pub const ENV_BASE_URL: &str = "DAFTPROMPT_GRAPH_BASE_URL";
 pub const ENV_MODEL: &str = "DAFTPROMPT_GRAPH_MODEL";
 pub const ENV_API_KEY: &str = "DAFTPROMPT_GRAPH_API_KEY";
 
+// json_object is supported by more OpenAI-compatible endpoints than
+// json_schema. Keep the complete wire contract in the prompt so the model
+// does not need to know Rust type names or serde's enum representation.
+const EXTRACTION_CONTRACT: &str = r#"Extract atomic provenance claims from the JSON user message.
+Input shape: {"source_path":string,"passages":[{"id":string,"source_version_id":integer,"heading_path":string,"start_line":integer,"end_line":integer,"text":string}]}.
+Return exactly one JSON object with this shape:
+{"claims":[{"subject":{"kind":string,"name":string,"aliases":[string]},"predicate":string,"object":{"type":"entity","kind":string,"name":string,"aliases":[string]} OR {"type":"literal","value":string,"value_kind":string},"polarity":"positive"|"negative","status":"current"|"planned"|"deferred"|"completed"|"rejected"|"historical","scope":"project"|"epic"|"task"|"feature","evidence":[{"passage_id":string,"start_line":integer,"end_line":integer,"text":string}]}],"enumerations":[{"subject":{"kind":string,"name":string,"aliases":[string]},"predicate":string,"scope":"project"|"epic"|"task"|"feature","exhaustive":boolean,"evidence":{"passage_id":string,"start_line":integer,"end_line":integer,"text":string},"member_claim_indexes":[integer]}]}.
+Use empty arrays when there are no claims or enumerations. Every claim needs at least one evidence item. Evidence passage_id must equal a supplied passage id; lines must be within that passage and text must exactly match those source lines. Enumeration indexes are zero-based positions in claims. Set exhaustive true only if the cited passage explicitly says the list is complete. Use entity kinds feature, index, language, dialect, extension, parser, work_item, path, or status as appropriate. Use controlled predicates indexes_language, indexes_dialect, indexes_extension, searches_index, uses_parser, excludes_path, or work_item_status. Preserve current, planned, deferred, completed, rejected, or historical status and the narrowest supported scope. Treat future work or follow-up as deferred in this source revision; never invent a date or scheduled commitment. An epic-scoped non-goal is not a project-wide prohibition. Return JSON only."#;
+
+const INTERPRETATION_CONTRACT: &str = r#"Interpret the question in the JSON user message using only supplied graph vocabulary.
+Input shape: {"question":string,"candidate_entities":[{"kind":string,"name":string,"aliases":[string]}],"candidate_predicates":[string]}.
+Return exactly one JSON object: {"intent":"direct_relation"|"code_search_language"|"list_code_search_languages","entities":[{"kind":string,"name":string,"aliases":[string]}],"predicates":[string]}.
+All output predicates must occur in candidate_predicates. For known entities, copy kind and name from candidate_entities and use an empty aliases array if no aliases are needed. A question may name a language absent from candidate_entities (for example Lua); return it as a language entity so a validated exhaustive set can answer it. Use code_search_language for whether code search finds one named language, with the code-search feature and target language and the searches_index and indexes_language predicates. Use list_code_search_languages for which languages code search finds; include the code-search feature but no invented target language, and include searches_index, indexes_language, and indexes_dialect when available. Use direct_relation only when a single stored relationship answers the question. Return JSON only."#;
+
 /// Passage input for a single authoritative source extraction operation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExtractionRequest {
@@ -287,11 +301,23 @@ pub struct InterpretationRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InterpretationResponse {
-    pub intent: String,
+    pub intent: QuestionIntent,
     #[serde(default)]
     pub entities: Vec<ClaimEntity>,
     #[serde(default)]
     pub predicates: Vec<String>,
+}
+
+/// The relationship the caller is asking the graph to prove.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionIntent {
+    /// A stored edge directly answers the question.
+    DirectRelation,
+    /// A code-search feature searches an index that indexes the target language.
+    CodeSearchLanguage,
+    /// Enumerate all currently supported languages and dialects for code search.
+    ListCodeSearchLanguages,
 }
 
 /// Provider-neutral contract so graph code and tests do not depend on HTTP.
@@ -365,11 +391,11 @@ impl OpenAiCompatibleAdapter {
             .with_context(|| format!("interpreting graph search question {:?}", request.question))
     }
 
-    fn complete<T: DeserializeOwned + Serialize>(
+    fn request_payload(
         &self,
         operation: &str,
         input: &impl Serialize,
-    ) -> Result<T> {
+    ) -> Result<serde_json::Value> {
         let request = ChatCompletionRequest {
             model: &self.model,
             messages: [
@@ -386,8 +412,13 @@ impl OpenAiCompatibleAdapter {
                 kind: "json_object",
             },
         };
+        Ok(serde_json::to_value(request)?)
+    }
+
+    fn complete<T: DeserializeOwned>(&self, operation: &str, input: &impl Serialize) -> Result<T> {
+        let payload = self.request_payload(operation, input)?;
         let url = format!("{}/chat/completions", self.base_url);
-        let mut builder = self.client.post(url).json(&request);
+        let mut builder = self.client.post(url).json(&payload);
         if let Some(key) = &self.api_key {
             builder = builder.bearer_auth(key);
         }
@@ -404,34 +435,34 @@ impl OpenAiCompatibleAdapter {
         let envelope: ChatCompletionResponse = response
             .json()
             .map_err(|_| anyhow!("graph model returned malformed completion JSON"))?;
-        let content = envelope
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow!("graph model returned no completion choices"))?
-            .message
-            .content;
-        serde_json::from_str(&content)
-            .map_err(|error| anyhow!("graph model returned malformed structured JSON: {error}"))
+        parse_completion(envelope)
     }
+}
+
+fn parse_completion<T: DeserializeOwned>(envelope: ChatCompletionResponse) -> Result<T> {
+    let content = envelope
+        .choices
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("graph model returned no completion choices"))?
+        .message
+        .content;
+    serde_json::from_str(&content)
+        .map_err(|error| anyhow!("graph model returned malformed structured JSON: {error}"))
 }
 
 impl GraphModel for OpenAiCompatibleAdapter {
     fn extract_claims(&self, request: &ExtractionRequest) -> Result<ExtractionResponse> {
-        self.complete(
-            "Extract atomic, typed provenance claims from the supplied passages. Return JSON matching ExtractionResponse; cite only provided passages and preserve exact evidence wording. Preserve current, planned, deferred, completed, rejected, or historical status and the narrowest supported project/epic/task/feature scope. Treat phrases such as 'future work' or 'follow-up' as deferred in this source revision; never invent a date or imply a scheduled commitment. Do not treat an epic-scoped non-goal as a project-wide prohibition.",
-            request,
-        ).with_context(|| format!("extracting claims for source {}", request.source_path))
+        self.complete(EXTRACTION_CONTRACT, request)
+            .with_context(|| format!("extracting claims for source {}", request.source_path))
     }
 
     fn interpret_question(
         &self,
         request: &InterpretationRequest,
     ) -> Result<InterpretationResponse> {
-        self.complete(
-            "Interpret the question as a graph intent using only the supplied candidate entities and predicates. Return JSON matching InterpretationResponse.",
-            request,
-        ).with_context(|| format!("interpreting graph search question {:?}", request.question))
+        self.complete(INTERPRETATION_CONTRACT, request)
+            .with_context(|| format!("interpreting graph search question {:?}", request.question))
     }
 
     fn model_name(&self) -> &str {
@@ -530,6 +561,121 @@ struct ChatResponseMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn adapter() -> OpenAiCompatibleAdapter {
+        OpenAiCompatibleAdapter {
+            base_url: "http://unused.invalid".into(),
+            model: "mock-model".into(),
+            api_key: None,
+            client: Client::new(),
+        }
+    }
+
+    #[test]
+    fn extraction_payload_describes_full_wire_contract() {
+        let input = ExtractionRequest {
+            source_path: "README.md".into(),
+            passages: vec![SourcePassage {
+                id: "sv1:p0".into(),
+                source_version_id: 1,
+                heading_path: "".into(),
+                start_line: 1,
+                end_line: 1,
+                text: "Python is indexed.".into(),
+            }],
+        };
+        let body = adapter()
+            .request_payload(EXTRACTION_CONTRACT, &input)
+            .unwrap();
+        assert_eq!(body["response_format"]["type"], "json_object");
+        assert_eq!(body["model"], "mock-model");
+        let prompt = body["messages"][0]["content"].as_str().unwrap();
+        for token in [
+            "source_path",
+            "source_version_id",
+            "member_claim_indexes",
+            "exhaustive",
+            "passage_id",
+            "value_kind",
+            "indexes_language",
+            "deferred",
+            "feature",
+            "type\":\"entity",
+        ] {
+            assert!(prompt.contains(token), "missing contract token {token}");
+        }
+        assert_eq!(
+            serde_json::from_str::<ExtractionRequest>(
+                body["messages"][1]["content"].as_str().unwrap()
+            )
+            .unwrap(),
+            input
+        );
+    }
+
+    #[test]
+    fn interpretation_payload_describes_intents_and_typed_parser_rejects_bad_response() {
+        let input = InterpretationRequest {
+            question: "Can code search find Python?".into(),
+            candidate_entities: vec![],
+            candidate_predicates: vec!["indexes_language".into()],
+        };
+        let body = adapter()
+            .request_payload(INTERPRETATION_CONTRACT, &input)
+            .unwrap();
+        let prompt = body["messages"][0]["content"].as_str().unwrap();
+        for token in [
+            "question",
+            "candidate_entities",
+            "candidate_predicates",
+            "direct_relation",
+            "code_search_language",
+            "list_code_search_languages",
+            "for example Lua",
+            "entities",
+            "predicates",
+        ] {
+            assert!(prompt.contains(token), "missing contract token {token}");
+        }
+        assert_eq!(
+            serde_json::from_str::<InterpretationRequest>(
+                body["messages"][1]["content"].as_str().unwrap()
+            )
+            .unwrap(),
+            input
+        );
+
+        let valid = serde_json::to_string(&InterpretationResponse {
+            intent: QuestionIntent::CodeSearchLanguage,
+            entities: vec![],
+            predicates: vec!["indexes_language".into()],
+        })
+        .unwrap();
+        let envelope = serde_json::from_value(
+            serde_json::json!({"choices": [{"message": {"content": valid}}]}),
+        )
+        .unwrap();
+        let result: InterpretationResponse = parse_completion(envelope).unwrap();
+        assert_eq!(result.intent, QuestionIntent::CodeSearchLanguage);
+
+        let targetless = serde_json::to_string(&InterpretationResponse {
+            intent: QuestionIntent::ListCodeSearchLanguages,
+            entities: vec![ClaimEntity {
+                kind: "feature".into(), name: "CodeSearch".into(), aliases: vec![],
+            }],
+            predicates: vec!["searches_index".into(), "indexes_language".into(), "indexes_dialect".into()],
+        }).unwrap();
+        let targetless: InterpretationResponse = serde_json::from_str(&targetless).unwrap();
+        assert_eq!(targetless.intent, QuestionIntent::ListCodeSearchLanguages);
+        assert!(!targetless.entities.iter().any(|entity| entity.kind == "language"));
+
+        let bad_intent = serde_json::from_value(serde_json::json!({"choices": [{"message": {"content": "{\"intent\":\"invented\",\"entities\":[],\"predicates\":[]}"}}]})).unwrap();
+        let error = parse_completion::<InterpretationResponse>(bad_intent).unwrap_err();
+        assert!(format!("{error:#}").contains("malformed structured JSON"));
+
+        let bad_claim = serde_json::from_value(serde_json::json!({"choices": [{"message": {"content": "{\"claims\":[{\"predicate\":\"indexes_language\"}],\"enumerations\":[]}"}}]})).unwrap();
+        let error = parse_completion::<ExtractionResponse>(bad_claim).unwrap_err();
+        assert!(format!("{error:#}").contains("malformed structured JSON"));
+    }
 
     fn sample_claim() -> ExtractedClaim {
         ExtractedClaim {
@@ -564,7 +710,7 @@ mod tests {
                 enumerations: vec![],
             },
             InterpretationResponse {
-                intent: "searches_index".into(),
+                intent: QuestionIntent::DirectRelation,
                 entities: vec![],
                 predicates: vec!["searches_index".into()],
             },
@@ -584,7 +730,7 @@ mod tests {
         };
         assert_eq!(
             adapter.interpret_question(&interpretation).unwrap().intent,
-            "searches_index"
+            QuestionIntent::DirectRelation
         );
     }
 

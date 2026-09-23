@@ -1,6 +1,6 @@
 //! Access to provenance graph storage in the repository's shared database.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -135,15 +135,7 @@ pub fn render_answer(
         } => ("unknown", Some(reason), claim_ids, evidence_ids),
     };
     let supported_list = if outcome == "yes"
-        && prepared
-            .resolved_entity_keys
-            .iter()
-            .any(|key| key.starts_with("language:"))
-        && prepared
-            .interpretation
-            .predicates
-            .iter()
-            .any(|predicate| predicate == "indexes_language")
+        && prepared.interpretation.intent == model::QuestionIntent::ListCodeSearchLanguages
     {
         complete_supported_code_set(db, &prepared.build_id)?
     } else {
@@ -180,14 +172,14 @@ pub fn render_answer(
              JOIN graph_source_versions sv ON sv.id=sp.source_version_id
              JOIN graph_sources s ON s.id=sv.source_id
              JOIN graph_build_sources bs ON bs.source_version_id=sv.id AND bs.source_id=s.id
-             JOIN graph_claims c ON c.build_id=?2 AND c.active=1
-             WHERE sp.id=?1 AND bs.build_id=?2 AND c.build_id=?2 AND c.active=1
+             JOIN graph_claims c ON c.active=1
+             WHERE sp.id=?1 AND bs.build_id=?2 AND EXISTS (SELECT 1 FROM graph_build_claims bc WHERE bc.claim_id=c.id AND bc.build_id=?2) AND c.active=1
                AND s.active=1 AND s.human_maintained=1
                AND (EXISTS (SELECT 1 FROM graph_claim_evidence ce
                             WHERE ce.span_id=sp.id AND ce.claim_id=c.id)
                     OR EXISTS (SELECT 1 FROM graph_enumerations en
-                               JOIN graph_enumeration_members em ON em.enumeration_id=en.id
-                               WHERE en.supporting_span_id=sp.id AND en.build_id=?2
+                               JOIN graph_build_enumeration_members em ON em.enumeration_id=en.id AND em.build_id=?2
+                               WHERE en.supporting_span_id=sp.id AND EXISTS (SELECT 1 FROM graph_build_enumerations be WHERE be.enumeration_id=en.id AND be.build_id=?2)
                                  AND em.claim_id=c.id))
              ORDER BY c.id",
         )?;
@@ -240,9 +232,9 @@ pub fn render_answer(
     for claim_id in &claim_ids {
         let exists: bool = db.query_row(
             "SELECT EXISTS(SELECT 1 FROM graph_claims c JOIN graph_build_sources bs
-             ON bs.build_id=c.build_id AND bs.source_version_id=c.source_version_id
+             ON bs.build_id=?2 AND bs.source_version_id=c.source_version_id
              JOIN graph_sources s ON s.id=bs.source_id
-             WHERE c.id=?1 AND c.build_id=?2 AND c.active=1 AND s.active=1 AND s.human_maintained=1)",
+             WHERE c.id=?1 AND EXISTS (SELECT 1 FROM graph_build_claims bc WHERE bc.claim_id=c.id AND bc.build_id=?2) AND c.active=1 AND s.active=1 AND s.human_maintained=1)",
             rusqlite::params![claim_id, prepared.build_id], |r| r.get(0),
         )?;
         anyhow::ensure!(
@@ -282,28 +274,34 @@ fn complete_supported_code_set(
     build_id: &str,
 ) -> Result<Option<(Vec<String>, Vec<String>, Vec<String>)>> {
     let mut stmt = db.prepare(
-        "SELECT DISTINCT enumeration.predicate, member.id, enumeration.supporting_span_id, object.display_name
+        "SELECT DISTINCT CAST(index_node.id AS TEXT), enumeration.id, enumeration.predicate,
+                member.id, member_evidence.span_id, enumeration.supporting_span_id,
+                object.display_name, search.id, search_evidence.span_id
          FROM graph_enumerations enumeration
          JOIN graph_nodes index_node ON index_node.id=enumeration.subject_node_id AND index_node.kind='index'
          JOIN graph_claims search ON search.object_node_id=index_node.id
-         JOIN graph_nodes feature ON feature.id=search.subject_node_id AND feature.kind='feature'
-         JOIN graph_build_sources search_build ON search_build.build_id=search.build_id AND search_build.source_version_id=search.source_version_id
+         JOIN graph_nodes feature ON feature.id=search.subject_node_id AND feature.canonical_key='feature:codesearch'
+         JOIN graph_claim_evidence search_evidence ON search_evidence.claim_id=search.id
+         JOIN graph_build_sources search_build ON search_build.build_id=?1 AND search_build.source_version_id=search.source_version_id
          JOIN graph_sources search_source ON search_source.id=search_build.source_id
-         JOIN graph_enumeration_members member_link ON member_link.enumeration_id=enumeration.id
-         JOIN graph_claims member ON member.id=member_link.claim_id
-         JOIN graph_nodes object ON object.id=member.object_node_id
+         JOIN graph_build_sources enumeration_build ON enumeration_build.build_id=?1 AND enumeration_build.source_version_id=enumeration.source_version_id
+         JOIN graph_sources enumeration_source ON enumeration_source.id=enumeration_build.source_id
+         JOIN graph_build_enumeration_members member_link ON member_link.enumeration_id=enumeration.id AND member_link.build_id=?1
+         JOIN graph_claims member ON member.id=member_link.claim_id AND member.subject_node_id=index_node.id AND member.predicate=enumeration.predicate AND member.scope=enumeration.scope
+         JOIN graph_nodes object ON object.id=member.object_node_id AND ((enumeration.predicate='indexes_language' AND object.kind='language') OR (enumeration.predicate='indexes_dialect' AND object.kind='dialect'))
          JOIN graph_claim_evidence member_evidence ON member_evidence.claim_id=member.id
-         JOIN graph_build_sources member_build ON member_build.build_id=member.build_id AND member_build.source_version_id=member.source_version_id
+         JOIN graph_build_sources member_build ON member_build.build_id=?1 AND member_build.source_version_id=member.source_version_id
          JOIN graph_sources member_source ON member_source.id=member_build.source_id
-         WHERE enumeration.build_id=?1 AND enumeration.exhaustive=1
+         WHERE EXISTS (SELECT 1 FROM graph_build_enumerations be WHERE be.enumeration_id=enumeration.id AND be.build_id=?1 AND be.exhaustive=1)
            AND enumeration.predicate IN ('indexes_language','indexes_dialect')
            AND enumeration.scope IN ('project','feature')
-           AND search.build_id=?1 AND search.active=1 AND search.status='current'
+           AND enumeration_source.active=1 AND enumeration_source.human_maintained=1
+           AND EXISTS (SELECT 1 FROM graph_build_claims bc WHERE bc.claim_id=search.id AND bc.build_id=?1) AND search.active=1 AND search.status='current'
            AND search.polarity='positive' AND search.predicate='searches_index'
            AND search.scope IN ('project','feature') AND search_source.active=1 AND search_source.human_maintained=1
-           AND member.build_id=?1 AND member.active=1 AND member.status='current'
+           AND EXISTS (SELECT 1 FROM graph_build_claims bc WHERE bc.claim_id=member.id AND bc.build_id=?1) AND member.active=1 AND member.status='current'
            AND member.polarity='positive' AND member_source.active=1 AND member_source.human_maintained=1
-         ORDER BY object.display_name COLLATE NOCASE, member.id, member_evidence.span_id"
+         ORDER BY index_node.id, enumeration.id, object.display_name COLLATE NOCASE, member.id"
     )?;
     let rows = stmt
         .query_map([build_id], |row| {
@@ -312,28 +310,49 @@ fn complete_supported_code_set(
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
             ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut by_index = std::collections::BTreeMap::<String, Vec<_>>::new();
+    for row in rows {
+        by_index.entry(row.0.clone()).or_default().push(row);
+    }
+    if by_index.len() != 1 {
+        return Ok(None);
+    }
+    let Some((_, rows)) = by_index.into_iter().next() else {
+        return Ok(None);
+    };
     let mut names = Vec::new();
     let mut claims = Vec::new();
     let mut spans = Vec::new();
-    let mut predicates = std::collections::BTreeSet::new();
-    for (predicate, claim_id, span_id, name) in rows {
-        predicates.insert(predicate);
+    let mut enumerations = std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+    for (_, enumeration_id, predicate, claim_id, member_span, list_span, name, search_claim, search_span) in rows {
+        enumerations.entry(predicate).or_default().insert(enumeration_id);
         if !names.contains(&name) {
             names.push(name);
         }
         if !claims.contains(&claim_id) {
             claims.push(claim_id);
         }
-        if !spans.contains(&span_id) {
-            spans.push(span_id);
+        if !claims.contains(&search_claim) {
+            claims.push(search_claim);
+        }
+        for span in [member_span, list_span, search_span] {
+            if !spans.contains(&span) {
+                spans.push(span);
+            }
         }
     }
-    if names.is_empty() || predicates.len() != 2 {
+    if names.is_empty() || enumerations.len() != 2 || enumerations.values().any(|ids| ids.len() != 1) {
         Ok(None)
     } else {
+        names.sort_by_key(|name| name.to_ascii_lowercase());
         Ok(Some((names, claims, spans)))
     }
 }
@@ -344,11 +363,40 @@ pub fn resolve_prepared(
     db: &Connection,
     prepared: &SearchPreparation,
 ) -> Result<EvidenceResolution> {
-    if let Some(target) = prepared
-        .resolved_entity_keys
-        .iter()
-        .find(|key| key.starts_with("language:"))
-    {
+    if prepared.interpretation.intent == model::QuestionIntent::ListCodeSearchLanguages {
+        if !prepared.resolved_entity_keys.iter().any(|key| key == "feature:codesearch")
+            || !["searches_index", "indexes_language", "indexes_dialect"]
+                .iter()
+                .all(|predicate| prepared.interpretation.predicates.iter().any(|p| p == predicate))
+        {
+            return Ok(EvidenceResolution::Unknown {
+                reason: "the code-search feature or required list relationships are missing".into(),
+                claim_ids: Vec::new(),
+                evidence_ids: Vec::new(),
+            });
+        }
+        return Ok(match complete_supported_code_set(db, &prepared.build_id)? {
+            Some((_, claim_ids, evidence_ids)) => EvidenceResolution::Yes(PositiveFinding {
+                outcome: "yes", claim_ids, evidence_ids,
+            }),
+            None => EvidenceResolution::Unknown {
+                reason: "no validated complete language and dialect lists for the active code-search index were found".into(),
+                claim_ids: Vec::new(), evidence_ids: Vec::new(),
+            },
+        });
+    }
+    if prepared.interpretation.intent == model::QuestionIntent::CodeSearchLanguage {
+        let Some(target) = prepared
+            .resolved_entity_keys
+            .iter()
+            .find(|key| key.starts_with("language:"))
+        else {
+            return Ok(EvidenceResolution::Unknown {
+                reason: "the code-search language target is missing".into(),
+                claim_ids: Vec::new(),
+                evidence_ids: Vec::new(),
+            });
+        };
         return resolve_language(db, prepared, target);
     }
     if let Some(positive) = derive_positive(db, prepared)? {
@@ -395,27 +443,52 @@ pub fn resolve_language(
     let positive = derive_positive(db, prepared)?;
     let (negative_claims, negative_spans) = {
         let mut stmt = db.prepare(
-            "SELECT DISTINCT c.id, e.span_id
+            "SELECT DISTINCT c.id, e.span_id, search.id, search_evidence.span_id
              FROM graph_claims c
-             JOIN graph_build_sources bs ON bs.build_id=c.build_id AND bs.source_version_id=c.source_version_id
+             JOIN graph_build_sources bs ON bs.build_id=?1 AND bs.source_version_id=c.source_version_id
              JOIN graph_sources s ON s.id=bs.source_id
              JOIN graph_nodes obj ON obj.id=c.object_node_id
              JOIN graph_claim_evidence e ON e.claim_id=c.id
-             WHERE c.build_id=?1 AND c.active=1 AND s.active=1 AND s.human_maintained=1
+             JOIN graph_claims search ON search.object_node_id=c.subject_node_id
+             JOIN graph_nodes feature ON feature.id=search.subject_node_id AND feature.kind='feature'
+             JOIN graph_claim_evidence search_evidence ON search_evidence.claim_id=search.id
+             JOIN graph_build_sources search_bs ON search_bs.build_id=?1 AND search_bs.source_version_id=search.source_version_id
+             JOIN graph_sources search_source ON search_source.id=search_bs.source_id
+             WHERE EXISTS (SELECT 1 FROM graph_build_claims bc WHERE bc.claim_id=c.id AND bc.build_id=?1) AND c.active=1 AND s.active=1 AND s.human_maintained=1
                AND c.status='current' AND c.scope IN ('project','feature')
                AND c.predicate='indexes_language' AND obj.canonical_key=?2
                AND c.polarity='negative'
-             ORDER BY c.id, e.span_id"
+               AND EXISTS (SELECT 1 FROM graph_build_claims bc WHERE bc.claim_id=search.id AND bc.build_id=?1)
+               AND search.active=1 AND search.predicate='searches_index' AND search.polarity='positive'
+               AND search.status='current' AND search.scope IN ('project','feature')
+               AND feature.canonical_key IN (SELECT value FROM json_each(?3))
+               AND search_source.active=1 AND search_source.human_maintained=1
+             ORDER BY c.id, e.span_id, search.id, search_evidence.span_id"
         )?;
+        let resolved_keys = serde_json::to_string(&prepared.resolved_entity_keys)?;
         let rows = stmt
-            .query_map(rusqlite::params![prepared.build_id, target_key], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })?
+            .query_map(
+                rusqlite::params![prepared.build_id, target_key, resolved_keys],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                },
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        let mut claims = rows.iter().map(|r| r.0.clone()).collect::<Vec<_>>();
+        let mut claims = rows
+            .iter()
+            .flat_map(|r| [r.0.clone(), r.2.clone()])
+            .collect::<Vec<_>>();
         claims.sort();
         claims.dedup();
-        let mut spans = rows.into_iter().map(|r| r.1).collect::<Vec<_>>();
+        let mut spans = rows
+            .into_iter()
+            .flat_map(|r| [r.1, r.3])
+            .collect::<Vec<_>>();
         spans.sort();
         spans.dedup();
         (claims, spans)
@@ -426,51 +499,68 @@ pub fn resolve_language(
     // enumeration's explicit members, never from other language mentions.
     let (omission_claims, omission_spans) = {
         let mut stmt = db.prepare(
-            "SELECT DISTINCT member.id, en.supporting_span_id
+            "SELECT DISTINCT member.id, en.supporting_span_id, search.id, search_evidence.span_id
              FROM graph_enumerations en
-             JOIN graph_build_sources bs ON bs.build_id=en.build_id AND bs.source_version_id=en.source_version_id
+             JOIN graph_build_sources bs ON bs.build_id=?1 AND bs.source_version_id=en.source_version_id
              JOIN graph_sources s ON s.id=bs.source_id
              JOIN graph_nodes idx ON idx.id=en.subject_node_id AND idx.kind='index'
              JOIN graph_claims search ON search.object_node_id=idx.id
-             JOIN graph_build_sources search_bs ON search_bs.build_id=search.build_id AND search_bs.source_version_id=search.source_version_id
+             JOIN graph_claim_evidence search_evidence ON search_evidence.claim_id=search.id
+             JOIN graph_build_sources search_bs ON search_bs.build_id=?1 AND search_bs.source_version_id=search.source_version_id
              JOIN graph_sources search_source ON search_source.id=search_bs.source_id
              JOIN graph_nodes feature ON feature.id=search.subject_node_id AND feature.kind='feature'
-             JOIN graph_enumeration_members em ON em.enumeration_id=en.id
+             JOIN graph_build_enumeration_members em ON em.enumeration_id=en.id AND em.build_id=?1
              JOIN graph_claims member ON member.id=em.claim_id
              JOIN graph_nodes lang ON lang.id=member.object_node_id
-             WHERE en.build_id=?1 AND en.exhaustive=1 AND en.predicate='indexes_language'
+             WHERE EXISTS (SELECT 1 FROM graph_build_enumerations be WHERE be.enumeration_id=en.id AND be.build_id=?1 AND be.exhaustive=1) AND en.predicate='indexes_language'
                AND en.scope IN ('project','feature') AND s.active=1 AND s.human_maintained=1
-               AND search.build_id=?1 AND search.active=1 AND search.predicate='searches_index'
+               AND EXISTS (SELECT 1 FROM graph_build_claims bc WHERE bc.claim_id=search.id AND bc.build_id=?1) AND search.active=1 AND search.predicate='searches_index'
                AND search.polarity='positive' AND search.status='current' AND search.scope IN ('project','feature')
+               AND feature.canonical_key IN (SELECT value FROM json_each(?3))
                AND search_source.active=1 AND search_source.human_maintained=1
-               AND member.build_id=?1 AND member.active=1 AND member.status='current'
+               AND EXISTS (SELECT 1 FROM graph_build_claims bc WHERE bc.claim_id=member.id AND bc.build_id=?1) AND member.active=1 AND member.status='current'
                AND member.polarity='positive' AND lang.canonical_key<>?2
                AND NOT EXISTS (
-                 SELECT 1 FROM graph_enumeration_members target_member
+                 SELECT 1 FROM graph_build_enumeration_members target_member
                  JOIN graph_claims target_claim ON target_claim.id=target_member.claim_id
                  JOIN graph_nodes target_lang ON target_lang.id=target_claim.object_node_id
-                 WHERE target_member.enumeration_id=en.id AND target_claim.active=1
+                 WHERE target_member.enumeration_id=en.id AND target_member.build_id=?1 AND target_claim.active=1
                    AND target_claim.status='current' AND target_claim.polarity='positive'
                    AND target_lang.canonical_key=?2
                )
                AND NOT EXISTS (
                  SELECT 1 FROM graph_claims newer
                  JOIN graph_nodes newer_obj ON newer_obj.id=newer.object_node_id
-                 WHERE newer.build_id=?1 AND newer.active=1 AND newer.predicate='indexes_language'
+                 WHERE EXISTS (SELECT 1 FROM graph_build_claims bc WHERE bc.claim_id=newer.id AND bc.build_id=?1) AND newer.active=1 AND newer.predicate='indexes_language'
                    AND newer_obj.canonical_key=?2 AND newer.polarity='positive' AND newer.status='current'
                    AND newer.scope IN ('project','feature')
                )
-             ORDER BY member.id, en.supporting_span_id"
+             ORDER BY member.id, en.supporting_span_id, search.id, search_evidence.span_id"
         )?;
+        let resolved_keys = serde_json::to_string(&prepared.resolved_entity_keys)?;
         let rows = stmt
-            .query_map(rusqlite::params![prepared.build_id, target_key], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })?
+            .query_map(
+                rusqlite::params![prepared.build_id, target_key, resolved_keys],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                },
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        let mut claims = rows.iter().map(|r| r.0.clone()).collect::<Vec<_>>();
+        let mut claims = rows
+            .iter()
+            .flat_map(|r| [r.0.clone(), r.2.clone()])
+            .collect::<Vec<_>>();
         claims.sort();
         claims.dedup();
-        let mut spans = rows.into_iter().map(|r| r.1).collect::<Vec<_>>();
+        let mut spans = rows
+            .into_iter()
+            .flat_map(|r| [r.1, r.3])
+            .collect::<Vec<_>>();
         spans.sort();
         spans.dedup();
         (claims, spans)
@@ -539,40 +629,67 @@ pub fn derive_positive(
     let mut claims = Vec::<String>::new();
     let mut evidence = Vec::<String>::new();
     let resolved = &prepared.resolved_entity_keys;
+    let code_search_language =
+        prepared.interpretation.intent == model::QuestionIntent::CodeSearchLanguage;
 
-    // Direct positive answers must match both a graph predicate supplied by
-    // the model and a resolved graph entity. Restrict to an explicit set of
-    // predicates whose stored assertion itself answers a positive relation.
-    const DIRECT_PREDICATES: &[&str] = &[
-        "indexes_language",
-        "indexes_dialect",
-        "indexes_extension",
-        "searches_index",
-        "uses_parser",
+    // Each named endpoint must occupy its predicate's corresponding slot.
+    // A parser shared by unrelated indexes cannot prove a relation about a
+    // particular index.
+    const DIRECT_PREDICATES: &[(&str, &str, &str)] = &[
+        ("indexes_language", "index", "language"),
+        ("indexes_dialect", "index", "dialect"),
+        ("indexes_extension", "index", "extension"),
+        ("searches_index", "feature", "index"),
+        ("uses_parser", "index", "parser"),
     ];
     for predicate in &prepared.interpretation.predicates {
-        if !DIRECT_PREDICATES.contains(&predicate.as_str()) {
+        if code_search_language {
+            break;
+        }
+        let Some((_, subject_kind, object_kind)) =
+            DIRECT_PREDICATES.iter().find(|(p, _, _)| *p == predicate)
+        else {
+            continue;
+        };
+        if resolved.iter().any(|key| {
+            !key.starts_with(&format!("{subject_kind}:"))
+                && !key.starts_with(&format!("{object_kind}:"))
+        }) {
+            continue;
+        }
+        let subject_keys = resolved
+            .iter()
+            .filter(|key| key.starts_with(&format!("{subject_kind}:")))
+            .collect::<Vec<_>>();
+        let object_keys = resolved
+            .iter()
+            .filter(|key| key.starts_with(&format!("{object_kind}:")))
+            .collect::<Vec<_>>();
+        if subject_keys.is_empty() && object_keys.is_empty() {
             continue;
         }
         let mut stmt = db.prepare(
             "SELECT DISTINCT c.id, e.span_id
              FROM graph_claims c
-             JOIN graph_build_sources bs ON bs.build_id=c.build_id AND bs.source_version_id=c.source_version_id
+             JOIN graph_build_sources bs ON bs.build_id=?1 AND bs.source_version_id=c.source_version_id
              JOIN graph_sources s ON s.id=bs.source_id
              JOIN graph_claim_evidence e ON e.claim_id=c.id
              JOIN graph_nodes subj ON subj.id=c.subject_node_id
              LEFT JOIN graph_nodes obj ON obj.id=c.object_node_id
-             WHERE c.build_id=?1 AND c.active=1 AND c.predicate=?2
+             WHERE EXISTS (SELECT 1 FROM graph_build_claims bc WHERE bc.claim_id=c.id AND bc.build_id=?1) AND c.active=1 AND c.predicate=?2
                AND c.polarity='positive' AND c.status='current'
+               AND c.scope IN ('project','feature')
                AND s.active=1 AND s.human_maintained=1
-               AND (subj.canonical_key IN (SELECT value FROM json_each(?3))
-                    OR obj.canonical_key IN (SELECT value FROM json_each(?3)))
+               AND (json_array_length(?3)=0 OR subj.canonical_key IN (SELECT value FROM json_each(?3)))
+               AND (json_array_length(?4)=0 OR obj.canonical_key IN (SELECT value FROM json_each(?4)))
              ORDER BY c.id, e.span_id",
         )?;
-        let keys = serde_json::to_string(resolved)?;
-        for row in stmt.query_map(rusqlite::params![prepared.build_id, predicate, keys], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })? {
+        let subjects = serde_json::to_string(&subject_keys)?;
+        let objects = serde_json::to_string(&object_keys)?;
+        for row in stmt.query_map(
+            rusqlite::params![prepared.build_id, predicate, subjects, objects],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )? {
             let (claim, span) = row?;
             if !claims.contains(&claim) {
                 claims.push(claim);
@@ -586,7 +703,20 @@ pub fn derive_positive(
     // Explicit two-premise rule: a searchable feature searches an index, and
     // that same index indexes the requested language. Join on the canonical
     // index node so unrelated claims cannot be combined.
-    if resolved.iter().any(|key| key.starts_with("language:")) {
+    if code_search_language
+        && prepared
+            .interpretation
+            .predicates
+            .iter()
+            .any(|p| p == "searches_index")
+        && prepared
+            .interpretation
+            .predicates
+            .iter()
+            .any(|p| p == "indexes_language")
+        && resolved.iter().any(|key| key.starts_with("language:"))
+        && resolved.iter().any(|key| key.starts_with("feature:"))
+    {
         let mut stmt = db.prepare(
             "SELECT DISTINCT search.id, language.id, se.span_id, le.span_id
              FROM graph_claims search
@@ -596,16 +726,19 @@ pub fn derive_positive(
              JOIN graph_nodes lang ON lang.id=language.object_node_id
              JOIN graph_claim_evidence se ON se.claim_id=search.id
              JOIN graph_claim_evidence le ON le.claim_id=language.id
-             JOIN graph_build_sources sbs ON sbs.build_id=search.build_id AND sbs.source_version_id=search.source_version_id
+             JOIN graph_build_sources sbs ON sbs.build_id=?1 AND sbs.source_version_id=search.source_version_id
              JOIN graph_sources ss ON ss.id=sbs.source_id
-             JOIN graph_build_sources lbs ON lbs.build_id=language.build_id AND lbs.source_version_id=language.source_version_id
+             JOIN graph_build_sources lbs ON lbs.build_id=?1 AND lbs.source_version_id=language.source_version_id
              JOIN graph_sources ls ON ls.id=lbs.source_id
-             WHERE search.build_id=?1 AND language.build_id=?1
+             WHERE EXISTS (SELECT 1 FROM graph_build_claims bc WHERE bc.claim_id=search.id AND bc.build_id=?1) AND EXISTS (SELECT 1 FROM graph_build_claims bc WHERE bc.claim_id=language.id AND bc.build_id=?1)
                AND search.active=1 AND language.active=1
                AND search.predicate='searches_index' AND language.predicate='indexes_language'
                AND search.polarity='positive' AND language.polarity='positive'
                AND search.status='current' AND language.status='current'
+               AND search.scope IN ('project','feature')
+               AND language.scope IN ('project','feature')
                AND feature.kind='feature' AND idx.kind='index' AND lang.kind='language'
+               AND feature.canonical_key IN (SELECT value FROM json_each(?2))
                AND lang.canonical_key IN (SELECT value FROM json_each(?2))
                AND ss.active=1 AND ss.human_maintained=1 AND ls.active=1 AND ls.human_maintained=1
              ORDER BY search.id, language.id, se.span_id, le.span_id",
@@ -674,9 +807,9 @@ pub fn prepare_search(
             "SELECT DISTINCT n.canonical_key, n.kind, n.display_name
              FROM graph_nodes n
              JOIN graph_claims c ON c.subject_node_id=n.id OR c.object_node_id=n.id
-             JOIN graph_build_sources bs ON bs.build_id=c.build_id AND bs.source_version_id=c.source_version_id
+             JOIN graph_build_sources bs ON bs.build_id=?1 AND bs.source_version_id=c.source_version_id
              JOIN graph_sources s ON s.id=bs.source_id
-             WHERE c.build_id=?1 AND c.active=1 AND s.human_maintained=1 AND s.active=1
+             WHERE EXISTS (SELECT 1 FROM graph_build_claims bc WHERE bc.claim_id=c.id AND bc.build_id=?1) AND c.active=1 AND s.human_maintained=1 AND s.active=1
              ORDER BY n.canonical_key",
         )?;
         let entities = stmt
@@ -694,10 +827,10 @@ pub fn prepare_search(
                 "SELECT DISTINCT a.alias FROM graph_aliases a
                  JOIN graph_claims_fts f ON f.alias_id=a.id
                  JOIN graph_claims c ON c.id=f.claim_id
-                 JOIN graph_build_sources bs ON bs.build_id=c.build_id AND bs.source_version_id=c.source_version_id
+                 JOIN graph_build_sources bs ON bs.build_id=?2 AND bs.source_version_id=c.source_version_id
                  JOIN graph_sources s ON s.id=bs.source_id
                  WHERE a.node_id=(SELECT id FROM graph_nodes WHERE canonical_key=?1)
-                   AND c.build_id=?2 AND c.active=1 AND s.human_maintained=1 AND s.active=1
+                   AND EXISTS (SELECT 1 FROM graph_build_claims bc WHERE bc.claim_id=c.id AND bc.build_id=?2) AND c.active=1 AND s.human_maintained=1 AND s.active=1
                  ORDER BY a.alias",
             )?;
             let aliases = alias_stmt
@@ -716,9 +849,9 @@ pub fn prepare_search(
         }
         let mut pred_stmt = db.prepare(
             "SELECT DISTINCT c.predicate FROM graph_claims c
-             JOIN graph_build_sources bs ON bs.build_id=c.build_id AND bs.source_version_id=c.source_version_id
+             JOIN graph_build_sources bs ON bs.build_id=?1 AND bs.source_version_id=c.source_version_id
              JOIN graph_sources s ON s.id=bs.source_id
-             WHERE c.build_id=?1 AND c.active=1 AND s.human_maintained=1 AND s.active=1
+             WHERE EXISTS (SELECT 1 FROM graph_build_claims bc WHERE bc.claim_id=c.id AND bc.build_id=?1) AND c.active=1 AND s.human_maintained=1 AND s.active=1
              ORDER BY c.predicate",
         )?;
         let predicates = pred_stmt
@@ -741,10 +874,6 @@ pub fn prepare_search(
     let interpretation = adapter
         .interpret_question(&request)
         .map_err(|error| anyhow::anyhow!("interpreting graph search question: {error:#}"))?;
-    anyhow::ensure!(
-        !interpretation.intent.trim().is_empty(),
-        "graph model returned an empty interpretation intent"
-    );
     anyhow::ensure!(
         interpretation
             .predicates
@@ -810,9 +939,9 @@ pub fn prepare_search(
             "SELECT DISTINCT c.id, c.claim_text, s.path, c.source_version_id
              FROM graph_claims_fts f
              JOIN graph_claims c ON c.id=f.claim_id
-             JOIN graph_build_sources bs ON bs.build_id=c.build_id AND bs.source_version_id=c.source_version_id
+             JOIN graph_build_sources bs ON bs.build_id=?2 AND bs.source_version_id=c.source_version_id
              JOIN graph_sources s ON s.id=bs.source_id
-             WHERE graph_claims_fts MATCH ?1 AND c.build_id=?2 AND c.active=1
+             WHERE graph_claims_fts MATCH ?1 AND EXISTS (SELECT 1 FROM graph_build_claims bc WHERE bc.claim_id=c.id AND bc.build_id=?2) AND c.active=1
                AND s.human_maintained=1 AND s.active=1
              ORDER BY c.id LIMIT ?3",
         )?;
@@ -853,7 +982,11 @@ fn make_graph_fts_query(question: &str, interpretation: &model::InterpretationRe
         }
     };
     add_terms(question);
-    add_terms(&interpretation.intent);
+    add_terms(match interpretation.intent {
+        model::QuestionIntent::DirectRelation => "direct relation",
+        model::QuestionIntent::CodeSearchLanguage => "code search language",
+        model::QuestionIntent::ListCodeSearchLanguages => "code search languages dialects",
+    });
     for entity in &interpretation.entities {
         add_terms(&entity.name);
         for alias in &entity.aliases {
@@ -915,7 +1048,8 @@ pub fn build(
         // pointer so an extraction or persistence error cannot expose a mix.
         tx.execute("UPDATE graph_claims SET active = 0", [])?;
         tx.execute(
-            "UPDATE graph_claims SET active = 1 WHERE build_id = ?1",
+            "UPDATE graph_claims SET active = 1 WHERE id IN
+             (SELECT claim_id FROM graph_build_claims WHERE build_id = ?1)",
             [&build_id],
         )?;
         tx.execute("UPDATE graph_sources SET active = 0", [])?;
@@ -973,7 +1107,8 @@ fn derive_supersession_tx(tx: &rusqlite::Transaction<'_>, build_id: &str) -> Res
          JOIN graph_sources old_source ON old_source.id = old_version.source_id
          JOIN graph_claim_evidence old_evidence ON old_evidence.claim_id = older.id
          JOIN graph_spans old_span ON old_span.id = old_evidence.span_id
-         WHERE newer.build_id = ?1
+         WHERE EXISTS (SELECT 1 FROM graph_build_claims membership
+                       WHERE membership.claim_id=newer.id AND membership.build_id=?1)
            AND new_source.path = old_source.path
            AND new_span.heading_path = old_span.heading_path
            AND (
@@ -1216,9 +1351,35 @@ pub fn validate_extraction(
             response.claims.get(*member).is_some_and(|claim| {
                 claim.subject.canonicalized().canonical_key == enumeration.subject.canonicalized().canonical_key
                     && claim.predicate == enumeration.predicate
+                    && claim.polarity == model::Polarity::Positive
+                    && claim.status == model::ClaimStatus::Current
+                    && claim.scope == enumeration.scope
                     && matches!(&claim.object, model::ClaimObject::Entity(entity) if entity.kind == expected_object_kind || entity.canonicalized().kind == expected_object_kind)
             })
         }), "{label}: members must reference matching claims from this extraction");
+        if enumeration.exhaustive {
+            let stated = stated_list_members(&enumeration.evidence.text, expected_object_kind);
+            let members: BTreeSet<_> = enumeration
+                .member_claim_indexes
+                .iter()
+                .filter_map(|index| {
+                    let claim = response.claims.get(*index)?;
+                    let model::ClaimObject::Entity(entity) = &claim.object else {
+                        return None;
+                    };
+                    // The member claim must cite the list itself, even if it also
+                    // cites a narrower passage elsewhere in the document.
+                    let cites_list = claim.evidence.iter().any(|evidence| {
+                        evidence.passage_id == enumeration.evidence.passage_id
+                            && evidence.start_line <= enumeration.evidence.start_line
+                            && evidence.end_line >= enumeration.evidence.end_line
+                    });
+                    cites_list.then(|| entity.canonicalized().canonical_key)
+                })
+                .collect();
+            enumeration.exhaustive =
+                stated.is_some_and(|stated| !stated.is_empty() && stated == members);
+        }
     }
     Ok(response)
 }
@@ -1235,6 +1396,84 @@ fn explicitly_complete_wording(text: &str) -> bool {
     ]
     .iter()
     .any(|cue| text.contains(cue))
+}
+
+/// Recognize a simple, closed list in the cited wording. Unrecognized prose
+/// leaves the enumeration open, since absence is otherwise used to prove `no`.
+fn stated_list_members(text: &str, kind: &str) -> Option<BTreeSet<String>> {
+    let mut without_parentheses = String::new();
+    let mut depth = 0usize;
+    for ch in text.chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' if depth > 0 => depth -= 1,
+            _ if depth == 0 => without_parentheses.push(ch),
+            _ => {}
+        }
+    }
+    if depth != 0 {
+        return None;
+    }
+    let lower = without_parentheses.to_ascii_lowercase();
+    let plural = match kind {
+        "language" => "languages",
+        "dialect" => "dialects",
+        "extension" => "extensions",
+        _ => return None,
+    };
+    let cue_start = [
+        "all supported",
+        "only supported",
+        "complete list",
+        "full list",
+        "the entire set",
+        "every supported",
+    ]
+    .iter()
+    .filter_map(|cue| lower.find(cue))
+    .min()?;
+    let start = cue_start + lower.get(cue_start..)?.find(plural)? + plural.len();
+    let rest = without_parentheses.get(start..)?;
+    let rest = rest.trim_start();
+    let rest = rest
+        .strip_prefix(':')
+        .or_else(|| rest.strip_prefix("are "))?;
+    let next_list = rest.to_ascii_lowercase().find(", and all supported ");
+    let end = [rest.find([';', '.']), next_list]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(rest.len());
+    let list = rest.get(..end)?.trim();
+    let mut names = BTreeSet::new();
+    for item in list
+        .split(',')
+        .map(str::trim)
+        .flat_map(|item| item.split(" and "))
+    {
+        let name = item
+            .trim()
+            .trim_start_matches("and ")
+            .trim_start_matches("Git-tracked ")
+            .trim();
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|ch| ch.is_alphanumeric() || matches!(ch, ' ' | '+' | '#' | '-' | '.'))
+        {
+            return None;
+        }
+        names.insert(
+            model::ClaimEntity {
+                kind: kind.into(),
+                name: name.into(),
+                aliases: Vec::new(),
+            }
+            .canonicalized()
+            .canonical_key,
+        );
+    }
+    (!names.is_empty()).then_some(names)
 }
 
 /// Store an already validated extraction as one atomic graph update. The FTS
@@ -1307,7 +1546,7 @@ fn persist_extraction_tx(
         tx.execute(
             "INSERT INTO graph_claims(id, subject_node_id, predicate, object_node_id, object_literal, polarity, modality, status, scope, source_version_id, build_id, claim_text, active)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1)
-             ON CONFLICT(id) DO UPDATE SET active=1, build_id=excluded.build_id, claim_text=excluded.claim_text",
+             ON CONFLICT(id) DO UPDATE SET active=1, claim_text=excluded.claim_text",
             rusqlite::params![claim_id, subject, claim.predicate, object_key, object_literal,
                 match claim.polarity { model::Polarity::Positive => "positive", model::Polarity::Negative => "negative" },
                 format!("{:?}", claim.status).to_ascii_lowercase(),
@@ -1315,19 +1554,19 @@ fn persist_extraction_tx(
                 format!("{:?}", claim.scope).to_ascii_lowercase(), source_version_id, build_id,
                 claim.evidence.iter().map(|e| e.text.as_str()).collect::<Vec<_>>().join(" ")],
         )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO graph_build_claims(build_id, claim_id) VALUES (?1, ?2)",
+            rusqlite::params![build_id, claim_id],
+        )?;
+        tx.execute(
+            "DELETE FROM graph_claim_evidence WHERE claim_id=?1",
+            [&claim_id],
+        )?;
         for evidence in &claim.evidence {
-            let span_exists: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM graph_spans WHERE id=?1 AND source_version_id=?2 AND start_line<=?3 AND end_line>=?4 AND substr(text, 1, length(?5)) IS NOT NULL)",
-                rusqlite::params![evidence.passage_id, source_version_id, evidence.start_line, evidence.end_line, evidence.text], |r| r.get(0))?;
-            anyhow::ensure!(
-                span_exists,
-                "claim evidence {} does not belong to source version {}",
-                evidence.passage_id,
-                source_version_id
-            );
+            let span_id = persist_evidence_span_tx(tx, source_version_id, evidence)?;
             tx.execute(
                 "INSERT OR IGNORE INTO graph_claim_evidence(claim_id, span_id) VALUES (?1, ?2)",
-                rusqlite::params![claim_id, evidence.passage_id],
+                rusqlite::params![claim_id, span_id],
             )?;
         }
         persisted_ids.push(claim_id);
@@ -1336,40 +1575,98 @@ fn persist_extraction_tx(
         if enumeration.member_claim_indexes.is_empty() {
             continue;
         }
-        let evidence_version: Option<i64> = tx
-            .query_row(
-                "SELECT source_version_id FROM graph_spans WHERE id=?1",
-                [&enumeration.evidence.passage_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        anyhow::ensure!(
-            evidence_version == Some(source_version_id),
-            "enumeration evidence {} does not belong to source version {}",
-            enumeration.evidence.passage_id,
-            source_version_id
-        );
+        let span_id = persist_evidence_span_tx(tx, source_version_id, &enumeration.evidence)?;
         let subject = persist_entity(&tx, &enumeration.subject)?;
         let enum_id = format!(
             "e{:016x}",
             xxhash_rust::xxh3::xxh3_64(
                 format!(
                     "{source_version_id}|{}|{}|{}|{}",
-                    subject, enumeration.predicate, enumeration.evidence.passage_id, i
+                    subject, enumeration.predicate, span_id, i
                 )
                 .as_bytes()
             )
         );
-        tx.execute("INSERT INTO graph_enumerations(id, subject_node_id, predicate, scope, exhaustive, source_version_id, supporting_span_id, build_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(id) DO UPDATE SET exhaustive=excluded.exhaustive, build_id=excluded.build_id",
-            rusqlite::params![enum_id, subject, enumeration.predicate, format!("{:?}", enumeration.scope).to_ascii_lowercase(), enumeration.exhaustive as i32, source_version_id, enumeration.evidence.passage_id, build_id])?;
+        tx.execute("INSERT INTO graph_enumerations(id, subject_node_id, predicate, scope, exhaustive, source_version_id, supporting_span_id, build_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(id) DO NOTHING",
+            rusqlite::params![enum_id, subject, enumeration.predicate, format!("{:?}", enumeration.scope).to_ascii_lowercase(), enumeration.exhaustive as i32, source_version_id, span_id, build_id])?;
+        tx.execute("INSERT INTO graph_build_enumerations(build_id, enumeration_id, exhaustive) VALUES (?1, ?2, ?3) ON CONFLICT(build_id, enumeration_id) DO UPDATE SET exhaustive=excluded.exhaustive",
+            rusqlite::params![build_id, enum_id, enumeration.exhaustive as i32])?;
         for member in &enumeration.member_claim_indexes {
             let claim_id = persisted_ids
                 .get(*member)
                 .ok_or_else(|| anyhow::anyhow!("enumeration member index {member} is missing"))?;
-            tx.execute("INSERT OR IGNORE INTO graph_enumeration_members(enumeration_id, claim_id) VALUES (?1, ?2)", rusqlite::params![enum_id, claim_id])?;
+            tx.execute("INSERT OR IGNORE INTO graph_build_enumeration_members(build_id, enumeration_id, claim_id) VALUES (?1, ?2, ?3)", rusqlite::params![build_id, enum_id, claim_id])?;
         }
     }
     Ok(persisted_ids)
+}
+
+fn persist_evidence_span_tx(
+    tx: &rusqlite::Transaction<'_>,
+    source_version_id: i64,
+    evidence: &model::ClaimEvidence,
+) -> Result<String> {
+    let passage: Option<(String, u32, u32, String)> = tx
+        .query_row(
+            "SELECT heading_path, start_line, end_line, text FROM graph_spans
+             WHERE id=?1 AND source_version_id=?2",
+            rusqlite::params![evidence.passage_id, source_version_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    let (heading, passage_start, passage_end, passage_text) = passage.ok_or_else(|| {
+        anyhow::anyhow!(
+            "evidence passage {} does not belong to source version {}",
+            evidence.passage_id,
+            source_version_id
+        )
+    })?;
+    anyhow::ensure!(
+        evidence
+            .passage_id
+            .starts_with(&format!("sv{source_version_id}:p"))
+            && evidence.start_line >= passage_start
+            && evidence.end_line >= evidence.start_line
+            && evidence.end_line <= passage_end,
+        "evidence range is outside passage {}",
+        evidence.passage_id
+    );
+    let snapshot: String = tx.query_row(
+        "SELECT snapshot FROM graph_source_versions WHERE id=?1",
+        [source_version_id],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(
+        snapshot_lines(&snapshot, passage_start, passage_end).as_deref()
+            == Some(passage_text.as_str()),
+        "evidence passage {} does not match source snapshot",
+        evidence.passage_id
+    );
+    anyhow::ensure!(
+        snapshot_lines(&snapshot, evidence.start_line, evidence.end_line).as_deref()
+            == Some(evidence.text.as_str()),
+        "evidence text does not match source snapshot at {}-{}",
+        evidence.start_line,
+        evidence.end_line
+    );
+    let key = format!(
+        "{}|{}|{}|{}|{}",
+        source_version_id,
+        evidence.passage_id,
+        evidence.start_line,
+        evidence.end_line,
+        evidence.text
+    );
+    let span_id = format!(
+        "sv{source_version_id}:e{:016x}",
+        xxhash_rust::xxh3::xxh3_64(key.as_bytes())
+    );
+    tx.execute(
+        "INSERT OR IGNORE INTO graph_spans(id, source_version_id, heading_path, start_line, end_line, text)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![span_id, source_version_id, heading, evidence.start_line, evidence.end_line, evidence.text],
+    )?;
+    Ok(span_id)
 }
 
 fn persist_entity(tx: &rusqlite::Transaction<'_>, entity: &model::ClaimEntity) -> Result<i64> {
@@ -1554,6 +1851,65 @@ mod validation_tests {
             .to_string();
         assert!(error.contains("README.md") && error.contains("does not match its snapshot"));
     }
+
+    #[test]
+    fn incomplete_exhaustive_list_is_left_open() {
+        use super::model::{ClaimScope, ExtractedEnumeration};
+        let (_, _, mut response) = fixture();
+        let snapshot =
+            "All supported code-search languages: Rust, TypeScript, JavaScript.\n".to_owned();
+        let passages = vec![SourcePassage {
+            id: "sv1:p0".into(),
+            source_version_id: 1,
+            heading_path: String::new(),
+            start_line: 1,
+            end_line: 1,
+            text: snapshot.clone(),
+        }];
+        response.claims[0].evidence = vec![model::ClaimEvidence {
+            passage_id: "sv1:p0".into(),
+            start_line: 1,
+            end_line: 1,
+            text: snapshot.clone(),
+        }];
+        let mut typescript = response.claims[0].clone();
+        typescript.object = ClaimObject::Entity(model::ClaimEntity {
+            kind: "language".into(),
+            name: "TypeScript".into(),
+            aliases: Vec::new(),
+        });
+        response.claims.push(typescript);
+        response.enumerations.push(ExtractedEnumeration {
+            subject: response.claims[0].subject.clone(),
+            predicate: "indexes_language".into(),
+            scope: ClaimScope::Project,
+            exhaustive: true,
+            evidence: response.claims[0].evidence[0].clone(),
+            member_claim_indexes: vec![0, 1],
+        });
+        let checked =
+            validate_extraction("README.md", &snapshot, &passages, response.clone()).unwrap();
+        assert!(!checked.enumerations[0].exhaustive);
+        response.claims[1].status = ClaimStatus::Planned;
+        assert!(
+            validate_extraction("README.md", &snapshot, &passages, response)
+                .unwrap_err()
+                .to_string()
+                .contains("members must reference matching claims")
+        );
+    }
+
+    #[test]
+    fn readme_closed_language_and_dialect_lists_are_parsed() {
+        let text = "- All supported code-search languages are Git-tracked Rust (`.rs`), TypeScript (`.ts`), and JavaScript (`.js`), and all supported dialects are TSX (`.tsx`) and JSX (`.jsx`); they share one code index\n";
+        assert_eq!(stated_list_members(text, "language").unwrap().len(), 3);
+        assert_eq!(stated_list_members(text, "dialect").unwrap().len(), 2);
+        assert!(stated_list_members(
+            "Supported languages include Rust and TypeScript, such as those in this guide.",
+            "language"
+        )
+        .is_none());
+    }
 }
 
 /// Persist the selected source set for a build and return the exact passages
@@ -1629,19 +1985,22 @@ pub fn snapshot_sources(
         }
         let mut statement = tx.prepare(
             "SELECT id, heading_path, start_line, end_line, text FROM graph_spans
-             WHERE source_version_id = ?1 ORDER BY start_line, id",
+             WHERE source_version_id = ?1 AND id GLOB ?2 ORDER BY start_line, id",
         )?;
         let passages = statement
-            .query_map([source_version_id], |row| {
-                Ok(SourcePassage {
-                    id: row.get(0)?,
-                    source_version_id,
-                    heading_path: row.get(1)?,
-                    start_line: row.get(2)?,
-                    end_line: row.get(3)?,
-                    text: row.get(4)?,
-                })
-            })?
+            .query_map(
+                rusqlite::params![source_version_id, format!("sv{source_version_id}:p[0-9]*")],
+                |row| {
+                    Ok(SourcePassage {
+                        id: row.get(0)?,
+                        source_version_id,
+                        heading_path: row.get(1)?,
+                        start_line: row.get(2)?,
+                        end_line: row.get(3)?,
+                        text: row.get(4)?,
+                    })
+                },
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         output.push(SnapshottedSource {
             path: source.path.clone(),
@@ -1843,7 +2202,38 @@ pub fn init_schema(db: &Connection) -> Result<()> {
     db.execute_batch("PRAGMA foreign_keys = ON;")?;
     db.execute_batch("BEGIN IMMEDIATE;")?;
     let migration = (|| -> Result<()> {
+        let table_exists = |name: &str| -> Result<bool> {
+            Ok(db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                [name],
+                |row| row.get(0),
+            )?)
+        };
+        let needs_claim_backfill = !table_exists("graph_build_claims")?;
+        let needs_enumeration_backfill = !table_exists("graph_build_enumerations")?;
+        let needs_member_backfill = !table_exists("graph_build_enumeration_members")?;
         db.execute_batch(include_str!("graph_schema.sql"))?;
+        if needs_claim_backfill {
+            db.execute_batch(
+                "INSERT OR IGNORE INTO graph_build_claims(build_id, claim_id)
+                 SELECT build_id, id FROM graph_claims;",
+            )?;
+        }
+        if needs_enumeration_backfill {
+            db.execute_batch(
+                "INSERT OR IGNORE INTO graph_build_enumerations(build_id, enumeration_id, exhaustive)
+                 SELECT build_id, id, exhaustive FROM graph_enumerations;",
+            )?;
+        }
+        if needs_member_backfill {
+            db.execute_batch(
+                "INSERT OR IGNORE INTO graph_build_enumeration_members(build_id, enumeration_id, claim_id)
+                 SELECT en.build_id, em.enumeration_id, em.claim_id
+                 FROM graph_enumeration_members em
+                 JOIN graph_enumerations en ON en.id=em.enumeration_id
+                 JOIN graph_build_claims bc ON bc.build_id=en.build_id AND bc.claim_id=em.claim_id;",
+            )?;
+        }
         let version: i64 = db.query_row(
             "SELECT version FROM graph_schema_version WHERE singleton = 1",
             [],

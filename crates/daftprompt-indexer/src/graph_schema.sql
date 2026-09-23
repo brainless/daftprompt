@@ -113,6 +113,16 @@ CREATE INDEX IF NOT EXISTS graph_claims_build_active
 CREATE INDEX IF NOT EXISTS graph_claims_source_version
     ON graph_claims(source_version_id);
 
+-- A normalized claim can belong to several completed builds. Keep its first
+-- build_id as creation provenance; membership is recorded independently.
+CREATE TABLE IF NOT EXISTS graph_build_claims (
+    build_id TEXT NOT NULL REFERENCES graph_builds(id) ON DELETE CASCADE,
+    claim_id TEXT NOT NULL REFERENCES graph_claims(id) ON DELETE CASCADE,
+    PRIMARY KEY(build_id, claim_id)
+);
+CREATE INDEX IF NOT EXISTS graph_build_claims_claim
+    ON graph_build_claims(claim_id);
+
 CREATE TABLE IF NOT EXISTS graph_enumerations (
     id TEXT PRIMARY KEY,
     subject_node_id INTEGER NOT NULL REFERENCES graph_nodes(id),
@@ -126,6 +136,15 @@ CREATE TABLE IF NOT EXISTS graph_enumerations (
 CREATE INDEX IF NOT EXISTS graph_enumerations_subject_predicate
     ON graph_enumerations(subject_node_id, predicate, scope);
 
+CREATE TABLE IF NOT EXISTS graph_build_enumerations (
+    build_id TEXT NOT NULL REFERENCES graph_builds(id) ON DELETE CASCADE,
+    enumeration_id TEXT NOT NULL REFERENCES graph_enumerations(id) ON DELETE CASCADE,
+    exhaustive INTEGER NOT NULL CHECK (exhaustive IN (0, 1)),
+    PRIMARY KEY(build_id, enumeration_id)
+);
+CREATE INDEX IF NOT EXISTS graph_build_enumerations_enumeration
+    ON graph_build_enumerations(enumeration_id);
+
 CREATE TABLE IF NOT EXISTS graph_enumeration_members (
     enumeration_id TEXT NOT NULL REFERENCES graph_enumerations(id) ON DELETE CASCADE,
     claim_id TEXT NOT NULL REFERENCES graph_claims(id) ON DELETE CASCADE,
@@ -133,6 +152,19 @@ CREATE TABLE IF NOT EXISTS graph_enumeration_members (
 );
 CREATE INDEX IF NOT EXISTS graph_enumeration_members_claim
     ON graph_enumeration_members(claim_id);
+
+CREATE TABLE IF NOT EXISTS graph_build_enumeration_members (
+    build_id TEXT NOT NULL REFERENCES graph_builds(id) ON DELETE CASCADE,
+    enumeration_id TEXT NOT NULL REFERENCES graph_enumerations(id) ON DELETE CASCADE,
+    claim_id TEXT NOT NULL REFERENCES graph_claims(id) ON DELETE CASCADE,
+    PRIMARY KEY(build_id, enumeration_id, claim_id),
+    FOREIGN KEY(build_id, enumeration_id)
+        REFERENCES graph_build_enumerations(build_id, enumeration_id),
+    FOREIGN KEY(build_id, claim_id)
+        REFERENCES graph_build_claims(build_id, claim_id)
+);
+CREATE INDEX IF NOT EXISTS graph_build_enumeration_members_claim
+    ON graph_build_enumeration_members(build_id, claim_id);
 
 CREATE TABLE IF NOT EXISTS graph_claim_evidence (
     claim_id TEXT NOT NULL REFERENCES graph_claims(id) ON DELETE CASCADE,
