@@ -1,29 +1,31 @@
 //! Structured language-model adapter used by provenance graph extraction and search.
 //!
-//! API credentials are held only in [`OpenAiCompatibleAdapter`] memory and are
+//! Xiaomi API credentials are held only in [`XiaomiGraphAdapter`] memory and are
 //! sent as an authorization header. Request/response DTOs contain no credential
 //! fields and are never persisted by this module.
 
 use std::env;
 
 use anyhow::{anyhow, Context, Result};
-use reqwest::blocking::Client;
+use llm_sdk::{
+    error::LlmError,
+    models::xiaomi::MIMO_V2_5_PRO,
+    providers::XIAOMI,
+    xiaomi::{types::XiaomiChatCompletionRequest, XiaomiClient},
+};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::SourcePassage;
 
-pub const ENV_BASE_URL: &str = "DAFTPROMPT_GRAPH_BASE_URL";
-pub const ENV_MODEL: &str = "DAFTPROMPT_GRAPH_MODEL";
-pub const ENV_API_KEY: &str = "DAFTPROMPT_GRAPH_API_KEY";
+pub const ENV_API_KEY: &str = "XIAOMI_API_KEY";
 
-// json_object is supported by more OpenAI-compatible endpoints than
-// json_schema. Keep the complete wire contract in the prompt so the model
-// does not need to know Rust type names or serde's enum representation.
+// Keep the complete JSON wire contract in the prompt so the model does not
+// need to know Rust type names or serde's enum representation.
 const EXTRACTION_CONTRACT: &str = r#"Extract atomic provenance claims from the JSON user message.
 Input shape: {"source_path":string,"passages":[{"id":string,"source_version_id":integer,"heading_path":string,"start_line":integer,"end_line":integer,"text":string}]}.
 Return exactly one JSON object with this shape:
 {"claims":[{"subject":{"kind":string,"name":string,"aliases":[string]},"predicate":string,"object":{"type":"entity","kind":string,"name":string,"aliases":[string]} OR {"type":"literal","value":string,"value_kind":string},"polarity":"positive"|"negative","status":"current"|"planned"|"deferred"|"completed"|"rejected"|"historical","scope":"project"|"epic"|"task"|"feature","evidence":[{"passage_id":string,"start_line":integer,"end_line":integer,"text":string}]}],"enumerations":[{"subject":{"kind":string,"name":string,"aliases":[string]},"predicate":string,"scope":"project"|"epic"|"task"|"feature","exhaustive":boolean,"evidence":{"passage_id":string,"start_line":integer,"end_line":integer,"text":string},"member_claim_indexes":[integer]}]}.
-Use empty arrays when there are no claims or enumerations. Every claim needs at least one evidence item. Evidence passage_id must equal a supplied passage id; lines must be within that passage and text must exactly match those source lines. Enumeration indexes are zero-based positions in claims. Set exhaustive true only if the cited passage explicitly says the list is complete. Use entity kinds feature, index, language, dialect, extension, parser, work_item, path, or status as appropriate. Use controlled predicates indexes_language, indexes_dialect, indexes_extension, searches_index, uses_parser, excludes_path, or work_item_status. Preserve current, planned, deferred, completed, rejected, or historical status and the narrowest supported scope. Treat future work or follow-up as deferred in this source revision; never invent a date or scheduled commitment. An epic-scoped non-goal is not a project-wide prohibition. Return JSON only."#;
+Use empty arrays when there are no claims or enumerations. Every claim needs at least one evidence item. Evidence passage_id must equal a supplied passage id; lines must be within that passage and text must exactly match those source lines. Enumeration indexes are zero-based positions in claims. Set exhaustive true only if the cited passage explicitly says the list is complete. Extract ONLY these subject -> predicate -> object relations: index -> indexes_language -> language; index -> indexes_dialect -> dialect; index -> indexes_extension -> extension; feature -> searches_index -> index; feature or index -> uses_parser -> parser; feature, index, or work_item -> excludes_path -> path; work_item -> work_item_status -> status. Project and epic are scopes, not entity kinds. Do not emit a project entity, generic project description, or any claim outside those relations. Omit unsupported statements instead of inventing a predicate or converting the project into a feature. If this passage has no supported claim, return empty arrays. Preserve current, planned, deferred, completed, rejected, or historical status and the narrowest supported scope. Treat future work or follow-up as deferred in this source revision; never invent a date or scheduled commitment. An epic-scoped non-goal is not a project-wide prohibition. Return JSON only."#;
 
 const INTERPRETATION_CONTRACT: &str = r#"Interpret the question in the JSON user message using only supplied graph vocabulary.
 Input shape: {"question":string,"candidate_entities":[{"kind":string,"name":string,"aliases":[string]}],"candidate_predicates":[string]}.
@@ -323,56 +325,39 @@ pub enum QuestionIntent {
 /// Provider-neutral contract so graph code and tests do not depend on HTTP.
 pub trait GraphModel: Send + Sync {
     fn extract_claims(&self, request: &ExtractionRequest) -> Result<ExtractionResponse>;
+    /// Optionally ask a model to correct one rejected extraction. Fixture and
+    /// offline adapters retain the original validation error by default.
+    fn retry_extraction(
+        &self,
+        _request: &ExtractionRequest,
+        _validation_error: &str,
+    ) -> Option<Result<ExtractionResponse>> {
+        None
+    }
     fn interpret_question(&self, request: &InterpretationRequest)
         -> Result<InterpretationResponse>;
     fn model_name(&self) -> &str;
 }
 
-#[derive(Clone)]
-pub struct OpenAiCompatibleAdapter {
-    base_url: String,
-    model: String,
-    api_key: Option<String>,
-    client: Client,
+pub struct XiaomiGraphAdapter {
+    api_key: String,
 }
 
-impl std::fmt::Debug for OpenAiCompatibleAdapter {
+impl std::fmt::Debug for XiaomiGraphAdapter {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("OpenAiCompatibleAdapter")
-            .field("base_url", &self.base_url)
-            .field("model", &self.model)
-            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .debug_struct("XiaomiGraphAdapter")
+            .field("provider", &XIAOMI)
+            .field("model", &MIMO_V2_5_PRO)
+            .field("api_key", &"[REDACTED]")
             .finish_non_exhaustive()
     }
 }
 
-impl OpenAiCompatibleAdapter {
-    /// Read configuration from the environment. Base URL and model are
-    /// required; the API key is optional for local OpenAI-compatible servers.
+impl XiaomiGraphAdapter {
+    /// Read the Xiaomi API key from the environment.
     pub fn from_env() -> Result<Self> {
-        let base_url = required_env(ENV_BASE_URL)?;
-        let model = required_env(ENV_MODEL)?;
-        let base_url = base_url.trim_end_matches('/').to_owned();
-        anyhow::ensure!(
-            base_url.starts_with("http://") || base_url.starts_with("https://"),
-            "{ENV_BASE_URL} must be an http(s) URL"
-        );
-        anyhow::ensure!(
-            !base_url.contains('@'),
-            "{ENV_BASE_URL} must not contain URL credentials"
-        );
-        let api_key = env::var(ENV_API_KEY).ok().filter(|key| !key.is_empty());
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .context("could not initialize graph model HTTP client")?;
-        Ok(Self {
-            base_url,
-            model,
-            api_key,
-            client,
-        })
+        Ok(Self { api_key: required_env(ENV_API_KEY)? })
     }
 
     /// Load environment configuration and run extraction, preserving the
@@ -397,7 +382,7 @@ impl OpenAiCompatibleAdapter {
         input: &impl Serialize,
     ) -> Result<serde_json::Value> {
         let request = ChatCompletionRequest {
-            model: &self.model,
+            model: MIMO_V2_5_PRO,
             messages: [
                 ChatMessage {
                     role: "system",
@@ -417,28 +402,42 @@ impl OpenAiCompatibleAdapter {
 
     fn complete<T: DeserializeOwned>(&self, operation: &str, input: &impl Serialize) -> Result<T> {
         let payload = self.request_payload(operation, input)?;
-        let url = format!("{}/chat/completions", self.base_url);
-        let mut builder = self.client.post(url).json(&payload);
-        if let Some(key) = &self.api_key {
-            builder = builder.bearer_auth(key);
-        }
-        // Do not include the request, headers, response body, or reqwest error
-        // text here: compatible providers sometimes echo sensitive material.
-        let response = builder
-            .send()
-            .map_err(|_| anyhow!("graph model HTTP request failed"))?;
-        anyhow::ensure!(
-            response.status().is_success(),
-            "graph model returned HTTP status {}",
-            response.status()
-        );
-        let envelope: ChatCompletionResponse = response
-            .json()
-            .map_err(|_| anyhow!("graph model returned malformed completion JSON"))?;
-        parse_completion(envelope)
+        let request: XiaomiChatCompletionRequest = serde_json::from_value(payload)?;
+        let client = XiaomiClient::new(&self.api_key)
+            .map_err(sanitized_sdk_error)?
+            .with_model(MIMO_V2_5_PRO);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("could not initialize graph model runtime")?;
+        // SDK errors can contain provider response text. Do not surface that
+        // text in graph errors or query logs.
+        let response = runtime
+            .block_on(client.create_chat_completion(request))
+            .map_err(sanitized_sdk_error)?;
+        let content = response
+            .choices
+            .into_iter()
+            .next()
+            .and_then(|choice| choice.message.content)
+            .ok_or_else(|| anyhow!("graph model returned no completion content"))?;
+        parse_content(&content)
     }
 }
 
+fn sanitized_sdk_error(error: LlmError) -> anyhow::Error {
+    match error {
+        LlmError::Authentication { .. } => anyhow!("{XIAOMI} graph model authentication failed"),
+        LlmError::RateLimit { .. } => anyhow!("{XIAOMI} graph model rate limit exceeded"),
+        LlmError::InvalidRequest { .. } => anyhow!("{XIAOMI} graph model rejected the request"),
+        LlmError::Api { status, .. } => anyhow!("{XIAOMI} graph model returned HTTP status {status}"),
+        LlmError::Network { .. } => anyhow!("{XIAOMI} graph model network request failed"),
+        LlmError::Parse { .. } | LlmError::Internal { .. } => anyhow!("{XIAOMI} graph model returned a malformed response"),
+        _ => anyhow!("{XIAOMI} graph model request failed"),
+    }
+}
+
+#[cfg(test)]
 fn parse_completion<T: DeserializeOwned>(envelope: ChatCompletionResponse) -> Result<T> {
     let content = envelope
         .choices
@@ -447,14 +446,32 @@ fn parse_completion<T: DeserializeOwned>(envelope: ChatCompletionResponse) -> Re
         .ok_or_else(|| anyhow!("graph model returned no completion choices"))?
         .message
         .content;
-    serde_json::from_str(&content)
+    parse_content(&content)
+}
+
+fn parse_content<T: DeserializeOwned>(content: &str) -> Result<T> {
+    serde_json::from_str(content)
         .map_err(|error| anyhow!("graph model returned malformed structured JSON: {error}"))
 }
 
-impl GraphModel for OpenAiCompatibleAdapter {
+impl GraphModel for XiaomiGraphAdapter {
     fn extract_claims(&self, request: &ExtractionRequest) -> Result<ExtractionResponse> {
         self.complete(EXTRACTION_CONTRACT, request)
             .with_context(|| format!("extracting claims for source {}", request.source_path))
+    }
+
+    fn retry_extraction(
+        &self,
+        request: &ExtractionRequest,
+        validation_error: &str,
+    ) -> Option<Result<ExtractionResponse>> {
+        let correction = format!(
+            "{EXTRACTION_CONTRACT}\nYour previous extraction was rejected: {validation_error}. Correct the JSON. Remove any claim outside the listed relations; keep only claims whose exact evidence is supported by the source."
+        );
+        Some(
+            self.complete(&correction, request)
+                .with_context(|| format!("correcting claims for source {}", request.source_path)),
+        )
     }
 
     fn interpret_question(
@@ -466,7 +483,7 @@ impl GraphModel for OpenAiCompatibleAdapter {
     }
 
     fn model_name(&self) -> &str {
-        &self.model
+        MIMO_V2_5_PRO
     }
 }
 
@@ -543,16 +560,19 @@ struct JsonFormat {
     kind: &'static str,
 }
 
+#[cfg(test)]
 #[derive(Deserialize)]
 struct ChatCompletionResponse {
     choices: Vec<ChatChoice>,
 }
 
+#[cfg(test)]
 #[derive(Deserialize)]
 struct ChatChoice {
     message: ChatResponseMessage,
 }
 
+#[cfg(test)]
 #[derive(Deserialize)]
 struct ChatResponseMessage {
     content: String,
@@ -561,12 +581,9 @@ struct ChatResponseMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn adapter() -> OpenAiCompatibleAdapter {
-        OpenAiCompatibleAdapter {
-            base_url: "http://unused.invalid".into(),
-            model: "mock-model".into(),
-            api_key: None,
-            client: Client::new(),
+    fn adapter() -> XiaomiGraphAdapter {
+        XiaomiGraphAdapter {
+            api_key: "unused-test-key".into(),
         }
     }
 
@@ -586,8 +603,11 @@ mod tests {
         let body = adapter()
             .request_payload(EXTRACTION_CONTRACT, &input)
             .unwrap();
+        let sdk_request: XiaomiChatCompletionRequest =
+            serde_json::from_value(body.clone()).unwrap();
+        assert_eq!(sdk_request.model, MIMO_V2_5_PRO);
         assert_eq!(body["response_format"]["type"], "json_object");
-        assert_eq!(body["model"], "mock-model");
+        assert_eq!(body["model"], MIMO_V2_5_PRO);
         let prompt = body["messages"][0]["content"].as_str().unwrap();
         for token in [
             "source_path",
@@ -600,6 +620,8 @@ mod tests {
             "deferred",
             "feature",
             "type\":\"entity",
+            "Project and epic are scopes, not entity kinds",
+            "Omit unsupported statements",
         ] {
             assert!(prompt.contains(token), "missing contract token {token}");
         }

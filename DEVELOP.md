@@ -78,12 +78,15 @@ cargo test --workspace         # run all tests
 ### Document provenance graph CLI
 
 `graph build` and `graph search` store and query provenance data in the same
-per-repository SQLite database used by the indexer. Configure the structured
-output model with `DAFTPROMPT_GRAPH_BASE_URL` (required OpenAI-compatible API
-base URL), `DAFTPROMPT_GRAPH_MODEL` (required model name), and optionally
-`DAFTPROMPT_GRAPH_API_KEY` (omitted for endpoints that do not need a key).
-Missing configuration and model failures are errors; graph commands do not
+per-repository SQLite database used by the indexer. They use the GitHub
+`llm-sdk` Xiaomi client with its `MIMO_V2_5_PRO` model constant. Set
+`XIAOMI_API_KEY` in the shell or in a Git-ignored `.env` file in the current
+working directory; the graph CLI loads that file when present. Missing
+configuration and model failures are errors; graph commands do not
 silently return an empty graph or fall back to code search.
+Extraction is limited to the graph's supported typed relations; a broad PRD
+passage may contribute no claims. A rejected model extraction gets one
+correction attempt before the build reports a validation error.
 
 Every `--source` declares that repo-relative document authoritative for that
 build. It may be a readable UTF-8 Markdown/plain-text file or quoted glob;
@@ -94,9 +97,7 @@ line ranges. This declaration does not verify authorship. Source code is never
 an authority for graph claims.
 
 ```bash
-export DAFTPROMPT_GRAPH_BASE_URL="https://api.example.com/v1"
-export DAFTPROMPT_GRAPH_MODEL="your-json-capable-model"
-export DAFTPROMPT_GRAPH_API_KEY="..." # optional
+export XIAOMI_API_KEY="your-key"
 
 cargo run --bin graph -- build --repo . \
   --source DEVELOP.md --source README.md --source AGENTS.md \

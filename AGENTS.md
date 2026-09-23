@@ -42,10 +42,10 @@ cargo run --bin graph -- search --repo . "Can we search Python code?" --json
 ### Document provenance graph CLI
 
 Graph commands use the existing per-repo indexer SQLite database. Before
-`graph build` or `graph search`, set `DAFTPROMPT_GRAPH_BASE_URL` (required
-OpenAI-compatible base URL) and `DAFTPROMPT_GRAPH_MODEL` (required model
-name); `DAFTPROMPT_GRAPH_API_KEY` is optional. The graph needs structured
-language-model output for extraction and question interpretation. Failures
+`graph build` or `graph search`, set `XIAOMI_API_KEY` in the shell or in a
+Git-ignored `.env` file in the current working directory. The graph CLI uses
+the GitHub `llm-sdk` Xiaomi client and its `MIMO_V2_5_PRO` model constant for
+structured extraction and question interpretation. Failures
 must be reported as errors, with no silent code-search fallback.
 
 For graph builds, every repeatable `--source` is an explicit authority

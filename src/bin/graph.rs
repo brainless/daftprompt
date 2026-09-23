@@ -12,7 +12,7 @@ use clap::{Args, Parser, Subcommand};
 
 /// Build and search the document provenance graph.
 #[derive(Debug, Parser)]
-#[command(name = "graph", version, about)]
+#[command(name = "graph", version, about, after_help = "Model: Xiaomi MiMo V2.5 Pro via llm-sdk. Set XIAOMI_API_KEY in the environment or a .env file in the current directory.")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -53,13 +53,16 @@ struct SearchArgs {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if Path::new(".env").is_file() {
+        dotenvy::from_path(".env")?;
+    }
     match cli.command {
         Command::Build(args) => {
             let sources = daftprompt_indexer::graph::resolve_sources(&args.repo, &args.sources)?;
             let config = daftprompt_indexer::IndexerConfig::default();
             let db = daftprompt_indexer::graph::open_database(&args.repo, &config)?;
             daftprompt_indexer::graph::init_schema(&db)?;
-            let adapter = daftprompt_indexer::graph::model::OpenAiCompatibleAdapter::from_env()?;
+            let adapter = daftprompt_indexer::graph::model::XiaomiGraphAdapter::from_env()?;
             let build_id = daftprompt_indexer::graph::build(
                 &db,
                 &args.repo,
@@ -77,7 +80,7 @@ fn main() -> Result<()> {
             let result = (|| -> Result<_> {
                 let db = daftprompt_indexer::graph::open_database(&repo, &config)?;
                 daftprompt_indexer::graph::init_schema(&db)?;
-                let adapter = daftprompt_indexer::graph::model::OpenAiCompatibleAdapter::from_env()?;
+                let adapter = daftprompt_indexer::graph::model::XiaomiGraphAdapter::from_env()?;
                 let prepared = daftprompt_indexer::graph::prepare_search(&db, &args.question, &adapter, 20)?;
                 let resolution = daftprompt_indexer::graph::resolve_prepared(&db, &prepared)?;
                 daftprompt_indexer::graph::render_answer(&db, &prepared, resolution)

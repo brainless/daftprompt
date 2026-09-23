@@ -1034,8 +1034,24 @@ pub fn build(
             let response = adapter.extract_claims(&request).map_err(|error| {
                 anyhow::anyhow!("extracting claims for source {}: {error:#}", source.path)
             })?;
-            let checked =
-                validate_extraction(&source.path, &source.text, &snapshot.passages, response)?;
+            let checked = match validate_extraction(
+                &source.path,
+                &source.text,
+                &snapshot.passages,
+                response,
+            ) {
+                Ok(checked) => checked,
+                Err(initial_error) => {
+                    let Some(retry) = adapter.retry_extraction(&request, &initial_error.to_string()) else {
+                        return Err(initial_error);
+                    };
+                    let response = retry?;
+                    validate_extraction(&source.path, &source.text, &snapshot.passages, response)
+                        .map_err(|error| anyhow::anyhow!(
+                            "{error}; model correction also failed after: {initial_error}"
+                        ))?
+                }
+            };
             extractions.push((snapshot.source_version_id, checked));
         }
 

@@ -58,19 +58,22 @@ working-tree documents are treated as human-maintained sources, including
 untracked files. The selected set is complete for each successful build, so
 omit a previously selected source to deactivate it. Globs are expanded in
 sorted order. Code files are never treated as authoritative sources.
+The current graph extracts supported indexing, search, parser, path-exclusion,
+and work-item status relations; other PRD statements can yield no claims.
 
-Configure the OpenAI-compatible structured-output model before building or
-searching:
+Configure Xiaomi MiMo V2.5 Pro before building or searching. The graph CLI
+loads `.env` from the current working directory when present; `.env` is
+Git-ignored. Put this line in `.env`:
 
 ```bash
-export DAFTPROMPT_GRAPH_BASE_URL="https://api.example.com/v1"
-export DAFTPROMPT_GRAPH_MODEL="your-json-capable-model"
-export DAFTPROMPT_GRAPH_API_KEY="..." # optional for local or unauthenticated endpoints
+XIAOMI_API_KEY="your-key"
 ```
 
-`DAFTPROMPT_GRAPH_BASE_URL` and `DAFTPROMPT_GRAPH_MODEL` are required. The
-optional API key is sent to the model endpoint and is not stored in the graph
-database or query logs.
+Alternatively, run `export XIAOMI_API_KEY="your-key"` in your shell.
+
+`XIAOMI_API_KEY` is required. The client and `mimo-v2.5-pro` model ID come
+from the GitHub `llm-sdk` dependency. The key is sent to Xiaomi and is not
+stored in the graph database or query logs.
 
 Build the graph in the existing per-repository SQLite database, then ask
 questions:

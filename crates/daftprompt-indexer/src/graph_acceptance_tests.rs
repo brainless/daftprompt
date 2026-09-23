@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{anyhow, Result};
 
@@ -13,6 +14,66 @@ use model::{
     ExtractedEnumeration, ExtractionRequest, ExtractionResponse, GraphModel, InterpretationRequest,
     InterpretationResponse, Polarity, QuestionIntent,
 };
+
+struct RepairedPrdFixture {
+    retries: AtomicUsize,
+}
+
+impl GraphModel for RepairedPrdFixture {
+    fn extract_claims(&self, request: &ExtractionRequest) -> Result<ExtractionResponse> {
+        Ok(ExtractionResponse {
+            claims: vec![claim(
+                entity("project", "Example"),
+                "searches_index",
+                entity("index", "CodeIndex"),
+                passage_evidence(&request.passages[0]),
+            )],
+            enumerations: vec![],
+        })
+    }
+
+    fn retry_extraction(
+        &self,
+        _request: &ExtractionRequest,
+        validation_error: &str,
+    ) -> Option<Result<ExtractionResponse>> {
+        assert!(validation_error.contains("invalid subject entity kind \"project\""));
+        self.retries.fetch_add(1, Ordering::SeqCst);
+        Some(Ok(ExtractionResponse::default()))
+    }
+
+    fn interpret_question(&self, _request: &InterpretationRequest) -> Result<InterpretationResponse> {
+        unreachable!()
+    }
+
+    fn model_name(&self) -> &str {
+        "repaired-prd-fixture"
+    }
+}
+
+#[test]
+fn unsupported_prd_claim_gets_one_correction_before_build_publishes() -> Result<()> {
+    let repo = tempfile::tempdir()?;
+    let cache = tempfile::tempdir()?;
+    fs::write(repo.path().join("PRD.md"), "# Example\nA general project description.\n")?;
+    let sources = resolve_sources(repo.path(), &["PRD.md".to_owned()])?;
+    let config = IndexerConfig {
+        cache_dir: Some(cache.path().to_path_buf()),
+        ..IndexerConfig::default()
+    };
+    let db = open_database(repo.path(), &config)?;
+    init_schema(&db)?;
+    let fixture = RepairedPrdFixture { retries: AtomicUsize::new(0) };
+    build(&db, repo.path(), &sources, &fixture, "fixture-v1")?;
+    assert_eq!(fixture.retries.load(Ordering::SeqCst), 1);
+    let completed: i64 = db.query_row(
+        "SELECT COUNT(*) FROM graph_builds WHERE state='completed'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(completed, 1);
+    Ok(())
+}
 
 #[derive(Debug)]
 struct RepositoryAcceptanceFixture;

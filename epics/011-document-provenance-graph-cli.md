@@ -75,8 +75,9 @@ model calls as errors, never as an empty graph or a confident answer.
 The current embedder (`model2vec-rs`) generates vectors but cannot extract
 propositions or interpret arbitrary questions. For the MVP, use a configured
 structured-output language-model adapter for both claim extraction and query
-interpretation. Configuration comes from environment variables for an
-OpenAI-compatible base URL, model name, and optional API key; no credentials
+interpretation. The original adapter used environment variables for an
+OpenAI-compatible base URL, model name, and optional API key; Task 18 replaces
+that configuration with the GitHub `llm-sdk` Xiaomi client and `XIAOMI_API_KEY`. No credentials
 are stored in SQLite or query logs. Keep the adapter behind a Rust trait so
 tests can use a deterministic fixture implementation and later providers can
 be added without changing the graph schema. Validate the model's JSON against
@@ -523,12 +524,59 @@ four acceptance example questions with a deterministic fixture model.
 - [x] `cargo check --workspace` and `cargo test --workspace` pass.
 - [x] Every completed task above is marked complete in this file.
 
+### Task 18: Use llm-sdk Xiaomi MiMo V2.5 Pro for graph operations
+
+**Status:** Complete
+
+**Depends on:** Tasks 6 and 17.
+
+**Change:** Replace the graph adapter's direct `reqwest` transport with the
+GitHub `llm-sdk` Xiaomi client. Use the SDK's `XIAOMI` provider and
+`MIMO_V2_5_PRO` model constants. Load `XIAOMI_API_KEY` from the process
+environment or a Git-ignored `.env` file in the CLI working directory.
+Update the CLI documentation and `.env.example`. Preserve typed JSON
+validation, fixture-driven tests, and redacted error handling.
+
+**Acceptance criteria:**
+
+- [x] The graph CLI uses the GitHub `llm-sdk` dependency for Xiaomi calls,
+      with the SDK model constant and no graph `reqwest` dependency.
+- [x] Missing `XIAOMI_API_KEY` fails explicitly; `.env` can supply it without
+      being committed or written to query logs.
+- [x] Graph model payload and typed parsing tests pass without live API calls.
+- [x] `cargo check --workspace` and `cargo test --workspace` pass.
+
+### Task 19: Recover from out-of-scope PRD extractions
+
+**Status:** Complete
+
+**Depends on:** Tasks 7 and 18.
+
+**Change:** Constrain the extraction contract to the graph's supported typed
+relations. Treat `project` and `epic` as claim scopes, not entity kinds. If a
+model proposal fails validation, ask the live model once to correct or omit
+unsupported claims from that source. Validate the correction with the same
+rules before publishing the build; fixture adapters retain their original
+validation behavior.
+
+**Acceptance criteria:**
+
+- [x] A PRD passage about a project can yield no graph claims without
+      inventing a `project` entity or changing the graph vocabulary.
+- [x] A rejected model extraction gets at most one correction attempt, and
+      the corrected response is validated before the build completes.
+- [x] Invalid fixture claims still fail validation; no unsupported claim is
+      silently persisted.
+- [x] `cargo check --workspace` and `cargo test --workspace` pass.
+
 ## File-change summary
 
 | Path | Intended change |
 |---|---|
-| `Cargo.toml`, `src/bin/graph.rs` | Binary target/default run and CLI. |
+| `Cargo.toml`, `src/bin/graph.rs` | Binary target/default run, CLI, and `.env` loading. |
+| `crates/daftprompt-indexer/Cargo.toml` | GitHub `llm-sdk` dependency for Xiaomi. |
 | `crates/daftprompt-indexer/src/graph/` | Source selection, extraction, graph storage, search, and model adapter. |
 | `crates/daftprompt-indexer/src/db.rs`, graph schema SQL | Shared DB path/API and namespaced graph schema migration. |
 | `.gitignore` | Ignore `.daftprompt/graph-search/`. |
-| `README.md`, `DEVELOP.md`, `AGENTS.md` | Build/search examples and provenance semantics. |
+| `.env.example` | Xiaomi API key template. |
+| `README.md`, `DEVELOP.md`, `AGENTS.md` | Build/search examples, model configuration, and provenance semantics. |

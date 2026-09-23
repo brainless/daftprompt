@@ -12,7 +12,8 @@ anyhow = "1"
 dirs = "5"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+llm-sdk = { git = "https://github.com/brainless/llm-sdk.git", rev = "35e3a52ea8745b324635e9eb69d3c8084d812f10" }
+tokio = { version = "1", features = ["rt"] }
 log = "0.4"
 tree-sitter = "0.25"
 tree-sitter-rust = "0.24"
