@@ -18,7 +18,14 @@ pub fn db_path_for_repo(repo_path: &Path) -> anyhow::Result<PathBuf> {
     let cache_dir = dirs::cache_dir()
         .ok_or_else(|| anyhow::anyhow!("Cannot determine cache directory"))?
         .join("daftprompt");
-    std::fs::create_dir_all(&cache_dir)?;
+    db_path_for_repo_in_cache(repo_path, &cache_dir)
+}
+
+pub(crate) fn db_path_for_repo_in_cache(
+    repo_path: &Path,
+    cache_dir: &Path,
+) -> anyhow::Result<PathBuf> {
+    std::fs::create_dir_all(cache_dir)?;
 
     let abs_path = std::fs::canonicalize(repo_path)?;
     let abs_str = abs_path.to_string_lossy();

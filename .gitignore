@@ -26,5 +26,8 @@ Thumbs.db
 # Local credentials
 .env
 
+# Local provenance graph search history
+/.daftprompt/graph-search/
+
 # Coding agents
 .commandcode

@@ -34,7 +34,7 @@ This is a text repository explorer built with Rust and akar (a GPU UI component 
 - Clear button
 
 ✅ **Code Search Across Five Languages**
-- Git-tracked Rust (`.rs`), TypeScript (`.ts`), TSX (`.tsx`), JavaScript (`.js`), and JSX (`.jsx`) files share one code index
+- All supported code-search languages are Git-tracked Rust (`.rs`), TypeScript (`.ts`), and JavaScript (`.js`), and all supported dialects are TSX (`.tsx`) and JSX (`.jsx`); they share one code index
 - The existing global search box searches all five languages through the same hybrid FTS5 + vector KNN index; no separate language mode is required
 - Tracked generated/vendor/minified files are filtered out centrally (`node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, `coverage/`, and `*.min.js`), so production paths stay language-neutral
 
@@ -48,6 +48,57 @@ This is a text repository explorer built with Rust and akar (a GPU UI component 
 # From the daftprompt directory
 cargo run
 ```
+
+## Document Provenance Graph
+
+The separate `graph` CLI builds a provenance graph from documents you
+explicitly select, then answers questions with citations into the exact text
+snapshots used for that build. `--source` is an authority declaration: selected
+working-tree documents are treated as human-maintained sources, including
+untracked files. The selected set is complete for each successful build, so
+omit a previously selected source to deactivate it. Globs are expanded in
+sorted order. Code files are never treated as authoritative sources.
+
+Configure the OpenAI-compatible structured-output model before building or
+searching:
+
+```bash
+export DAFTPROMPT_GRAPH_BASE_URL="https://api.example.com/v1"
+export DAFTPROMPT_GRAPH_MODEL="your-json-capable-model"
+export DAFTPROMPT_GRAPH_API_KEY="..." # optional for local or unauthenticated endpoints
+```
+
+`DAFTPROMPT_GRAPH_BASE_URL` and `DAFTPROMPT_GRAPH_MODEL` are required. The
+optional API key is sent to the model endpoint and is not stored in the graph
+database or query logs.
+
+Build the graph in the existing per-repository SQLite database, then ask
+questions:
+
+```bash
+cargo run --bin graph -- build --repo . \
+  --source DEVELOP.md --source README.md --source AGENTS.md \
+  --source 'epics/*.md'
+cargo run --bin graph -- search --repo . "Which languages can code search find?"
+cargo run --bin graph -- search --repo . "Can we search Python code?" --json
+```
+
+Build requires at least one `--source`; each value is a repository-relative
+path or quoted glob. The CLI rejects empty matches, unsupported or unreadable
+text files, and paths (including symlinks) outside the repository. Search
+requires a completed build and returns `yes`, `no`, or `unknown`, with citations
+formatted as `path:start-end`. `--json` returns `outcome`, `answer`, `citations`,
+`claim_ids`, and `build_id`. A negative answer requires explicit current
+exclusion evidence or a validated exhaustive supported-language list; missing
+or conflicting evidence produces `unknown`.
+
+Each search writes a UTF-8 JSON record under
+`<repo>/.daftprompt/graph-search/`. Records include schema version, UTC time,
+repository path, build ID, question, outcome/error, exact printed response,
+cited source paths and ranges, and claim IDs. The directory must be Git-ignored
+in the selected repository. These files are local and may contain sensitive
+questions; they do not contain API keys, request headers, full prompts, or full
+source documents.
 
 ## Controls
 

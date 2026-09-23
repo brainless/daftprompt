@@ -68,10 +68,59 @@ cargo run -- --repo . --index-documents  # index documents (Markdown, plain text
 cargo run -- --repo . --search-documents "setup guide"  # CLI document search only
 cargo run -- --repo . --index-git-log  # index git log only
 cargo run -- --repo . --search-git-log "fix crash"  # CLI git-log search only
+cargo run --bin graph -- build --repo . --source DEVELOP.md --source README.md --source AGENTS.md --source 'epics/*.md'
+cargo run --bin graph -- search --repo . "Can we search Python code?" --json
 cargo run --release -- --screenshot /tmp/daftprompt.png --exit  # capture one frame to PNG and quit (visual regression)
 RUST_LOG=debug cargo run       # run with debug logging
 cargo test --workspace         # run all tests
 ```
+
+### Document provenance graph CLI
+
+`graph build` and `graph search` store and query provenance data in the same
+per-repository SQLite database used by the indexer. Configure the structured
+output model with `DAFTPROMPT_GRAPH_BASE_URL` (required OpenAI-compatible API
+base URL), `DAFTPROMPT_GRAPH_MODEL` (required model name), and optionally
+`DAFTPROMPT_GRAPH_API_KEY` (omitted for endpoints that do not need a key).
+Missing configuration and model failures are errors; graph commands do not
+silently return an empty graph or fall back to code search.
+
+Every `--source` declares that repo-relative document authoritative for that
+build. It may be a readable UTF-8 Markdown/plain-text file or quoted glob;
+untracked files are allowed, matches are sorted/deduplicated, and the complete
+selected set replaces the previously active set on a successful build. The
+graph stores the exact working-tree snapshot and cites its one-based source
+line ranges. This declaration does not verify authorship. Source code is never
+an authority for graph claims.
+
+```bash
+export DAFTPROMPT_GRAPH_BASE_URL="https://api.example.com/v1"
+export DAFTPROMPT_GRAPH_MODEL="your-json-capable-model"
+export DAFTPROMPT_GRAPH_API_KEY="..." # optional
+
+cargo run --bin graph -- build --repo . \
+  --source DEVELOP.md --source README.md --source AGENTS.md \
+  --source 'epics/*.md'
+cargo run --bin graph -- search --repo . "Which languages can code search find?"
+cargo run --bin graph -- search --repo . "Can we search Python code?" --json
+cargo run --bin graph -- search --repo . "Can we search Lua code?" --json
+cargo run --bin graph -- search --repo . "Does the indexer use Tree-sitter?"
+```
+
+Search prints a concise `yes`, `no`, or `unknown` answer with citations in
+`repo-relative-path:start-end` form. `--json` includes `outcome`, `answer`,
+`citations`, `claim_ids`, and `build_id`. `no` requires a current explicit
+exclusion or a validated exhaustive set; insufficient and unresolved
+conflicting evidence yields `unknown`.
+
+Search records are written atomically as separate UTF-8 JSON files in
+`<repo>/.daftprompt/graph-search/`; that directory must be Git-ignored in the
+target repository. Each record contains schema version, UTC timestamp,
+repository path, graph build ID, question, status, exact response, citations,
+claim IDs, and an optional concise error. API keys, request headers, full
+prompts, and source documents are excluded. The local records may contain
+sensitive questions. Keep this folder private and remove records according to
+your repository's data-retention needs.
 
 ## Project Structure
 

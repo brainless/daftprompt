@@ -2,6 +2,7 @@ pub mod code;
 pub mod db;
 pub mod documents;
 pub mod embed;
+pub mod graph;
 
 pub use code::{CodeLanguage, SymbolKind};
 
@@ -18,6 +19,15 @@ static REGISTER_VEC: Once = Once::new();
 pub struct IndexerConfig {
     pub cache_dir: Option<PathBuf>,
     pub model_name: String,
+}
+
+/// Return the shared per-repository SQLite database path used by the indexer
+/// and graph storage. `cache_dir` in `config` is honored for tests.
+pub fn repository_db_path(repo_path: &Path, config: &IndexerConfig) -> anyhow::Result<PathBuf> {
+    match config.cache_dir.as_deref() {
+        Some(cache_dir) => db::db_path_for_repo_in_cache(repo_path, cache_dir),
+        None => db::db_path_for_repo(repo_path),
+    }
 }
 
 impl Default for IndexerConfig {
@@ -228,34 +238,7 @@ impl Indexer {
             db::register_sqlite_vec();
         });
 
-        let db_path = if let Some(ref cache_dir) = config.cache_dir {
-            // Custom cache dir: derive a DB filename from the repo path, same
-            // slug logic as db_path_for_repo but rooted at cache_dir.
-            let abs_path = std::fs::canonicalize(repo_path)?;
-            let abs_str = abs_path.to_string_lossy();
-            let stem: String = abs_str
-                .chars()
-                .map(|c| {
-                    if c.is_alphanumeric() {
-                        c.to_ascii_lowercase()
-                    } else {
-                        '_'
-                    }
-                })
-                .collect();
-            let hash = {
-                let mut h: u64 = 0;
-                for b in abs_str.bytes() {
-                    h = h.wrapping_mul(31).wrapping_add(b as u64);
-                }
-                format!("{:06x}", h & 0xFFFFFF)
-            };
-            let slug = format!("{}_{}", stem, hash);
-            std::fs::create_dir_all(cache_dir)?;
-            cache_dir.join(format!("{}.db", slug))
-        } else {
-            db::db_path_for_repo(repo_path)?
-        };
+        let db_path = repository_db_path(repo_path, config)?;
         let db = Connection::open(&db_path)?;
 
         // Create tables first so repo_meta reads work on a fresh DB.

@@ -35,7 +35,47 @@ cargo run -- --repo . --index-git-log               # index git log only
 cargo run -- --repo . --reindex-git-log
 cargo run -- --repo . --search-git-log "fix crash"
 cargo run -- -- --no-index                          # GUI but skip startup auto-index
+cargo run --bin graph -- build --repo . --source DEVELOP.md --source README.md --source AGENTS.md --source 'epics/*.md'
+cargo run --bin graph -- search --repo . "Can we search Python code?" --json
 ```
+
+### Document provenance graph CLI
+
+Graph commands use the existing per-repo indexer SQLite database. Before
+`graph build` or `graph search`, set `DAFTPROMPT_GRAPH_BASE_URL` (required
+OpenAI-compatible base URL) and `DAFTPROMPT_GRAPH_MODEL` (required model
+name); `DAFTPROMPT_GRAPH_API_KEY` is optional. The graph needs structured
+language-model output for extraction and question interpretation. Failures
+must be reported as errors, with no silent code-search fallback.
+
+For graph builds, every repeatable `--source` is an explicit authority
+declaration for a repo-relative readable UTF-8 Markdown/plain-text file or
+quoted glob. Selected working-tree text, including untracked files, is
+snapshotted. Globs are sorted and deduplicated, and a successful build's set is
+complete: omitted former sources are deactivated. The flag does not establish
+actual authorship. Indexed source code is not graph authority. Search citations
+must resolve against the stored snapshot and use `path:start-end` line ranges.
+`--json` returns `outcome`, `answer`, `citations`, `claim_ids`, and `build_id`.
+
+The documented workflow is:
+
+```bash
+cargo run --bin graph -- build --repo . \
+  --source DEVELOP.md --source README.md --source AGENTS.md \
+  --source 'epics/*.md'
+cargo run --bin graph -- search --repo . "Which languages can code search find?"
+cargo run --bin graph -- search --repo . "Can we search Python code?" --json
+cargo run --bin graph -- search --repo . "Can we search Lua code?" --json
+cargo run --bin graph -- search --repo . "Does the indexer use Tree-sitter?"
+```
+
+Search writes a separate UTF-8 JSON log atomically under
+`<repo>/.daftprompt/graph-search/` and refuses to write unless this path is
+Git-ignored in the selected repo. The record includes schema version, UTC
+timestamp, repository path, build ID, question, status, exact response,
+citations, claim IDs, and a concise error when applicable. It excludes API
+keys, request headers, full prompts, and full source documents. Local query
+logs may contain sensitive questions.
 
 There is no separate linter/formatter script — `cargo check --workspace` is the canonical correctness gate. Run it after every change.
 

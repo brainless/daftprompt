@@ -5,6 +5,7 @@ members = [".", "crates/daftprompt-indexer"]
 name = "daftprompt"
 version = "0.1.0"
 edition = "2021"
+default-run = "daftprompt"
 
 [dependencies]
 akar-core = { path = "../akar/crates/akar-core" }
@@ -21,6 +22,7 @@ gix = { path = "../gitoxide/gix", default-features = false, features = ["basic",
 clap = { version = "4", features = ["derive"] }
 daftprompt-indexer = { path = "crates/daftprompt-indexer" }
 anyhow = "1"
+serde_json = "1"
 png = "0.17"
 
 [profile.dev]
