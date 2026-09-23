@@ -105,10 +105,9 @@ daftprompt/
 The previous "Next Steps" list (real-data integration, document parsing, file watching) is now done by Epic 002 (git log column), Epic 003 (commit indexer), Epic 004 (Rust code indexer), Epic 007 (document indexer), Epic 009 (TypeScript and TSX), and Epic 010 (JavaScript and JSX). The remaining genuine follow-ups after Epic 010 are:
 
 1. **Drag-and-drop card repositioning** — Cards are positioned in world space; drag-to-move is a follow-up epic.
-2. **Graph visualization** — Relationship mapping between documents/commits on the canvas.
-3. **Context menus** — Right-click menus on cards, container headers, and the canvas background.
-4. **Plugin system** — Third-party extension points for new container types and search backends.
-5. **Window/canvas state persistence** — Restore pan, zoom, and selected folder across sessions.
+2. **Context menus** — Right-click menus on cards, container headers, and the canvas background.
+3. **Plugin system** — Third-party extension points for new container types and search backends.
+4. **Window/canvas state persistence** — Restore pan, zoom, and selected folder across sessions.
 
 ## Known Limitations
 
