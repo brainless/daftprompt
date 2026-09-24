@@ -38,7 +38,7 @@ tree-sitter-javascript = "0.25"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 chrono = "0.4"
 glob = "0.3"
-gix = { path = "../../../gitoxide/gix", default-features = false, features = ["basic", "sha1"] }
+gix = { version = "0.85.0", default-features = false, features = ["basic", "sha1"] }
 
 [dev-dependencies]
 tempfile = "3"

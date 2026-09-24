@@ -6,7 +6,7 @@ This project is in **early stage of development**. Many features are incomplete,
 
 ## Local Dependencies
 
-Several dependencies are cloned locally under `~/Projects/` and referenced via path dependencies in `Cargo.toml`. Coding agents and contributors should refer to these local sources when debugging, reading docs, or understanding internals.
+Several dependencies are cloned locally under `~/Projects/`. Coding agents and contributors should refer to these local sources when debugging, reading docs, or understanding internals. Only the akar crates are path dependencies; `glam` and `gix` use crates.io releases.
 
 ### Active path dependencies (used in Cargo.toml)
 
@@ -16,8 +16,6 @@ Several dependencies are cloned locally under `~/Projects/` and referenced via p
 | **akar-layout** | `~/Projects/akar/crates/akar-layout` | `daftprompt` (taffy flexbox layout) |
 | **akar-components** | `~/Projects/akar/crates/akar-components` | `daftprompt` (buttons, inputs, drawer, canvas, etc.) |
 | **akar-winit** | `~/Projects/akar/crates/akar-winit` | `daftprompt` (winit event routing) |
-| **glam** | `~/Projects/glam-rs` | `daftprompt` (math/transforms) |
-| **gix** (gitoxide) | `~/Projects/gitoxide/gix` | `daftprompt` (git repository access) |
 
 ### Other relevant dependencies cloned locally
 
@@ -26,6 +24,8 @@ These are not currently path dependencies but are available locally for referenc
 | Crate | Local path | Relevance |
 |---|---|---|
 | **akar** | `~/Projects/akar` | GPU UI component library that owns the rendering pipeline post-Epic 005 |
+| **glam** | `~/Projects/glam-rs` | Reference source for the crates.io math/transforms dependency |
+| **gix** (gitoxide) | `~/Projects/gitoxide/gix` | Reference source for the crates.io Git dependency |
 | **glyphon** | `~/Projects/glyphon` | Text shaping/atlas — transitive via `akar-core`; no longer a direct dep |
 | **wgpu** | `~/Projects/wgpu` | GPU rendering pipeline (v29.0.0 from crates.io, source available locally) |
 | **taffy** | (via `akar-layout`) | CSS Flexbox layout engine used by akar |
@@ -85,7 +85,8 @@ working directory; the graph CLI loads that file when present. Missing
 configuration and model failures are errors; graph commands do not
 silently return an empty graph or fall back to code search.
 Extraction is limited to the graph's supported typed relations; a broad PRD
-passage may contribute no claims. A rejected model extraction gets one
+passage may contribute no claims. A build fails if the selected sources produce
+no supported claims at all. A rejected model extraction gets one
 correction attempt before the build reports a validation error.
 
 Every `--source` declares that repo-relative document authoritative for that

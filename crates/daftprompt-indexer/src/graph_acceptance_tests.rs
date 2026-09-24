@@ -52,7 +52,7 @@ impl GraphModel for RepairedPrdFixture {
 }
 
 #[test]
-fn unsupported_prd_claim_gets_one_correction_before_build_publishes() -> Result<()> {
+fn unsupported_prd_claim_gets_one_correction_then_empty_build_fails() -> Result<()> {
     let repo = tempfile::tempdir()?;
     let cache = tempfile::tempdir()?;
     fs::write(repo.path().join("PRD.md"), "# Example\nA general project description.\n")?;
@@ -64,14 +64,21 @@ fn unsupported_prd_claim_gets_one_correction_before_build_publishes() -> Result<
     let db = open_database(repo.path(), &config)?;
     init_schema(&db)?;
     let fixture = RepairedPrdFixture { retries: AtomicUsize::new(0) };
-    build(&db, repo.path(), &sources, &fixture, "fixture-v1")?;
+    let error = build(&db, repo.path(), &sources, &fixture, "fixture-v1").unwrap_err();
+    assert!(error.to_string().contains("no supported claims"));
     assert_eq!(fixture.retries.load(Ordering::SeqCst), 1);
     let completed: i64 = db.query_row(
         "SELECT COUNT(*) FROM graph_builds WHERE state='completed'",
         [],
         |row| row.get(0),
     )?;
-    assert_eq!(completed, 1);
+    assert_eq!(completed, 0);
+    let failed: i64 = db.query_row(
+        "SELECT COUNT(*) FROM graph_builds WHERE state='failed'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(failed, 1);
     Ok(())
 }
 

@@ -147,7 +147,7 @@ daftprompt/
 - **winit** (v0.30.12) — Windowing and input handling (still a direct dep; `akar-winit` augments it)
 - **glam** — Mathematics library for transforms
 - **pollster** — Async runtime
-- **gix** (gitoxide) — Git repository access (path dep)
+- **gix** (gitoxide) — Git repository access (crates.io)
 - **daftprompt-indexer** — in-workspace indexer crate (FTS5 + sqlite-vec + model2vec-rs)
 - **tree-sitter / tree-sitter-rust / tree-sitter-typescript / tree-sitter-javascript** — tree-sitter parsing pipelines for Rust (`.rs`), TypeScript (`.ts`), TSX (`.tsx`), and JavaScript/JSX (`.js`/`.jsx`); tree-sitter-javascript shares one grammar across JS and JSX (Epics 004, 009, 010)
 - **png** — PNG encoding for `--screenshot` output

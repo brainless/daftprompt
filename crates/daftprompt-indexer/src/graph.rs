@@ -861,7 +861,7 @@ pub fn prepare_search(
     };
     anyhow::ensure!(
         !candidate_predicates.is_empty(),
-        "latest completed graph build has no active authoritative claims"
+        "latest completed graph build has no active authoritative claims; rebuild with documents that state supported code indexing, search, parser, path exclusion, or work item status relations"
     );
     let request = model::InterpretationRequest {
         question: question.to_owned(),
@@ -1054,6 +1054,11 @@ pub fn build(
             };
             extractions.push((snapshot.source_version_id, checked));
         }
+
+        anyhow::ensure!(
+            extractions.iter().any(|(_, extraction)| !extraction.claims.is_empty()),
+            "graph build extracted no supported claims from the selected sources; the current graph supports code indexing, search, parser, path exclusion, and work item status relations"
+        );
 
         let tx = db.unchecked_transaction()?;
         for (source_version_id, extraction) in &extractions {

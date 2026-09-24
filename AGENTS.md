@@ -46,7 +46,8 @@ Graph commands use the existing per-repo indexer SQLite database. Before
 Git-ignored `.env` file in the current working directory. The graph CLI uses
 the GitHub `llm-sdk` Xiaomi client and its `MIMO_V2_5_PRO` model constant for
 structured extraction and question interpretation. Failures
-must be reported as errors, with no silent code-search fallback.
+must be reported as errors, with no silent code-search fallback. A build with
+zero supported claims is an error, even if every model extraction succeeds.
 
 For graph builds, every repeatable `--source` is an explicit authority
 declaration for a repo-relative readable UTF-8 Markdown/plain-text file or
@@ -81,7 +82,7 @@ There is no separate linter/formatter script — `cargo check --workspace` is th
 
 ## Local Path Dependencies
 
-Several dependency crates have their full source cloned under `~/Projects/` and are referenced via path dependencies. **Agents should read this local source when debugging internals, understanding behavior, or checking APIs** rather than guessing or fetching from crates.io. Active path deps (in `Cargo.toml`): `akar-core`, `akar-layout`, `akar-components`, `akar-winit` (`~/Projects/akar/crates/akar-*`), `glam` (`~/Projects/glam-rs`), `gix` (`~/Projects/gitoxide/gix`). Additional sources available locally (not currently path deps but useful for reference): `wgpu`, `sqlite-vec`, `model2vec-rs`, `tree-sitter`, `xilem`, and others — see `DEVELOP.md` for the full local-clone table and the `[patch.crates-io]` pattern for switching between local and published versions.
+Several dependency crates have their full source cloned under `~/Projects/`. **Agents should read this local source when debugging internals, understanding behavior, or checking APIs** rather than guessing. Active path deps (in `Cargo.toml`): `akar-core`, `akar-layout`, `akar-components`, `akar-winit` (`~/Projects/akar/crates/akar-*`). `glam` and `gix` use crates.io versions; their local checkouts are for reference. Additional sources available locally: `wgpu`, `sqlite-vec`, `model2vec-rs`, `tree-sitter`, `xilem`, and others — see `DEVELOP.md` for the full local-clone table and the `[patch.crates-io]` pattern for switching between local and published versions.
 
 ## Architecture (current)
 

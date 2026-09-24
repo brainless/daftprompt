@@ -563,6 +563,8 @@ validation behavior.
 
 - [x] A PRD passage about a project can yield no graph claims without
       inventing a `project` entity or changing the graph vocabulary.
+- [x] If every selected source yields no supported claims, fail the build
+      instead of publishing an empty completed graph.
 - [x] A rejected model extraction gets at most one correction attempt, and
       the corrected response is validated before the build completes.
 - [x] Invalid fixture claims still fail validation; no unsupported claim is
