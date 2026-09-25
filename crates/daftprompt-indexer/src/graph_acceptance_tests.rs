@@ -35,6 +35,7 @@ impl GraphModel for RepairedPrdFixture {
     fn retry_extraction(
         &self,
         _request: &ExtractionRequest,
+        _previous_response: &ExtractionResponse,
         validation_error: &str,
     ) -> Option<Result<ExtractionResponse>> {
         assert!(validation_error.contains("invalid subject entity kind \"project\""));
@@ -1117,6 +1118,91 @@ fn direct_relation_requires_both_named_endpoints() -> Result<()> {
     assert_eq!(proof.evidence_ids.len(), 1);
     matching.resolved_entity_keys = vec!["feature:codesearch".into(), "parser:tree-sitter".into()];
     assert!(derive_positive(&db, &matching)?.is_none());
+    Ok(())
+}
+
+#[derive(Debug)]
+struct EpicIndexFixture;
+
+impl GraphModel for EpicIndexFixture {
+    fn extract_claims(&self, request: &ExtractionRequest) -> Result<ExtractionResponse> {
+        let passage = &request.passages[0];
+        let evidence = passage_evidence(passage);
+        let mut indexes_rust = claim(
+            entity("index", "CodeIndex"),
+            "indexes_language",
+            entity("language", "Rust"),
+            evidence.clone(),
+        );
+        indexes_rust.scope = ClaimScope::Epic;
+        Ok(ExtractionResponse {
+            claims: vec![
+                indexes_rust,
+                claim(
+                    entity("feature", "CodeSearch"),
+                    "searches_index",
+                    entity("index", "CodeIndex"),
+                    evidence,
+                ),
+            ],
+            enumerations: vec![],
+        })
+    }
+
+    fn interpret_question(&self, request: &InterpretationRequest) -> Result<InterpretationResponse> {
+        if request.question.contains("search") {
+            Ok(interpret_code_search_language("Rust"))
+        } else {
+            Ok(InterpretationResponse {
+                intent: QuestionIntent::DirectRelation,
+                entities: vec![entity("index", "CodeIndex"), entity("language", "Rust")],
+                predicates: vec!["indexes_language".into()],
+            })
+        }
+    }
+
+    fn model_name(&self) -> &str {
+        "epic-index-fixture"
+    }
+}
+
+#[test]
+fn epic_relation_proves_named_index_only() -> Result<()> {
+    let repo = tempfile::tempdir()?;
+    let cache = tempfile::tempdir()?;
+    fs::write(
+        repo.path().join("epic.md"),
+        "The code index indexes Rust. Code search searches the code index.\n",
+    )?;
+    let db = open_database(
+        repo.path(),
+        &IndexerConfig {
+            cache_dir: Some(cache.path().to_path_buf()),
+            ..IndexerConfig::default()
+        },
+    )?;
+    init_schema(&db)?;
+    let sources = resolve_sources(repo.path(), &["epic.md".into()])?;
+    build(&db, repo.path(), &sources, &EpicIndexFixture, "fixture-v1")?;
+
+    let direct = prepare_search(&db, "Does the code index index Rust?", &EpicIndexFixture, 20)?;
+    let answer = render_answer(&db, &direct, resolve_prepared(&db, &direct)?)?;
+    assert_eq!(answer.outcome, "yes");
+    assert_eq!(answer.claim_ids.len(), 1);
+    assert_citations_from_snapshot(repo.path(), &answer)?;
+
+    let mut missing_index = direct.clone();
+    missing_index.resolved_entity_keys = vec!["language:rust".into()];
+    assert!(matches!(
+        resolve_prepared(&db, &missing_index)?,
+        super::EvidenceResolution::Unknown { .. }
+    ));
+
+    let broad = prepare_search(&db, "Can code search find Rust?", &EpicIndexFixture, 20)?;
+    assert!(matches!(
+        resolve_prepared(&db, &broad)?,
+        super::EvidenceResolution::Unknown { .. }
+    ));
     Ok(())
 }
 
