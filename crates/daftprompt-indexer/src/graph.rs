@@ -1713,6 +1713,11 @@ pub fn validate_extraction(
                     anyhow::anyhow!("{claim_label}: evidence range is outside snapshot")
                 })?;
             let mut evidence_matches = evidence_text_matches_snapshot(&evidence.text, &expected);
+            if !evidence_matches
+                && extend_prefix_evidence_to_full_lines(&evidence.text, &expected).is_some()
+            {
+                evidence_matches = true;
+            }
             if !evidence_matches {
                 if let Some((start, end, exact)) =
                     unique_evidence_span_in_passage(&evidence.text, passage)
@@ -1809,6 +1814,11 @@ pub fn validate_extraction(
         )
         .ok_or_else(|| anyhow::anyhow!("{label}: evidence range is outside snapshot"))?;
         let mut evidence_matches = evidence_text_matches_snapshot(&enumeration.evidence.text, &expected);
+        if !evidence_matches
+            && extend_prefix_evidence_to_full_lines(&enumeration.evidence.text, &expected).is_some()
+        {
+            evidence_matches = true;
+        }
         if !evidence_matches {
             if let Some((start, end, exact)) =
                 unique_evidence_span_in_passage(&enumeration.evidence.text, span)
@@ -1892,6 +1902,39 @@ pub fn validate_extraction(
 fn evidence_text_matches_snapshot(proposed: &str, snapshot: &str) -> bool {
     !proposed.trim().is_empty()
         && proposed.split_whitespace().eq(snapshot.split_whitespace())
+}
+
+/// Complete a model's partial quote when it is a genuine word-sequence
+/// prefix of the already-declared, already-correct evidence range.
+///
+/// Unlike `unique_evidence_span_in_passage`, this never searches for
+/// anything: `expected` already comes from the model's own declared
+/// `start_line`/`end_line`, which are not in question here. The only thing
+/// checked is whether the model's quote stops partway through that exact,
+/// unambiguously identified text (a sentence-boundary truncation within one
+/// physical Markdown line, or of the last line of an otherwise-exact
+/// multi-line range) rather than diverging from it. If any compared word
+/// differs, this returns `None` and the caller falls through to the
+/// existing, stricter failure path unchanged — a truncation point is the
+/// only thing this function is allowed to forgive.
+fn extend_prefix_evidence_to_full_lines(proposed: &str, expected: &str) -> Option<String> {
+    if proposed.trim().is_empty() {
+        return None;
+    }
+    let mut proposed_words = proposed.split_whitespace();
+    let mut expected_words = expected.split_whitespace();
+    loop {
+        match (proposed_words.next(), expected_words.next()) {
+            (Some(p), Some(e)) => {
+                if p != e {
+                    return None;
+                }
+            }
+            (Some(_), None) => return None, // proposed has extra words: not a prefix
+            (None, Some(_)) => return Some(expected.to_owned()), // genuine proper prefix
+            (None, None) => return None, // exact match: handled elsewhere
+        }
+    }
 }
 
 /// Correct a model's line numbers only when its wording identifies exactly
@@ -3181,6 +3224,136 @@ mod validation_tests {
             .unwrap_err().to_string();
         assert!(error.contains("evidence text does not match"));
         assert!(unique_evidence_span_in_passage("fabricated", &passages[0]).is_none());
+    }
+
+    /// Regression test for a real graph build failure against
+    /// `epics/009-typescript-tsx-code-indexer.md` line 15, which reads
+    /// "Epic 004 established the Rust pipeline. Epic 008 established the
+    /// evidence," — two sentences on one physical Markdown line. The model
+    /// correctly identified this exact line (`start_line == end_line`) but
+    /// quoted only the leading sentence, dropping the trailing
+    /// " Epic 008 established the evidence," text. This is a genuine
+    /// word-sequence prefix, not a wording error, so it must be
+    /// auto-extended to the full line without a model correction round.
+    #[test]
+    fn auto_extends_single_line_prefix_quote_to_the_full_declared_line() {
+        let snapshot =
+            "Epic 004 established the Rust pipeline. Epic 008 established the evidence,\n"
+                .to_owned();
+        let passage = SourcePassage {
+            id: "sv1:p0".into(),
+            source_version_id: 1,
+            heading_path: String::new(),
+            start_line: 1,
+            end_line: 1,
+            text: snapshot.clone(),
+        };
+        let (_, _, mut response) = fixture();
+        response.claims[0].evidence[0] = ClaimEvidence {
+            passage_id: passage.id.clone(),
+            start_line: 1,
+            end_line: 1,
+            text: "Epic 004 established the Rust pipeline.".into(),
+        };
+        let checked =
+            validate_extraction("epics/009.md", &snapshot, &[passage], response).unwrap();
+        let evidence = &checked.claims[0].evidence[0];
+        assert_eq!((evidence.start_line, evidence.end_line), (1, 1));
+        assert_eq!(evidence.text, snapshot);
+    }
+
+    /// Same shape, but the truncated line is the last line of an
+    /// otherwise-exact multi-line declared range: the earlier lines match
+    /// verbatim and only the final line is a partial quote. One mechanism
+    /// (`extend_prefix_evidence_to_full_lines`) must cover both shapes.
+    #[test]
+    fn auto_extends_prefix_quote_on_the_last_line_of_a_multiline_range() {
+        let snapshot = "First full line.\nEpic 004 established the Rust pipeline. Epic 008 established the evidence,\n".to_owned();
+        let passage = SourcePassage {
+            id: "sv1:p0".into(),
+            source_version_id: 1,
+            heading_path: String::new(),
+            start_line: 1,
+            end_line: 2,
+            text: snapshot.clone(),
+        };
+        let (_, _, mut response) = fixture();
+        response.claims[0].evidence[0] = ClaimEvidence {
+            passage_id: passage.id.clone(),
+            start_line: 1,
+            end_line: 2,
+            text: "First full line.\nEpic 004 established the Rust pipeline.".into(),
+        };
+        let checked =
+            validate_extraction("epics/009.md", &snapshot, &[passage], response).unwrap();
+        let evidence = &checked.claims[0].evidence[0];
+        assert_eq!((evidence.start_line, evidence.end_line), (1, 2));
+        assert_eq!(evidence.text, snapshot);
+    }
+
+    /// Negative case: evidence that differs in wording, not just a
+    /// truncation point, must still fail validation exactly as before —
+    /// `extend_prefix_evidence_to_full_lines` must not become a backdoor for
+    /// accepting invented text.
+    #[test]
+    fn prefix_extension_does_not_forgive_genuinely_wrong_wording() {
+        let snapshot =
+            "Epic 004 established the Rust pipeline. Epic 008 established the evidence,\n"
+                .to_owned();
+        let passage = SourcePassage {
+            id: "sv1:p0".into(),
+            source_version_id: 1,
+            heading_path: String::new(),
+            start_line: 1,
+            end_line: 1,
+            text: snapshot.clone(),
+        };
+        let (_, _, mut response) = fixture();
+        response.claims[0].evidence[0] = ClaimEvidence {
+            passage_id: passage.id.clone(),
+            start_line: 1,
+            end_line: 1,
+            // Differs in wording ("Python" instead of "Rust"), not just a
+            // truncation point.
+            text: "Epic 004 established the Python pipeline.".into(),
+        };
+        let error = validate_extraction("epics/009.md", &snapshot, &[passage], response)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("evidence text does not match"));
+        assert!(extend_prefix_evidence_to_full_lines(
+            "Epic 004 established the Python pipeline.",
+            &snapshot
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn extend_prefix_evidence_to_full_lines_only_accepts_a_genuine_proper_prefix() {
+        let expected = "Epic 004 established the Rust pipeline. Epic 008 established the evidence,\n";
+        // Genuine proper prefix: extend.
+        assert_eq!(
+            extend_prefix_evidence_to_full_lines("Epic 004 established the Rust pipeline.", expected),
+            Some(expected.to_owned())
+        );
+        // Exact match is handled by evidence_text_matches_snapshot, not this
+        // function: it must return None so the caller doesn't double-handle it.
+        assert_eq!(extend_prefix_evidence_to_full_lines(expected, expected), None);
+        // Extra words beyond expected: not a prefix.
+        assert_eq!(
+            extend_prefix_evidence_to_full_lines(
+                "Epic 004 established the Rust pipeline. Extra invented words.",
+                expected
+            ),
+            None
+        );
+        // Differing wording, not just a truncation point: must not be forgiven.
+        assert_eq!(
+            extend_prefix_evidence_to_full_lines("Epic 004 established the Python pipeline.", expected),
+            None
+        );
+        // Empty proposed text: never a prefix.
+        assert_eq!(extend_prefix_evidence_to_full_lines("   ", expected), None);
     }
 
     /// A genuine, unfixable evidence mismatch (a dropped Markdown list marker

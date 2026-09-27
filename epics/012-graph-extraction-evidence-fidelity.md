@@ -201,7 +201,7 @@ pass (210 tests) as of this epic's writing.
 
 ### Task 1: Safely auto-extend a verified single-line prefix quote
 
-**Status:** Not Started
+**Status:** Complete
 
 **Depends on:** none (extends existing code in `graph.rs`).
 
@@ -230,18 +230,18 @@ range the model already got right.
 
 **Acceptance criteria:**
 
-- [ ] A claim whose evidence text is an exact prefix of its declared line's
+- [x] A claim whose evidence text is an exact prefix of its declared line's
       snapshot content is accepted and its stored `evidence.text` is
       corrected to the full line, without a model correction round.
-- [ ] A claim whose evidence text is NOT a genuine prefix (differs in
+- [x] A claim whose evidence text is NOT a genuine prefix (differs in
       wording, not just a truncation point) still fails validation exactly
       as before — this must not become a backdoor for accepting wrong text.
-- [ ] A new unit test reproduces the exact real-world case (source line
+- [x] A new unit test reproduces the exact real-world case (source line
       containing two sentences, model quoting only the first) and asserts
       correct auto-extension.
-- [ ] `cargo check --workspace` and `cargo test --workspace` pass (verified
+- [x] `cargo check --workspace` and `cargo test --workspace` pass (verified
       with a forced rebuild, not a possibly-stale cached check).
-- [ ] Live spot-check: `graph build --repo . --source
+- [x] Live spot-check: `graph build --repo . --source
       epics/009-typescript-tsx-code-indexer.md` completes without the
       previously-failing claim needing a correction round.
 
