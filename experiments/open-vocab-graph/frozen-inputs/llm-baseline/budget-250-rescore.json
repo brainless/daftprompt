@@ -1,0 +1,1141 @@
+{
+  "epic": "014-gliner25-graph-extraction-experiment",
+  "task": "Task 1: LLM baseline re-score (chosen option: re-score the actual budget-250 folder under its seed)",
+  "rescored_at_utc": "2026-09-28",
+  "judged_by": "human review against the frozen snapshot; citation equality and block containment re-verified mechanically by rescore-budget-250.py",
+  "baseline_run": {
+    "directory": "experiments/open-vocab-graph/output/runs/budget-250/",
+    "model": "mimo-v2.5-pro",
+    "word_budget": 250,
+    "blocks": 8,
+    "seed_xxh3_64": "c776d7e579d8aed5",
+    "reference_set_xxh3_64": "7dad11a105072baf",
+    "snapshot_xxh3_64": "29d01e36b77b6d33",
+    "counts_from_manifest": {
+      "relations_emitted": 64,
+      "valid_claims": 40,
+      "invalid_claims": 24,
+      "parse_errors": 0,
+      "model_errors": 0,
+      "rejected_mints": 0
+    }
+  },
+  "stale_column_warning": "Epic 013's report column 'budget 250' (31 claims, seed 9bd9ffae74304ce2) does not describe this folder (40 claims, seed c776d7e579d8aed5) and is not used anywhere in this re-score.",
+  "metrics": {
+    "relations_emitted": 64,
+    "valid_claims": 40,
+    "invalid_claims": 24,
+    "supported_clean": 28,
+    "supported_clean_pct": 70.0,
+    "supported_including_weak": 32,
+    "weak": 4,
+    "misleading": 8,
+    "misleading_pct": 20.0,
+    "exact_duplicate_claims": 0,
+    "citation_failures": 0,
+    "model_errors": 0,
+    "parse_errors": 0
+  },
+  "reference_relation_recovery": {
+    "recovered": 0,
+    "total": 9,
+    "detail": [
+      {
+        "id": "R1",
+        "recovered": false,
+        "status": "attempted_rejected",
+        "note": "budget-250 b1 emitted `daftprompt (Tool) uses akar (Tool)` citing a partial line-7 quote; rejected by subject kind (seed `uses` is Command->Tool) and by strict evidence match. No valid akar-rendering claim exists (b8's L141 akar-owns claims were also rejected on shape)."
+      },
+      {
+        "id": "R2",
+        "recovered": false,
+        "status": "attempted_rejected",
+        "note": "budget-250 b1 emitted `daftprompt (Tool) uses gitoxide (Tool)`; rejected on the same kind + partial-line-quote grounds."
+      },
+      {
+        "id": "R3",
+        "recovered": false,
+        "status": "attempted_rejected",
+        "note": "budget-250 b1 emitted `daftprompt (Tool) uses SQLite FTS5` and `uses sqlite-vec` (components, not the hybrid indexer); rejected on kind + partial-line quote. No hybrid-indexer claim was accepted."
+      },
+      {
+        "id": "R4",
+        "recovered": false,
+        "status": "never_attempted",
+        "note": "The gate relation was never attempted. The only L81 claim is the misleading `cargo check --workspace searches all code sources in workspace` (wrong action)."
+      },
+      {
+        "id": "R5",
+        "recovered": false,
+        "status": "never_attempted",
+        "note": "L127 was never cited by any claim in this run; the five extension names appear only as the object of the misleading `--index-code searches Rust, TypeScript, ...` claim citing L28."
+      },
+      {
+        "id": "R6",
+        "recovered": false,
+        "status": "never_attempted",
+        "note": "No exclusion claim exists anywhere in the run (b6 emitted nothing for the second half of L127)."
+      },
+      {
+        "id": "R7",
+        "recovered": false,
+        "status": "attempted_rejected",
+        "note": "budget-250 b4 emitted `Graph Search (Tool) uses FTS5 / uses sqlite-vec` citing L92; rejected on subject kind (Tool vs Command). The RRF fusion fact itself was never named."
+      },
+      {
+        "id": "R8",
+        "recovered": false,
+        "status": "attempted_rejected",
+        "note": "budget-250 b3 emitted `graph build requires XIAOMI_API_KEY` and `graph search requires XIAOMI_API_KEY` - shape-valid under this seed (Command->Configuration) - but both were rejected solely because the citation quoted L45-46 without line 44's `Before` clause."
+      },
+      {
+        "id": "R9",
+        "recovered": false,
+        "status": "never_attempted",
+        "note": "No degradation-shaped claim exists in the run (L93 and L135 produced none)."
+      }
+    ]
+  },
+  "question_coverage": {
+    "detail": [
+      {
+        "id": "Q1",
+        "coverage": "not_covered",
+        "note": "Every line-7 akar claim was rejected (b1) and every L141 akar-owns claim was rejected (b8); the only valid akar claim is `screenshot mode uses akar` (L142), a different fact."
+      },
+      {
+        "id": "Q2",
+        "coverage": "covered_defect",
+        "note": "A valid claim cites the exact expected line (81) but asserts the wrong action (`searches all code sources in workspace`), so the gate fact is mislabeled, not recovered."
+      },
+      {
+        "id": "Q3",
+        "coverage": "partial_defect",
+        "note": "Extension names appear only as the object of a wrong-action claim citing L28; the expected L127 evidence (extensions + exclusions) was never cited and exclusions were never emitted."
+      },
+      {
+        "id": "Q4",
+        "coverage": "not_covered",
+        "note": "Neither L93 nor L135 produced any claim; nothing degradation-shaped exists in the valid or invalid sets."
+      },
+      {
+        "id": "Q5",
+        "coverage": "correct_absence",
+        "note": "No license claim anywhere in the run; expected unknown."
+      },
+      {
+        "id": "Q6",
+        "coverage": "correct_absence",
+        "note": "No release-cadence claim anywhere in the run; expected unknown."
+      }
+    ]
+  },
+  "misleading_breakdown": [
+    "4x index commands mislabeled as `searches` (L25/L28/L31/L34) - indexing-as-searching",
+    "1x wrong directory object: schema.sql is_part_of crates/daftprompt-indexer/ (tree places it under src/)",
+    "2x `owns` claims citing L133 (comments policy), which does not state ownership (true lines 113/115 lie in other blocks)",
+    "1x correctness gate mislabeled as `searches` (L81)"
+  ],
+  "claims": [
+    {
+      "index": 0,
+      "block_id": "b1",
+      "subject": {
+        "kind": "Command",
+        "name": "cargo check --workspace"
+      },
+      "predicate": "uses",
+      "object": {
+        "kind": "Tool",
+        "name": "cargo"
+      },
+      "evidence": [
+        {
+          "start_line": 19,
+          "end_line": 19,
+          "text": "cargo check --workspace        # type-check everything (run after changes)"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "The line shows the cargo invocation itself; `cargo check --workspace` is a cargo command.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 1,
+      "block_id": "b1",
+      "subject": {
+        "kind": "Command",
+        "name": "cargo run"
+      },
+      "predicate": "uses",
+      "object": {
+        "kind": "Tool",
+        "name": "cargo"
+      },
+      "evidence": [
+        {
+          "start_line": 20,
+          "end_line": 20,
+          "text": "cargo run                      # launch the GUI (default repo = current dir)"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "The line shows the cargo invocation itself.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 2,
+      "block_id": "b1",
+      "subject": {
+        "kind": "Command",
+        "name": "cargo test --workspace"
+      },
+      "predicate": "uses",
+      "object": {
+        "kind": "Tool",
+        "name": "cargo"
+      },
+      "evidence": [
+        {
+          "start_line": 21,
+          "end_line": 21,
+          "text": "cargo test --workspace         # all tests"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "The line shows the cargo invocation itself.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 3,
+      "block_id": "b2",
+      "subject": {
+        "kind": "Command",
+        "name": "cargo run -- --repo . --index"
+      },
+      "predicate": "searches",
+      "object": {
+        "kind": "DataSource",
+        "name": "git log, code, documents"
+      },
+      "evidence": [
+        {
+          "start_line": 25,
+          "end_line": 25,
+          "text": "cargo run -- --repo . --index                       # index all sources (git log, code, documents)"
+        }
+      ],
+      "support": "misleading",
+      "support_reason": "Wrong action: the line says `--index  # index all sources` - indexing, not searching. This is the recorded index-as-search failure class.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 4,
+      "block_id": "b2",
+      "subject": {
+        "kind": "Command",
+        "name": "cargo run -- --repo . --search"
+      },
+      "predicate": "searches",
+      "object": {
+        "kind": "DataSource",
+        "name": "all sources"
+      },
+      "evidence": [
+        {
+          "start_line": 27,
+          "end_line": 27,
+          "text": "cargo run -- --repo . --search \"fix crash\"          # CLI unified hybrid search (all sources)"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "The line literally says `# CLI unified hybrid search (all sources)`.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 5,
+      "block_id": "b2",
+      "subject": {
+        "kind": "Command",
+        "name": "cargo run -- --repo . --index-code"
+      },
+      "predicate": "searches",
+      "object": {
+        "kind": "DataSource",
+        "name": "Rust, TypeScript, TSX, JavaScript, and JSX source"
+      },
+      "evidence": [
+        {
+          "start_line": 28,
+          "end_line": 28,
+          "text": "cargo run -- --repo . --index-code                  # index Rust, TypeScript, TSX, JavaScript, and JSX source (tree-sitter)"
+        }
+      ],
+      "support": "misleading",
+      "support_reason": "Wrong action: the line says `# index Rust, TypeScript, ... source` - indexing, not searching.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 6,
+      "block_id": "b2",
+      "subject": {
+        "kind": "Command",
+        "name": "cargo run -- --repo . --index-code"
+      },
+      "predicate": "uses",
+      "object": {
+        "kind": "Tool",
+        "name": "tree-sitter"
+      },
+      "evidence": [
+        {
+          "start_line": 28,
+          "end_line": 28,
+          "text": "cargo run -- --repo . --index-code                  # index Rust, TypeScript, TSX, JavaScript, and JSX source (tree-sitter)"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "The line attaches `(tree-sitter)` to the `--index-code` command.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 7,
+      "block_id": "b2",
+      "subject": {
+        "kind": "Command",
+        "name": "cargo run -- --repo . --index-documents"
+      },
+      "predicate": "searches",
+      "object": {
+        "kind": "DataSource",
+        "name": "documents"
+      },
+      "evidence": [
+        {
+          "start_line": 31,
+          "end_line": 31,
+          "text": "cargo run -- --repo . --index-documents             # index documents (Markdown, plain text)"
+        }
+      ],
+      "support": "misleading",
+      "support_reason": "Wrong action: the line says `# index documents` - indexing, not searching.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 8,
+      "block_id": "b2",
+      "subject": {
+        "kind": "Command",
+        "name": "cargo run -- --repo . --index-git-log"
+      },
+      "predicate": "searches",
+      "object": {
+        "kind": "DataSource",
+        "name": "git log"
+      },
+      "evidence": [
+        {
+          "start_line": 34,
+          "end_line": 34,
+          "text": "cargo run -- --repo . --index-git-log               # index git log only"
+        }
+      ],
+      "support": "misleading",
+      "support_reason": "Wrong action: the line says `# index git log only` - indexing, not searching.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 9,
+      "block_id": "b2",
+      "subject": {
+        "kind": "Command",
+        "name": "cargo run --bin graph -- build"
+      },
+      "predicate": "requires",
+      "object": {
+        "kind": "Configuration",
+        "name": "--repo ."
+      },
+      "evidence": [
+        {
+          "start_line": 38,
+          "end_line": 38,
+          "text": "cargo run --bin graph -- build --repo . --source DEVELOP.md --source README.md --source AGENTS.md --source 'epics/*.md'"
+        }
+      ],
+      "support": "weak",
+      "support_reason": "A `--repo .` requirement is a mild inference from a documented example invocation; the line does not state a requirement.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 10,
+      "block_id": "b2",
+      "subject": {
+        "kind": "Command",
+        "name": "cargo run --bin graph -- build"
+      },
+      "predicate": "requires",
+      "object": {
+        "kind": "Configuration",
+        "name": "--source DEVELOP.md --source README.md --source AGENTS.md --source 'epics/*.md'"
+      },
+      "evidence": [
+        {
+          "start_line": 38,
+          "end_line": 38,
+          "text": "cargo run --bin graph -- build --repo . --source DEVELOP.md --source README.md --source AGENTS.md --source 'epics/*.md'"
+        }
+      ],
+      "support": "weak",
+      "support_reason": "Same mild inference from the usage-example line (the `--source` flags are shown, not stated as required).",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 11,
+      "block_id": "b2",
+      "subject": {
+        "kind": "Command",
+        "name": "cargo run --bin graph -- search"
+      },
+      "predicate": "requires",
+      "object": {
+        "kind": "Configuration",
+        "name": "--repo ."
+      },
+      "evidence": [
+        {
+          "start_line": 39,
+          "end_line": 39,
+          "text": "cargo run --bin graph -- search --repo . \"Can we search Python code?\" --json"
+        }
+      ],
+      "support": "weak",
+      "support_reason": "Same mild inference from the usage-example line.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 12,
+      "block_id": "b2",
+      "subject": {
+        "kind": "Command",
+        "name": "cargo run -- -- --no-index"
+      },
+      "predicate": "requires",
+      "object": {
+        "kind": "Configuration",
+        "name": "--no-index"
+      },
+      "evidence": [
+        {
+          "start_line": 37,
+          "end_line": 37,
+          "text": "cargo run -- -- --no-index                          # GUI but skip startup auto-index"
+        }
+      ],
+      "support": "weak",
+      "support_reason": "The flag is shown in a usage example whose comment (`GUI but skip startup auto-index`) describes an option, not a requirement; counted weak as the same inference class, but the optionality makes this the least defensible of the four.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 13,
+      "block_id": "b4",
+      "subject": {
+        "kind": "Command",
+        "name": "cargo check --workspace"
+      },
+      "predicate": "searches",
+      "object": {
+        "kind": "DataSource",
+        "name": "all code sources in workspace"
+      },
+      "evidence": [
+        {
+          "start_line": 81,
+          "end_line": 81,
+          "text": "There is no separate linter/formatter script — `cargo check --workspace` is the canonical correctness gate. Run it after every change."
+        }
+      ],
+      "support": "misleading",
+      "support_reason": "Wrong action: line 81 states the correctness-gate role, not a search over code sources. This is Epic 014's recorded 'wrong action assigned to a command' example.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 14,
+      "block_id": "b5",
+      "subject": {
+        "kind": "File",
+        "name": "src/main.rs"
+      },
+      "predicate": "is_part_of",
+      "object": {
+        "kind": "Directory",
+        "name": "src/"
+      },
+      "evidence": [
+        {
+          "start_line": 100,
+          "end_line": 101,
+          "text": "src/                    main binary (CLI + GUI)\n  main.rs               entry, CLI args (clap), event loop, indexer init"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Directory-tree indentation states main.rs sits under src/.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 15,
+      "block_id": "b5",
+      "subject": {
+        "kind": "File",
+        "name": "src/state.rs"
+      },
+      "predicate": "is_part_of",
+      "object": {
+        "kind": "Directory",
+        "name": "src/"
+      },
+      "evidence": [
+        {
+          "start_line": 100,
+          "end_line": 102,
+          "text": "src/                    main binary (CLI + GUI)\n  main.rs               entry, CLI args (clap), event loop, indexer init\n  state.rs              AppState (canvas, drawer, containers, search, indexer handle)"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Directory-tree indentation states state.rs sits under src/.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 16,
+      "block_id": "b5",
+      "subject": {
+        "kind": "File",
+        "name": "src/git_log.rs"
+      },
+      "predicate": "is_part_of",
+      "object": {
+        "kind": "Directory",
+        "name": "src/"
+      },
+      "evidence": [
+        {
+          "start_line": 100,
+          "end_line": 103,
+          "text": "src/                    main binary (CLI + GUI)\n  main.rs               entry, CLI args (clap), event loop, indexer init\n  state.rs              AppState (canvas, drawer, containers, search, indexer handle)\n  git_log.rs            git commit reader (gitoxide) — read_log, read_log_all_branches"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Directory-tree indentation states git_log.rs sits under src/.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 17,
+      "block_id": "b5",
+      "subject": {
+        "kind": "File",
+        "name": "src/ui/mod.rs"
+      },
+      "predicate": "is_part_of",
+      "object": {
+        "kind": "Directory",
+        "name": "src/ui/"
+      },
+      "evidence": [
+        {
+          "start_line": 104,
+          "end_line": 105,
+          "text": "ui/\n    mod.rs              module tree (container, render)"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Directory-tree indentation states mod.rs sits under ui/ (nested under src/).",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 18,
+      "block_id": "b5",
+      "subject": {
+        "kind": "File",
+        "name": "src/ui/adapter.rs"
+      },
+      "predicate": "is_part_of",
+      "object": {
+        "kind": "Directory",
+        "name": "src/ui/"
+      },
+      "evidence": [
+        {
+          "start_line": 104,
+          "end_line": 106,
+          "text": "ui/\n    mod.rs              module tree (container, render)\n    adapter.rs          stable card key hashing (commit, code, document results)"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Directory-tree indentation states adapter.rs sits under ui/.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 19,
+      "block_id": "b5",
+      "subject": {
+        "kind": "File",
+        "name": "src/ui/container.rs"
+      },
+      "predicate": "is_part_of",
+      "object": {
+        "kind": "Directory",
+        "name": "src/ui/"
+      },
+      "evidence": [
+        {
+          "start_line": 104,
+          "end_line": 107,
+          "text": "ui/\n    mod.rs              module tree (container, render)\n    adapter.rs          stable card key hashing (commit, code, document results)\n    container.rs        Container abstraction + CardData (business logic, keep across migrations)"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Directory-tree indentation states container.rs sits under ui/.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 20,
+      "block_id": "b5",
+      "subject": {
+        "kind": "File",
+        "name": "src/ui/render.rs"
+      },
+      "predicate": "is_part_of",
+      "object": {
+        "kind": "Directory",
+        "name": "src/ui/"
+      },
+      "evidence": [
+        {
+          "start_line": 104,
+          "end_line": 108,
+          "text": "ui/\n    mod.rs              module tree (container, render)\n    adapter.rs          stable card key hashing (commit, code, document results)\n    container.rs        Container abstraction + CardData (business logic, keep across migrations)\n    render.rs           immediate-mode render functions (canvas, drawer, search, containers)"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Directory-tree indentation states render.rs sits under ui/.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 21,
+      "block_id": "b5",
+      "subject": {
+        "kind": "File",
+        "name": "crates/daftprompt-indexer/src/lib.rs"
+      },
+      "predicate": "is_part_of",
+      "object": {
+        "kind": "Directory",
+        "name": "crates/daftprompt-indexer/src/"
+      },
+      "evidence": [
+        {
+          "start_line": 109,
+          "end_line": 111,
+          "text": "crates/daftprompt-indexer/  standalone indexing + search crate\n  src/\n    lib.rs              Indexer public API (index_commits, index_code, index_documents,"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Directory-tree indentation states lib.rs sits under the indexer src/.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 22,
+      "block_id": "b5",
+      "subject": {
+        "kind": "File",
+        "name": "crates/daftprompt-indexer/src/db.rs"
+      },
+      "predicate": "is_part_of",
+      "object": {
+        "kind": "Directory",
+        "name": "crates/daftprompt-indexer/src/"
+      },
+      "evidence": [
+        {
+          "start_line": 109,
+          "end_line": 113,
+          "text": "crates/daftprompt-indexer/  standalone indexing + search crate\n  src/\n    lib.rs              Indexer public API (index_commits, index_code, index_documents,\n                        search_hybrid, search_code_hybrid, search_document_hybrid, search_all_hybrid)\n    db.rs               SQLite schema, FTS5, vec0/vec_code/vec_documents, queries"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Directory-tree indentation states db.rs sits under the indexer src/.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 23,
+      "block_id": "b5",
+      "subject": {
+        "kind": "File",
+        "name": "crates/daftprompt-indexer/src/embed.rs"
+      },
+      "predicate": "is_part_of",
+      "object": {
+        "kind": "Directory",
+        "name": "crates/daftprompt-indexer/src/"
+      },
+      "evidence": [
+        {
+          "start_line": 109,
+          "end_line": 114,
+          "text": "crates/daftprompt-indexer/  standalone indexing + search crate\n  src/\n    lib.rs              Indexer public API (index_commits, index_code, index_documents,\n                        search_hybrid, search_code_hybrid, search_document_hybrid, search_all_hybrid)\n    db.rs               SQLite schema, FTS5, vec0/vec_code/vec_documents, queries\n    embed.rs            model2vec-rs wrapper"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Directory-tree indentation states embed.rs sits under the indexer src/.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 24,
+      "block_id": "b5",
+      "subject": {
+        "kind": "File",
+        "name": "crates/daftprompt-indexer/src/code.rs"
+      },
+      "predicate": "is_part_of",
+      "object": {
+        "kind": "Directory",
+        "name": "crates/daftprompt-indexer/src/"
+      },
+      "evidence": [
+        {
+          "start_line": 109,
+          "end_line": 115,
+          "text": "crates/daftprompt-indexer/  standalone indexing + search crate\n  src/\n    lib.rs              Indexer public API (index_commits, index_code, index_documents,\n                        search_hybrid, search_code_hybrid, search_document_hybrid, search_all_hybrid)\n    db.rs               SQLite schema, FTS5, vec0/vec_code/vec_documents, queries\n    embed.rs            model2vec-rs wrapper\n    code.rs             language registry/router, shared Rust/TypeScript/TSX/JavaScript/JSX query constants"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Directory-tree indentation states code.rs sits under the indexer src/.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 25,
+      "block_id": "b5",
+      "subject": {
+        "kind": "File",
+        "name": "crates/daftprompt-indexer/src/documents.rs"
+      },
+      "predicate": "is_part_of",
+      "object": {
+        "kind": "Directory",
+        "name": "crates/daftprompt-indexer/src/"
+      },
+      "evidence": [
+        {
+          "start_line": 109,
+          "end_line": 116,
+          "text": "crates/daftprompt-indexer/  standalone indexing + search crate\n  src/\n    lib.rs              Indexer public API (index_commits, index_code, index_documents,\n                        search_hybrid, search_code_hybrid, search_document_hybrid, search_all_hybrid)\n    db.rs               SQLite schema, FTS5, vec0/vec_code/vec_documents, queries\n    embed.rs            model2vec-rs wrapper\n    code.rs             language registry/router, shared Rust/TypeScript/TSX/JavaScript/JSX query constants\n    documents.rs        document discovery, chunking, incremental indexing"
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Directory-tree indentation states documents.rs sits under the indexer src/.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 26,
+      "block_id": "b5",
+      "subject": {
+        "kind": "File",
+        "name": "crates/daftprompt-indexer/schema.sql"
+      },
+      "predicate": "is_part_of",
+      "object": {
+        "kind": "Directory",
+        "name": "crates/daftprompt-indexer/"
+      },
+      "evidence": [
+        {
+          "start_line": 117,
+          "end_line": 118,
+          "text": "    schema.sql          items, items_fts (external-content), vec_items, vec_code, vec_documents,\n                        code_files, document_files, triggers"
+        }
+      ],
+      "support": "misleading",
+      "support_reason": "Wrong object: line 117's four-space indent places schema.sql inside `crates/daftprompt-indexer/src/` (alongside db.rs etc.), not directly in `crates/daftprompt-indexer/`.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 27,
+      "block_id": "b6",
+      "subject": {
+        "kind": "DataSource",
+        "name": "items"
+      },
+      "predicate": "is_indexed_by",
+      "object": {
+        "kind": "Tool",
+        "name": "items_fts"
+      },
+      "evidence": [
+        {
+          "start_line": 123,
+          "end_line": 123,
+          "text": "- `items` is the single source of truth for text; `items_fts` is an external-content FTS5 index kept in sync by AFTER INSERT/UPDATE/DELETE triggers — never write to `items_fts` directly."
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Line 123 states `items_fts` is the FTS5 index kept in sync for `items`.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 28,
+      "block_id": "b6",
+      "subject": {
+        "kind": "DataSource",
+        "name": "vec_items"
+      },
+      "predicate": "holds_vectors_for",
+      "object": {
+        "kind": "DataSource",
+        "name": "commits"
+      },
+      "evidence": [
+        {
+          "start_line": 124,
+          "end_line": 124,
+          "text": "- `vec_items` holds commit vectors; `vec_code` holds code vectors; `vec_documents` holds document vectors. Partitioned per `source_type` for exact KNN isolation (no over-fetch-and-filter). See Epic 004 \"Search Isolation\" and Epic 007."
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Line 124 literally says `vec_items` holds commit vectors.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 29,
+      "block_id": "b6",
+      "subject": {
+        "kind": "DataSource",
+        "name": "vec_code"
+      },
+      "predicate": "holds_vectors_for",
+      "object": {
+        "kind": "DataSource",
+        "name": "code"
+      },
+      "evidence": [
+        {
+          "start_line": 124,
+          "end_line": 124,
+          "text": "- `vec_items` holds commit vectors; `vec_code` holds code vectors; `vec_documents` holds document vectors. Partitioned per `source_type` for exact KNN isolation (no over-fetch-and-filter). See Epic 004 \"Search Isolation\" and Epic 007."
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Line 124 literally says `vec_code` holds code vectors.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 30,
+      "block_id": "b6",
+      "subject": {
+        "kind": "DataSource",
+        "name": "vec_documents"
+      },
+      "predicate": "holds_vectors_for",
+      "object": {
+        "kind": "DataSource",
+        "name": "documents"
+      },
+      "evidence": [
+        {
+          "start_line": 124,
+          "end_line": 124,
+          "text": "- `vec_items` holds commit vectors; `vec_code` holds code vectors; `vec_documents` holds document vectors. Partitioned per `source_type` for exact KNN isolation (no over-fetch-and-filter). See Epic 004 \"Search Isolation\" and Epic 007."
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Line 124 literally says `vec_documents` holds document vectors.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 31,
+      "block_id": "b6",
+      "subject": {
+        "kind": "File",
+        "name": "code_files"
+      },
+      "predicate": "tracks",
+      "object": {
+        "kind": "DataSource",
+        "name": "mtime"
+      },
+      "evidence": [
+        {
+          "start_line": 126,
+          "end_line": 126,
+          "text": "- Incremental indexing: `code_files` and `document_files` track `mtime` + `content_hash` (xxh3, **not** `DefaultHasher` — no stability guarantee across Rust versions). `touch` without content change must not re-index."
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Line 126 literally says `code_files` tracks `mtime`.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 32,
+      "block_id": "b6",
+      "subject": {
+        "kind": "File",
+        "name": "code_files"
+      },
+      "predicate": "tracks",
+      "object": {
+        "kind": "DataSource",
+        "name": "content_hash"
+      },
+      "evidence": [
+        {
+          "start_line": 126,
+          "end_line": 126,
+          "text": "- Incremental indexing: `code_files` and `document_files` track `mtime` + `content_hash` (xxh3, **not** `DefaultHasher` — no stability guarantee across Rust versions). `touch` without content change must not re-index."
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Line 126 literally says `code_files` tracks `content_hash`.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 33,
+      "block_id": "b6",
+      "subject": {
+        "kind": "File",
+        "name": "document_files"
+      },
+      "predicate": "tracks",
+      "object": {
+        "kind": "DataSource",
+        "name": "mtime"
+      },
+      "evidence": [
+        {
+          "start_line": 126,
+          "end_line": 126,
+          "text": "- Incremental indexing: `code_files` and `document_files` track `mtime` + `content_hash` (xxh3, **not** `DefaultHasher` — no stability guarantee across Rust versions). `touch` without content change must not re-index."
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Line 126 literally says `document_files` tracks `mtime`.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 34,
+      "block_id": "b6",
+      "subject": {
+        "kind": "File",
+        "name": "document_files"
+      },
+      "predicate": "tracks",
+      "object": {
+        "kind": "DataSource",
+        "name": "content_hash"
+      },
+      "evidence": [
+        {
+          "start_line": 126,
+          "end_line": 126,
+          "text": "- Incremental indexing: `code_files` and `document_files` track `mtime` + `content_hash` (xxh3, **not** `DefaultHasher` — no stability guarantee across Rust versions). `touch` without content change must not re-index."
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Line 126 literally says `document_files` tracks `content_hash`.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 35,
+      "block_id": "b6",
+      "subject": {
+        "kind": "File",
+        "name": "crates/daftprompt-indexer/src/code.rs"
+      },
+      "predicate": "owns",
+      "object": {
+        "kind": "Tool",
+        "name": "language dispatch"
+      },
+      "evidence": [
+        {
+          "start_line": 127,
+          "end_line": 127,
+          "text": "- Code indexer invariants: one shared `code_files`/`vec_code` pipeline indexes Git-tracked `.rs`, `.ts`, `.tsx`, `.js`, and `.jsx` files; `crates/daftprompt-indexer/src/code.rs` owns extension-based language dispatch, and production CLI/UI paths must remain language-neutral. The shared discovery path also enforces a centralized generated/vendor/minified exclusion (`is_excluded_generated_path`: `node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, `coverage/`, and `*.min.js`) so tracked-but-generated files cannot leak into the index."
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Line 127 literally says code.rs `owns extension-based language dispatch`.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 36,
+      "block_id": "b7",
+      "subject": {
+        "kind": "File",
+        "name": "db.rs"
+      },
+      "predicate": "owns",
+      "object": {
+        "kind": "Tool",
+        "name": "SQLite schema"
+      },
+      "evidence": [
+        {
+          "start_line": 133,
+          "end_line": 133,
+          "text": "- **Comments:** the codebase deliberately retains commented-out rejected-alternatives and notes about future tuning. When adding to modules that have these (e.g. `db.rs`, `code.rs`), follow the pattern. Do not strip them. Otherwise follow the standard \"no unnecessary comments\" rule."
+        }
+      ],
+      "support": "misleading",
+      "support_reason": "Evidence does not state the claim: line 133 is the comments-policy bullet that merely names db.rs as an example module retaining comments; schema ownership is stated on line 113, which lies in a different block.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 37,
+      "block_id": "b7",
+      "subject": {
+        "kind": "File",
+        "name": "code.rs"
+      },
+      "predicate": "owns",
+      "object": {
+        "kind": "Tool",
+        "name": "Language registry/router"
+      },
+      "evidence": [
+        {
+          "start_line": 133,
+          "end_line": 133,
+          "text": "- **Comments:** the codebase deliberately retains commented-out rejected-alternatives and notes about future tuning. When adding to modules that have these (e.g. `db.rs`, `code.rs`), follow the pattern. Do not strip them. Otherwise follow the standard \"no unnecessary comments\" rule."
+        }
+      ],
+      "support": "misleading",
+      "support_reason": "Evidence does not state the claim: line 133 names code.rs only as a comments-pattern example; the registry/router fact is stated on line 115, in a different block.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 38,
+      "block_id": "b7",
+      "subject": {
+        "kind": "File",
+        "name": "code.rs"
+      },
+      "predicate": "owns",
+      "object": {
+        "kind": "Tool",
+        "name": "Compiled language queries"
+      },
+      "evidence": [
+        {
+          "start_line": 138,
+          "end_line": 138,
+          "text": "- **Tree-sitter registry/router:** `code.rs` compiles each configured Rust, TypeScript, TSX, JavaScript, and JSX query once at construction, selects the language by canonical extension, and reuses the compiled query for every file; never add language branching to production CLI/UI paths."
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Line 138 states code.rs compiles each query once and reuses it - ownership of the compiled queries.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    },
+    {
+      "index": 39,
+      "block_id": "b8",
+      "subject": {
+        "kind": "Command",
+        "name": "screenshot mode"
+      },
+      "predicate": "uses",
+      "object": {
+        "kind": "Tool",
+        "name": "akar"
+      },
+      "evidence": [
+        {
+          "start_line": 142,
+          "end_line": 142,
+          "text": "- **Screenshot mode** (post-Task 8): `cargo run --release -- --screenshot <path> --exit` waits 5 s for the UI to settle, captures one frame via akar's `core.take_screenshot`, PNG-encodes the result, and exits. Useful for visual regression testing."
+        }
+      ],
+      "support": "supported",
+      "support_reason": "Line 142 states screenshot mode captures a frame via akar's `core.take_screenshot`.",
+      "citation_matches_run_snapshot": true,
+      "citation_matches_frozen_snapshot": true,
+      "citations_within_block": true
+    }
+  ]
+}

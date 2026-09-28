@@ -1,0 +1,324 @@
+{
+  "purpose": "Targeted positive and negative test inputs for Epic 014 (Task 1, acceptance criterion 3): the AGENTS.md line 7 case plus per-reference-fact examples for R1-R9. Every positive input is a verbatim quote of the frozen snapshot lines; every recorded misquote is a quote a previous Epic 013 run actually emitted that must be rejected by strict line matching. check_inputs.py re-verifies every quote (and every misquote's mismatch) against the frozen snapshot before any model output is inspected.",
+  "how_to_use": "Tasks 2-5 must make the extraction+validation pipeline pass every must_accept and reject every must_reject item here. must_accept claims need snapshot-resolvable citations from the listed evidence lines; must_reject items describe claims or citations that earlier runs emitted and that the validator/entailment review must refuse (they encode recorded failure modes, not hypotheticals). The six reference questions Q1-Q6 and their expected answers live in the frozen reference-set.json and are not duplicated here.",
+  "failure_mode_sources": {
+    "budget-250": "experiments/open-vocab-graph/output/runs/budget-250/{validated,invalid}-claims.json (the LLM baseline folder, seed c776d7e579d8aed5)",
+    "other-runs-different-seed": "output/runs/budget-{150,400,600}/ (seed 9bd9ffae74304ce2; used only as failure-mode evidence, never as the comparison baseline)",
+    "fixed-vocabulary": "Epic 013 report, fixed-vocabulary graph build on the same snapshot (fabricated capability claims from example-question lines)"
+  },
+  "cases": [
+    {
+      "id": "T0-line7",
+      "reference_facts": ["R1"],
+      "title": "AGENTS.md line 7: daftprompt uses akar (the Epic 014 motivating case)",
+      "inputs": [
+        {
+          "label": "line7-full",
+          "start_line": 7,
+          "end_line": 7,
+          "expect_quote_match": true,
+          "text": "daftprompt is a Rust app for exploring text repositories (git repos, document folders) via an infinite-canvas, card-based UI. It uses **akar** (a GPU UI component library on wgpu + glyphon + taffy) for rendering, combined with a git commit reader (gitoxide) and a hybrid search indexer (SQLite FTS5 + sqlite-vec embeddings)."
+        },
+        {
+          "label": "line7-partial-misquote (recorded budget-250 b1 evidence rejection)",
+          "start_line": 7,
+          "end_line": 7,
+          "expect_quote_match": false,
+          "text": "It uses **akar** (a GPU UI component library on wgpu + glyphon + taffy) for rendering, combined with a git commit reader (gitoxide) and a hybrid search indexer (SQLite FTS5 + sqlite-vec embeddings)."
+        }
+      ],
+      "must_accept": [
+        {
+          "claim": "daftprompt uses akar (for UI rendering)",
+          "endpoint_types": {"subject": "Application", "object": "Tool"},
+          "evidence": "AGENTS.md line 7, full line"
+        }
+      ],
+      "must_reject": [
+        {"claim": "partial-line citation accepted as exact evidence", "reason": "recorded failure (budget-250 b1): the model quoted only line 7's second sentence; strict whole-line matching must reject it"},
+        {"claim": "daftprompt typed as Tool", "reason": "recorded failure (budget-250 b1): seed `uses` was Command->Tool and the model typed daftprompt Tool, rejecting the true fact; after the Task 2 schema repair daftprompt must type as Application"},
+        {"claim": "akar uses wgpu / akar uses glyphon / akar uses taffy counted as R1 recovery", "reason": "recorded emissions (budget-250 b1, rejected): reversed direction/component decomposition is not the application->tool rendering fact"},
+        {"claim": "daftprompt, daftprompt CLI, and cargo run merged into one entity", "reason": "Epic 014 design constraint: mention text is not graph identity; canonicalization must keep these distinct"}
+      ]
+    },
+    {
+      "id": "R2-gitoxide",
+      "reference_facts": ["R2"],
+      "title": "daftprompt uses gitoxide as its git commit reader",
+      "inputs": [
+        {
+          "label": "line7-full",
+          "start_line": 7,
+          "end_line": 7,
+          "expect_quote_match": true,
+          "text": "daftprompt is a Rust app for exploring text repositories (git repos, document folders) via an infinite-canvas, card-based UI. It uses **akar** (a GPU UI component library on wgpu + glyphon + taffy) for rendering, combined with a git commit reader (gitoxide) and a hybrid search indexer (SQLite FTS5 + sqlite-vec embeddings)."
+        },
+        {
+          "label": "line103-module-role (context, not the R2 evidence line)",
+          "start_line": 103,
+          "end_line": 103,
+          "expect_quote_match": true,
+          "text": "  git_log.rs            git commit reader (gitoxide) — read_log, read_log_all_branches"
+        }
+      ],
+      "must_accept": [
+        {
+          "claim": "daftprompt uses gitoxide (as git commit reader)",
+          "endpoint_types": {"subject": "Application", "object": "Tool"},
+          "evidence": "AGENTS.md line 7, full line"
+        }
+      ],
+      "must_reject": [
+        {"claim": "daftprompt uses gitoxide citing line 103 alone", "reason": "evidence mismatch: line 103 states git_log.rs's reader role, not the application->library relation (stated on line 7)"},
+        {"claim": "daftprompt uses gitoxide citing line 85", "reason": "wrong entity: line 85 discusses the gix crates.io dependency and its local reference checkout, a different library from gitoxide"},
+        {"claim": "daftprompt uses the local gix checkout", "reason": "line 85 says the local checkouts are for reference; the runtime dependency uses crates.io versions"}
+      ]
+    },
+    {
+      "id": "R3-hybrid-indexer",
+      "reference_facts": ["R3"],
+      "title": "daftprompt ships a hybrid search indexer (SQLite FTS5 + sqlite-vec embeddings)",
+      "inputs": [
+        {
+          "label": "line7-full",
+          "start_line": 7,
+          "end_line": 7,
+          "expect_quote_match": true,
+          "text": "daftprompt is a Rust app for exploring text repositories (git repos, document folders) via an infinite-canvas, card-based UI. It uses **akar** (a GPU UI component library on wgpu + glyphon + taffy) for rendering, combined with a git commit reader (gitoxide) and a hybrid search indexer (SQLite FTS5 + sqlite-vec embeddings)."
+        },
+        {
+          "label": "line92-diagram-row (about hybrid search, not the app->indexer relation)",
+          "start_line": 92,
+          "end_line": 92,
+          "expect_quote_match": true,
+          "text": "Hybrid search                  ← FTS5 (keyword) + sqlite-vec (vector KNN) via Reciprocal Rank Fusion"
+        },
+        {
+          "label": "line91-db-row (distractor)",
+          "start_line": 91,
+          "end_line": 91,
+          "expect_quote_match": true,
+          "text": "Per-repo SQLite DB             ← ~/Library/Caches/daftprompt/{repo_slug}.db (macOS)"
+        }
+      ],
+      "must_accept": [
+        {
+          "claim": "daftprompt uses a hybrid search indexer (SQLite FTS5 + sqlite-vec embeddings)",
+          "endpoint_types": {"subject": "Application", "object": "Subsystem"},
+          "evidence": "AGENTS.md line 7, full line"
+        }
+      ],
+      "must_reject": [
+        {"claim": "daftprompt uses hybrid search citing line 92 only", "reason": "evidence mismatch: the line-92 diagram row never names daftprompt; the app->indexer relation is stated on line 7"},
+        {"claim": "daftprompt searches SQLite citing line 91", "reason": "wrong action and wrong entity: line 91 describes the per-repo cache database, not a search action"},
+        {"claim": "hybrid search is a Tool employed by daftprompt where 'hybrid search' names the whole pipeline", "reason": "entity/kind confusion: the indexer subsystem must not be conflated with the search behavior it enables"}
+      ]
+    },
+    {
+      "id": "R4-correctness-gate",
+      "reference_facts": ["R4"],
+      "title": "cargo check --workspace is the canonical correctness gate",
+      "inputs": [
+        {
+          "label": "line81-gate-statement",
+          "start_line": 81,
+          "end_line": 81,
+          "expect_quote_match": true,
+          "text": "There is no separate linter/formatter script — `cargo check --workspace` is the canonical correctness gate. Run it after every change."
+        },
+        {
+          "label": "line19-command-listing (distractor: same command, different fact)",
+          "start_line": 19,
+          "end_line": 19,
+          "expect_quote_match": true,
+          "text": "cargo check --workspace        # type-check everything (run after changes)"
+        }
+      ],
+      "must_accept": [
+        {
+          "claim": "cargo check --workspace serves as the canonical correctness gate",
+          "endpoint_types": {"subject": "Command", "object": "ProcessRole"},
+          "evidence": "AGENTS.md line 81"
+        }
+      ],
+      "must_reject": [
+        {"claim": "cargo check --workspace searches all code sources in workspace citing line 81", "reason": "recorded misleading valid claim (budget-250 b4): correct evidence line, wrong action; entailment review must flag it, and it must not count as R4 recovery"},
+        {"claim": "cargo check --workspace is the canonical correctness gate citing line 19", "reason": "evidence mismatch: line 19 is a command-listing entry; the gate role is stated on line 81"},
+        {"claim": "cargo check --workspace is a linter", "reason": "line 81's first clause says there is NO separate linter script; it does not make cargo check a linter"}
+      ]
+    },
+    {
+      "id": "R5-extensions",
+      "reference_facts": ["R5"],
+      "title": "the code indexer indexes .rs, .ts, .tsx, .js, and .jsx files",
+      "inputs": [
+        {
+          "label": "line127-invariants",
+          "start_line": 127,
+          "end_line": 127,
+          "expect_quote_match": true,
+          "text": "- Code indexer invariants: one shared `code_files`/`vec_code` pipeline indexes Git-tracked `.rs`, `.ts`, `.tsx`, `.js`, and `.jsx` files; `crates/daftprompt-indexer/src/code.rs` owns extension-based language dispatch, and production CLI/UI paths must remain language-neutral. The shared discovery path also enforces a centralized generated/vendor/minified exclusion (`is_excluded_generated_path`: `node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, `coverage/`, and `*.min.js`) so tracked-but-generated files cannot leak into the index."
+        },
+        {
+          "label": "line68-example-question (distractor: a question, not a capability)",
+          "start_line": 68,
+          "end_line": 68,
+          "expect_quote_match": true,
+          "text": "cargo run --bin graph -- search --repo . \"Can we search Python code?\" --json"
+        },
+        {
+          "label": "line70-example-question (distractor: parser vs index)",
+          "start_line": 70,
+          "end_line": 70,
+          "expect_quote_match": true,
+          "text": "cargo run --bin graph -- search --repo . \"Does the indexer use Tree-sitter?\""
+        }
+      ],
+      "must_accept": [
+        {
+          "claim": "code indexer indexes .rs/.ts/.tsx/.js/.jsx files",
+          "endpoint_types": {"subject": "Subsystem", "object": "FileExtensionSet"},
+          "evidence": "AGENTS.md line 127"
+        }
+      ],
+      "must_reject": [
+        {"claim": "code indexer indexes Python / Lua", "reason": "recorded fabrication class (fixed-vocabulary build): example-question lines 68-69 are documented questions, not capability statements"},
+        {"claim": "code indexer indexes tree-sitter citing line 70", "reason": "recorded failure class (budget-600): assigns a parser to an index role; line 70 is an example question"},
+        {"claim": "the indexer's extension set cited from line 28's command listing instead of line 127", "reason": "line 28 names the --index-code invocation's target languages, not the shared-pipeline invariant; the reference evidence is line 127"}
+      ]
+    },
+    {
+      "id": "R6-exclusions",
+      "reference_facts": ["R6"],
+      "title": "the shared code-discovery path excludes generated/vendor/minified paths",
+      "inputs": [
+        {
+          "label": "line127-invariants",
+          "start_line": 127,
+          "end_line": 127,
+          "expect_quote_match": true,
+          "text": "- Code indexer invariants: one shared `code_files`/`vec_code` pipeline indexes Git-tracked `.rs`, `.ts`, `.tsx`, `.js`, and `.jsx` files; `crates/daftprompt-indexer/src/code.rs` owns extension-based language dispatch, and production CLI/UI paths must remain language-neutral. The shared discovery path also enforces a centralized generated/vendor/minified exclusion (`is_excluded_generated_path`: `node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, `coverage/`, and `*.min.js`) so tracked-but-generated files cannot leak into the index."
+        }
+      ],
+      "must_accept": [
+        {
+          "claim": "code indexer file discovery excludes node_modules/, vendor/, dist/, build/, .next/, coverage/, and *.min.js",
+          "endpoint_types": {"subject": "Subsystem", "object": "PathSet"},
+          "evidence": "AGENTS.md line 127"
+        }
+      ],
+      "must_reject": [
+        {"claim": "code indexer excludes .js files", "reason": "over-generalization: only minified `*.min.js` files are excluded; ordinary .js files are indexed"},
+        {"claim": "document indexer excludes node_modules", "reason": "scope overreach: the exclusion is on the shared code-discovery path (line 127), not the document indexer"},
+        {"claim": "node_modules excludes the code indexer", "reason": "reversed direction"}
+      ]
+    },
+    {
+      "id": "R7-rrf",
+      "reference_facts": ["R7"],
+      "title": "hybrid search = FTS5 (keyword) + sqlite-vec (vector KNN) fused via Reciprocal Rank Fusion",
+      "inputs": [
+        {
+          "label": "line92-diagram-row",
+          "start_line": 92,
+          "end_line": 92,
+          "expect_quote_match": true,
+          "text": "Hybrid search                  ← FTS5 (keyword) + sqlite-vec (vector KNN) via Reciprocal Rank Fusion"
+        },
+        {
+          "label": "line7-overview (names the components but NOT the fusion method)",
+          "start_line": 7,
+          "end_line": 7,
+          "expect_quote_match": true,
+          "text": "daftprompt is a Rust app for exploring text repositories (git repos, document folders) via an infinite-canvas, card-based UI. It uses **akar** (a GPU UI component library on wgpu + glyphon + taffy) for rendering, combined with a git commit reader (gitoxide) and a hybrid search indexer (SQLite FTS5 + sqlite-vec embeddings)."
+        },
+        {
+          "label": "line94-unified-search-row (distractor: different diagram row)",
+          "start_line": 94,
+          "end_line": 94,
+          "expect_quote_match": true,
+          "text": "Unified search                 ← Cmd+K searches all three sources (git log, code, documents) simultaneously"
+        }
+      ],
+      "must_accept": [
+        {
+          "claim": "hybrid search fuses FTS5 (keyword) and sqlite-vec (vector KNN) via Reciprocal Rank Fusion",
+          "endpoint_types": {"subject": "Feature", "object": "TechnologyPair"},
+          "evidence": "AGENTS.md line 92"
+        }
+      ],
+      "must_reject": [
+        {"claim": "hybrid search uses Reciprocal Rank Fusion citing line 7", "reason": "evidence mismatch: line 7 names the two components but never the fusion method (this is exactly the 'exact citation does not establish entailment' trap)"},
+        {"claim": "code is indexed by tree-sitter / documents are indexed by SQLite FTS5 counted as R7 recovery", "reason": "recorded failure class (budget-600): per-source analogs invented from the diagram row do not express the fusion fact"},
+        {"claim": "hybrid search uses Reciprocal Rank Fusion citing line 94", "reason": "evidence mismatch: line 94 is the unified-search row, a different feature"}
+      ]
+    },
+    {
+      "id": "R8-api-key",
+      "reference_facts": ["R8"],
+      "title": "graph build / graph search require XIAOMI_API_KEY before running",
+      "inputs": [
+        {
+          "label": "lines44-47-requirement",
+          "start_line": 44,
+          "end_line": 47,
+          "expect_quote_match": true,
+          "text": "Graph commands use the existing per-repo indexer SQLite database. Before\n`graph build` or `graph search`, set `XIAOMI_API_KEY` in the shell or in a\nGit-ignored `.env` file in the current working directory. The graph CLI uses\nthe GitHub `llm-sdk` Xiaomi client and its `MIMO_V2_5_PRO` model constant for"
+        },
+        {
+          "label": "lines45-46-partial-misquote (recorded budget-250 b3 evidence rejection)",
+          "start_line": 45,
+          "end_line": 46,
+          "expect_quote_match": false,
+          "text": "`graph search`, set `XIAOMI_API_KEY` in the shell or in a\nGit-ignored `.env` file in the current working directory."
+        }
+      ],
+      "must_accept": [
+        {
+          "claim": "graph build requires XIAOMI_API_KEY and graph search requires XIAOMI_API_KEY",
+          "endpoint_types": {"subject": "Command", "object": "Credential"},
+          "evidence": "AGENTS.md lines 44-47 (the 'Before' clause on line 44 is part of the requirement statement)"
+        }
+      ],
+      "must_reject": [
+        {"claim": "the lines45-46 partial citation accepted as evidence", "reason": "recorded failure (budget-250 b3): both graph-build and graph-search API-key claims were rejected only because the quoted lines dropped line 44's 'Before' clause; strict matching must reject it again rather than the fact being lost"},
+        {"claim": "daftprompt requires XIAOMI_API_KEY", "reason": "scope overreach: the requirement binds the graph build/search commands, not the whole application"},
+        {"claim": "graph build requires MIMO_V2_5_PRO as the credential", "reason": "entity confusion: MIMO_V2_5_PRO is the model constant used by the graph CLI (line 47), not the XIAOMI_API_KEY credential; a model requirement is a different fact than R8"}
+      ]
+    },
+    {
+      "id": "R9-degradation",
+      "reference_facts": ["R9"],
+      "title": "embedding-model (download/load) failure degrades search to FTS5-only",
+      "inputs": [
+        {
+          "label": "line135-conventions",
+          "start_line": 135,
+          "end_line": 135,
+          "expect_quote_match": true,
+          "text": "- **Failures degrade, never panic:** model download failure → FTS5-only search; non-git folder → substring search; parse error in a supported `.rs`, `.ts`, `.tsx`, `.js`, or `.jsx` file → index what is parseable, log, continue (one transaction per file so a bad file doesn't roll back the batch)."
+        },
+        {
+          "label": "line93-diagram-row (same fallback, diagram wording)",
+          "start_line": 93,
+          "end_line": 93,
+          "expect_quote_match": true,
+          "text": "Graceful degradation           ← embedding model load failure → FTS5-only; non-git folder → substring search"
+        }
+      ],
+      "must_accept": [
+        {
+          "claim": "search under embedding-model load/download failure degrades to FTS5-only search",
+          "endpoint_types": {"subject": "FailureMode", "object": "FallbackBehavior"},
+          "evidence": "AGENTS.md line 135 (or line 93 for the diagram wording)"
+        }
+      ],
+      "must_reject": [
+        {"claim": "FTS5 degrades_to FTS5-only search", "reason": "recorded recurring failure (7 valid-but-misleading claims across Epic 013 runs): the fallback target is not the subject; the subject is the search behavior under the failure condition"},
+        {"claim": "sqlite-vec degrades_to FTS", "reason": "recorded failure (budget-600): wrong subject AND wrong object"},
+        {"claim": "embedding model failure degrades to substring search", "reason": "conflation: substring search is the NON-GIT-FOLDER fallback (same line), a different condition; pairing it with the model failure is a wrong object"},
+        {"claim": "model download failure never recovered / is an error state", "reason": "the line states graceful degradation to FTS5-only search, not a failure of the app"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,146 @@
+# AGENTS.md
+
+Guide for AI coding agents (and humans) working on daftprompt. Read this before touching the code.
+
+## Project Overview
+
+daftprompt is a Rust app for exploring text repositories (git repos, document folders) via an infinite-canvas, card-based UI. It uses **akar** (a GPU UI component library on wgpu + glyphon + taffy) for rendering, combined with a git commit reader (gitoxide) and a hybrid search indexer (SQLite FTS5 + sqlite-vec embeddings).
+
+**Status:** early stage. APIs unstable, architecture evolving. Expect breaking changes.
+
+Primary references — read these:
+- `DEVELOP.md` — build/run commands, local path dependencies, project structure, architecture notes
+- `README.md` — user-facing feature list and controls
+- `epics/` — per-feature epic specs (001 UI prototype → 005 akar migration). Each epic has tasks, acceptance criteria, and file-change summaries.
+
+## Build, Run, Test
+
+```bash
+cargo check --workspace        # type-check everything (run after changes)
+cargo run                      # launch the GUI (default repo = current dir)
+cargo test --workspace         # all tests
+RUST_LOG=debug cargo run       # debug logging
+
+# CLI modes (no GUI):
+cargo run -- --repo . --index                       # index all sources (git log, code, documents)
+cargo run -- --repo . --reindex                     # drop + rebuild all indexes
+cargo run -- --repo . --search "fix crash"          # CLI unified hybrid search (all sources)
+cargo run -- --repo . --index-code                  # index Rust, TypeScript, TSX, JavaScript, and JSX source (tree-sitter)
+cargo run -- --repo . --reindex-code
+cargo run -- --repo . --search-code "render pipeline"
+cargo run -- --repo . --index-documents             # index documents (Markdown, plain text)
+cargo run -- --repo . --reindex-documents
+cargo run -- --repo . --search-documents "setup guide"
+cargo run -- --repo . --index-git-log               # index git log only
+cargo run -- --repo . --reindex-git-log
+cargo run -- --repo . --search-git-log "fix crash"
+cargo run -- -- --no-index                          # GUI but skip startup auto-index
+cargo run --bin graph -- build --repo . --source DEVELOP.md --source README.md --source AGENTS.md --source 'epics/*.md'
+cargo run --bin graph -- search --repo . "Can we search Python code?" --json
+```
+
+### Document provenance graph CLI
+
+Graph commands use the existing per-repo indexer SQLite database. Before
+`graph build` or `graph search`, set `XIAOMI_API_KEY` in the shell or in a
+Git-ignored `.env` file in the current working directory. The graph CLI uses
+the GitHub `llm-sdk` Xiaomi client and its `MIMO_V2_5_PRO` model constant for
+structured extraction and question interpretation. Failures
+must be reported as errors, with no silent code-search fallback. A build with
+zero supported claims is an error, even if every model extraction succeeds.
+
+For graph builds, every repeatable `--source` is an explicit authority
+declaration for a repo-relative readable UTF-8 Markdown/plain-text file or
+quoted glob. Selected working-tree text, including untracked files, is
+snapshotted. Globs are sorted and deduplicated, and a successful build's set is
+complete: omitted former sources are deactivated. The flag does not establish
+actual authorship. Indexed source code is not graph authority. Search citations
+must resolve against the stored snapshot and use `path:start-end` line ranges.
+`--json` returns `outcome`, `answer`, `citations`, `claim_ids`, and `build_id`.
+
+The documented workflow is:
+
+```bash
+cargo run --bin graph -- build --repo . \
+  --source DEVELOP.md --source README.md --source AGENTS.md \
+  --source 'epics/*.md'
+cargo run --bin graph -- search --repo . "Which languages can code search find?"
+cargo run --bin graph -- search --repo . "Can we search Python code?" --json
+cargo run --bin graph -- search --repo . "Can we search Lua code?" --json
+cargo run --bin graph -- search --repo . "Does the indexer use Tree-sitter?"
+```
+
+Search writes a separate UTF-8 JSON log atomically under
+`<repo>/.daftprompt/graph-search/` and refuses to write unless this path is
+Git-ignored in the selected repo. The record includes schema version, UTC
+timestamp, repository path, build ID, question, status, exact response,
+citations, claim IDs, and a concise error when applicable. It excludes API
+keys, request headers, full prompts, and full source documents. Local query
+logs may contain sensitive questions.
+
+There is no separate linter/formatter script — `cargo check --workspace` is the canonical correctness gate. Run it after every change.
+
+## Local Path Dependencies
+
+Several dependency crates have their full source cloned under `~/Projects/`. **Agents should read this local source when debugging internals, understanding behavior, or checking APIs** rather than guessing. Active path deps (in `Cargo.toml`): `akar-core`, `akar-layout`, `akar-components`, `akar-winit` (`~/Projects/akar/crates/akar-*`). `glam` and `gix` use crates.io versions; their local checkouts are for reference. Additional sources available locally: `wgpu`, `sqlite-vec`, `model2vec-rs`, `tree-sitter`, `xilem`, and others — see `DEVELOP.md` for the full local-clone table and the `[patch.crates-io]` pattern for switching between local and published versions.
+
+## Architecture (current)
+
+```
+Canvas > Container > Card      ← cards cannot exist directly on the canvas
+Per-repo SQLite DB             ← ~/Library/Caches/daftprompt/{repo_slug}.db (macOS)
+Hybrid search                  ← FTS5 (keyword) + sqlite-vec (vector KNN) via Reciprocal Rank Fusion
+Graceful degradation           ← embedding model load failure → FTS5-only; non-git folder → substring search
+Unified search                 ← Cmd+K searches all three sources (git log, code, documents) simultaneously
+```
+
+### Workspace layout
+
+```
+src/                    main binary (CLI + GUI)
+  main.rs               entry, CLI args (clap), event loop, indexer init
+  state.rs              AppState (canvas, drawer, containers, search, indexer handle)
+  git_log.rs            git commit reader (gitoxide) — read_log, read_log_all_branches
+  ui/
+    mod.rs              module tree (container, render)
+    adapter.rs          stable card key hashing (commit, code, document results)
+    container.rs        Container abstraction + CardData (business logic, keep across migrations)
+    render.rs           immediate-mode render functions (canvas, drawer, search, containers)
+crates/daftprompt-indexer/  standalone indexing + search crate
+  src/
+    lib.rs              Indexer public API (index_commits, index_code, index_documents,
+                        search_hybrid, search_code_hybrid, search_document_hybrid, search_all_hybrid)
+    db.rs               SQLite schema, FTS5, vec0/vec_code/vec_documents, queries
+    embed.rs            model2vec-rs wrapper
+    code.rs             language registry/router, shared Rust/TypeScript/TSX/JavaScript/JSX query constants
+    documents.rs        document discovery, chunking, incremental indexing
+    schema.sql          items, items_fts (external-content), vec_items, vec_code, vec_documents,
+                        code_files, document_files, triggers
+```
+
+### DB schema invariants (do not break)
+
+- `items` is the single source of truth for text; `items_fts` is an external-content FTS5 index kept in sync by AFTER INSERT/UPDATE/DELETE triggers — never write to `items_fts` directly.
+- `vec_items` holds commit vectors; `vec_code` holds code vectors; `vec_documents` holds document vectors. Partitioned per `source_type` for exact KNN isolation (no over-fetch-and-filter). See Epic 004 "Search Isolation" and Epic 007.
+- Per-repo DB files: one repo = one `.db` file, filename = slug of repo path. KNN is naturally scoped, no `repo_id` column.
+- Incremental indexing: `code_files` and `document_files` track `mtime` + `content_hash` (xxh3, **not** `DefaultHasher` — no stability guarantee across Rust versions). `touch` without content change must not re-index.
+- Code indexer invariants: one shared `code_files`/`vec_code` pipeline indexes Git-tracked `.rs`, `.ts`, `.tsx`, `.js`, and `.jsx` files; `crates/daftprompt-indexer/src/code.rs` owns extension-based language dispatch, and production CLI/UI paths must remain language-neutral. The shared discovery path also enforces a centralized generated/vendor/minified exclusion (`is_excluded_generated_path`: `node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, `coverage/`, and `*.min.js`) so tracked-but-generated files cannot leak into the index.
+
+When implementing, keep **rejected alternatives as comments in code** (Epic 004 Design Decisions #1–8) — they are deliberate tuning knobs, not dead code.
+
+## Conventions
+
+- **Comments:** the codebase deliberately retains commented-out rejected-alternatives and notes about future tuning. When adding to modules that have these (e.g. `db.rs`, `code.rs`), follow the pattern. Do not strip them. Otherwise follow the standard "no unnecessary comments" rule.
+- **Epic specs are the source of truth** for feature shape. If a task's acceptance criteria are not met, the task is not done. Mark task status in the epic file when completing a task.
+- **Failures degrade, never panic:** model download failure → FTS5-only search; non-git folder → substring search; parse error in a supported `.rs`, `.ts`, `.tsx`, `.js`, or `.jsx` file → index what is parseable, log, continue (one transaction per file so a bad file doesn't roll back the batch).
+- **Per-file transactions** for `index_code()`: a single bad file must not roll back the whole run.
+- **Stable hashing:** use `xxhash-rust` xxh3 for `content_hash`, never `std::collections::hash_map::DefaultHasher`.
+- **Tree-sitter registry/router:** `code.rs` compiles each configured Rust, TypeScript, TSX, JavaScript, and JSX query once at construction, selects the language by canonical extension, and reuses the compiled query for every file; never add language branching to production CLI/UI paths.
+- **Trait default methods** (with bodies) are indexed individually as `TraitMethod`; signature-only methods are folded into the parent `Trait` item. Identifiers carry the full canonical namespace (`file_path::module_path::TypeName::method`).
+
+- **UI is rendered by akar** (post-Epic 005): daftprompt owns application state + the winit window; akar owns the wgpu pipeline, draw list, input state, layout, and components. `src/ui/render.rs` is the immediate-mode render layer; the per-frame `Layout::new()` rebuilds the taffy tree every frame.
+- **Screenshot mode** (post-Task 8): `cargo run --release -- --screenshot <path> --exit` waits 5 s for the UI to settle, captures one frame via akar's `core.take_screenshot`, PNG-encodes the result, and exits. Useful for visual regression testing.
+
+## Epics
+
+Per-feature epic specs live in `epics/`. Each epic has tasks, acceptance criteria, and file-change summaries. Check the epic file for current status before starting work.

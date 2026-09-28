@@ -1,0 +1,63 @@
+{
+  "epic": "014-gliner25-graph-extraction-experiment",
+  "task": "Task 1: Freeze the comparison inputs and baseline",
+  "frozen_at_utc": "2026-09-28T09:35:22Z",
+  "purpose": "Immutable experiment inputs shared by every Epic 014 GLiNER2.5 run and by the Epic 013 LLM baseline re-score. All three GLiNER2.5 checkpoints (fastino/gliner2.5-small-v1, fastino/gliner2.5-base-v1, fastino/gliner2.5-multi-v1) and the baseline must be scored against exactly these files.",
+  "immutability_policy": {
+    "rule": "Files in this directory are frozen experiment inputs. Never edit, re-serialize, or overwrite them. All files are chmod 444 and directories 555. Derived artifacts (baseline re-scores, model runs, reports) must be written elsewhere: model runs to experiments/open-vocab-graph/gliner-runs/ (Task 3+), and any regenerated input requires a NEW versioned directory plus an explicit epic note; never in place.",
+    "verification": "Run `python3 check_inputs.py` (any Python >= 3.9, stdlib only) before relying on these inputs or inspecting new model output. It re-verifies every sha256 below, all source-line expectations (AGENTS.md line 7, reference-set evidence passages, test-input quotes), and seed content fingerprints.",
+    "hash_algorithms": "sha256 recorded as the primary integrity check and is what check_inputs.py re-verifies (Python stdlib). xxh3-64 (xxhash-rust 0.8, the same algorithm the Epic 013 harness used) is recorded as provenance cross-reference so these artifacts can be matched against Epic 013 run manifests; xxh3 values were computed at freeze time with a standalone xxhash-rust 0.8 helper, not re-computed by check_inputs.py."
+  },
+  "artifacts": {
+    "AGENTS.md": {
+      "role": "Source snapshot: the single text corpus every model extracts from. Character offsets and line citations must resolve against this copy.",
+      "sha256": "a15dbdb069bcb58542f49bab0775004e62e792b52939aecd2c77886f33567423",
+      "xxh3_64": "29d01e36b77b6d33",
+      "line_count": 146,
+      "origin": "Repo-root AGENTS.md at freeze time (git working tree, uncommitted state). Verified byte-identical (diff) to the snapshot stored by every Epic 013 extraction run: output/runs/budget-{150,250,400,600}/snapshots/AGENTS.md, and to the snapshot recorded in output/reference-set.json source.sha256.",
+      "line_7_expectation": "Line 7 (1-based) is the R1/R2/R3 evidence line: 'daftprompt is a Rust app for exploring text repositories (git repos, document folders) via an infinite-canvas, card-based UI. It uses **akar** (a GPU UI component library on wgpu + glyphon + taffy) for rendering, combined with a git commit reader (gitoxide) and a hybrid search indexer (SQLite FTS5 + sqlite-vec embeddings).' The fact 'daftprompt uses akar' is stated here (not as a literal substring; 'It uses **akar**' is the predicate phrase)."
+    },
+    "reference-set.json": {
+      "role": "Scoring ground truth recorded before any extraction run existed: 9 supported relations (R1-R9) with verbatim expected passages, 8 repeated entities with occurrence lines, 6 questions (Q5, Q6 expect 'unknown').",
+      "sha256": "be87f53756b06fc5b4563c6efbdfa1e84738e2fc28e54a258e0fb89d6e7b7597",
+      "xxh3_64": "7dad11a105072baf",
+      "origin": "Epic 013 Task 3 pre-extraction reference set (experiments/open-vocab-graph/output/reference-set.json, recorded_at 2026-09-28T07:04:12Z, recorded_before_any_extraction_run=true). Its content hash 7dad11a105072baf matches the reference_set_content_hash recorded in all four Epic 013 run manifests, and the copy is byte-identical to output/runs/budget-250/reference-set.json.",
+      "note": "Expected evidence texts are complete physical lines copied verbatim from the frozen AGENTS.md; the checker re-validates every one against the frozen snapshot."
+    },
+    "seed-vocabulary.json": {
+      "role": "The one chosen discovered seed. Task 2 converts THIS seed into the versioned GLiNER2.5 schema; the LLM baseline (budget-250) ran under exactly this seed.",
+      "sha256": "4be96db29417a9bef53dc022c72fe14ca1ea3343ebb6482d2ff0e0a6e82e68f6",
+      "xxh3_64": "c776d7e579d8aed5",
+      "content_fingerprint": {
+        "entity_kinds": ["Command", "Configuration", "Tool", "DataSource"],
+        "predicates": [
+          {"predicate": "requires", "subject_kind": "Command", "object_kind": "Configuration"},
+          {"predicate": "uses", "subject_kind": "Command", "object_kind": "Tool"},
+          {"predicate": "searches", "subject_kind": "Command", "object_kind": "DataSource"},
+          {"predicate": "provided_by", "subject_kind": "Configuration", "object_kind": "Tool"}
+        ],
+        "example_relations": 3
+      },
+      "origin": "Epic 013 Task 2 consolidation output (experiments/open-vocab-graph/output/seed-vocabulary.json): a second `open-vocab-graph consolidate` LLM pass (model mimo-v2.5-pro) over the re-sampled proposed vocabulary, recorded in output/consolidation-log.json with zero merges (input 4 entity kinds / 4 predicates, output identical; no_merge_rationale present). Consumed the same day by the Epic 013 budget-250 extraction run, whose run-manifest.json records seed_content_hash c776d7e579d8aed5 - exactly this file's xxh3-64, re-verified at freeze time.",
+      "why_this_seed": "Three Epic 013 runs (budgets 150/400/600) used an EARLIER, different seed (xxh3 9bd9ffae74304ce2: kinds CLI/Database/Model/SearchIndex/DataSource, uses=CLI->Database; it survives only as re-serialized copies inside those run directories, the top-level file having been overwritten by the later consolidation). The budget-250 run used THIS seed, under which the motivating Epic 014 failure occurred: `daftprompt uses akar` was emitted at AGENTS.md line 7 and rejected (model typed daftprompt as Tool while seed `uses` is Command->Tool, and its citation quoted only part of line 7 - see output/runs/budget-250/invalid-claims.json b1). Freezing this seed makes the LLM baseline and all GLiNER2.5 runs same-seed, and Task 2's schema repair (add Application kind + uses(Application, Tool) pair) is a controlled change against exactly the seed that failed."
+    }
+  },
+  "cross_checks_at_freeze_time": {
+    "frozen_AGENTS.md == budget-250 run snapshot": true,
+    "frozen_AGENTS.md == budget-150/400/600 run snapshots": true,
+    "frozen_reference-set.json == budget-250 run reference-set.json": true,
+    "frozen_seed xxh3 == budget-250 manifest seed_content_hash (c776d7e579d8aed5)": true,
+    "frozen_reference-set xxh3 == all four Epic 013 manifests reference_set_content_hash (7dad11a105072baf)": true,
+    "frozen_AGENTS.md xxh3 == all four Epic 013 manifests snapshot hash (29d01e36b77b6d33)": true,
+    "frozen_AGENTS.md sha256 == reference-set.json source.sha256 (a15dbdb0...)": true
+  },
+  "stale_result_warning": "Epic 013's report table column 'budget 250' (31 valid claims, seed 9bd9ffae74304ce2) does NOT describe output/runs/budget-250/ (40 valid claims, seed c776d7e579d8aed5). Never compare any Epic 014 result with that stale column. The actual folder is re-scored in llm-baseline/budget-250-rescore.json and is the only LLM baseline.",
+  "derived_artifacts": {
+    "comparison-plan.md": "Which LLM run is the baseline and how its schema differs from the GLiNER2.5 schema.",
+    "test-inputs.json": "Targeted positive/negative test inputs: the AGENTS.md line 7 case plus per-reference-fact (R1-R9) examples; every quote is re-verified against the frozen snapshot by check_inputs.py.",
+    "llm-baseline/budget-250-rescore.json": "Support/misleading re-score of the actual budget-250 folder (40 validated claims) under this frozen seed, with mechanical citation re-verification.",
+    "llm-baseline/budget-250-rescore.md": "Human-readable baseline scorecard (support counts, R1-R9 recovery, question coverage).",
+    "check_inputs.py": "Stdlib-only verifier described above; run it before looking at new model output.",
+    "check-inputs-run-2026-09-28.log": "Output of the pre-model-output verification run performed in Task 1."
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "entity_kinds": [
+    {
+      "kind": "Command",
+      "description": "A CLI command or subcommand (e.g., `graph build`, `graph search`, Cmd+K)."
+    },
+    {
+      "kind": "Configuration",
+      "description": "An environment variable, file, or setting required to run a command (e.g., XIAOMI_API_KEY, .env file)."
+    },
+    {
+      "kind": "Tool",
+      "description": "A software component, model, or library used by the system (e.g., LLM model, SQLite, FTS5)."
+    },
+    {
+      "kind": "DataSource",
+      "description": "A repository or type of content that can be searched (e.g., git log, code, documents)."
+    }
+  ],
+  "predicates": [
+    {
+      "predicate": "requires",
+      "description": "A command needs a configuration value or file to function.",
+      "subject_kind": "Command",
+      "object_kind": "Configuration"
+    },
+    {
+      "predicate": "uses",
+      "description": "A command or system component employs a tool, model, or library.",
+      "subject_kind": "Command",
+      "object_kind": "Tool"
+    },
+    {
+      "predicate": "searches",
+      "description": "A command queries one or more data sources to retrieve results.",
+      "subject_kind": "Command",
+      "object_kind": "DataSource"
+    },
+    {
+      "predicate": "provided_by",
+      "description": "A configuration value is supplied by a specific tool or environment.",
+      "subject_kind": "Configuration",
+      "object_kind": "Tool"
+    }
+  ],
+  "example_relations": [
+    {
+      "subject": {
+        "kind": "Command",
+        "name": "graph build"
+      },
+      "predicate": "requires",
+      "object": {
+        "kind": "Configuration",
+        "name": "XIAOMI_API_KEY"
+      }
+    },
+    {
+      "subject": {
+        "kind": "Command",
+        "name": "graph search"
+      },
+      "predicate": "uses",
+      "object": {
+        "kind": "Tool",
+        "name": "MIMO_V2_5_PRO model"
+      }
+    },
+    {
+      "subject": {
+        "kind": "Command",
+        "name": "Cmd+K unified search"
+      },
+      "predicate": "searches",
+      "object": {
+        "kind": "DataSource",
+        "name": "documents"
+      }
+    }
+  ]
+}
