@@ -4,6 +4,12 @@
   "experiment": "Epic 014 GLiNER2.5 graph extraction (Task 2)",
   "generator": "experiments/open-vocab-graph/schema/build.py",
   "deterministic": true,
+  "revision": {
+    "epic": "015-gliner25-small-recall-tuning-experiment",
+    "task": "Task 4",
+    "supersedes_artifact_sha256": "366fa7e59096df4cad61d2306a49b259cf7b5632260861a1c5cc9d5c76136bbc",
+    "note": "Epic 015 Task 4 revision of Epic 014's artifact (366fa7e5…): adds per-relation decision thresholds (0.25) for the five zero-emission predicates (serves_as, indexes, excludes, fuses, degrades_to) and rewrites their descriptions to echo the frozen snapshot's own phrasing. Differs from 366fa7e5… in exactly those fields (plus this revision block); kinds, pairs, seed, snapshot, and all other predicates are byte-identical."
+  },
   "seed": {
     "origin": "Epic 013 Task 2 consolidation output (zero-merge pass, mimo-v2.5-pro), frozen in Epic 014 Task 1",
     "path": "../frozen-inputs/seed-vocabulary.json",
@@ -273,8 +279,25 @@
     },
     {
       "predicate": "serves_as",
-      "description": "A command serves a named role or function in the development workflow.",
+      "description": "A command serves a named role or function in the development workflow — e.g. `cargo check --workspace` is the canonical correctness gate, run after every change.",
       "origin": "added_task2",
+      "description_origin": "revised_task4",
+      "description_previous": "A command serves a named role or function in the development workflow.",
+      "description_support": [
+        {
+          "source": "frozen-inputs/AGENTS.md",
+          "line": 81,
+          "quote": "There is no separate linter/formatter script — `cargo check --workspace` is the canonical correctness gate. Run it after every change.",
+          "reason": "revision echoes the source's 'is the canonical correctness gate' (R4)"
+        },
+        {
+          "source": "frozen-inputs/AGENTS.md",
+          "line": 81,
+          "quote": "There is no separate linter/formatter script — `cargo check --workspace` is the canonical correctness gate. Run it after every change.",
+          "reason": "revision echoes the source's 'Run it after every change' (R4)"
+        }
+      ],
+      "threshold": 0.25,
       "allowed_pairs": [
         {
           "subject_kind": "Command",
@@ -293,8 +316,25 @@
     },
     {
       "predicate": "indexes",
-      "description": "A subsystem reads and indexes a defined set of files or content.",
+      "description": "A subsystem reads and indexes a defined set of files — e.g. one shared `code_files`/`vec_code` pipeline indexes Git-tracked `.rs`, `.ts`, `.tsx`, `.js`, and `.jsx` files.",
       "origin": "added_task2",
+      "description_origin": "revised_task4",
+      "description_previous": "A subsystem reads and indexes a defined set of files or content.",
+      "description_support": [
+        {
+          "source": "frozen-inputs/AGENTS.md",
+          "line": 127,
+          "quote": "- Code indexer invariants: one shared `code_files`/`vec_code` pipeline indexes Git-tracked `.rs`, `.ts`, `.tsx`, `.js`, and `.jsx` files; `crates/daftprompt-indexer/src/code.rs` owns extension-based language dispatch, and production CLI/UI paths must remain language-neutral. The shared discovery path also enforces a centralized generated/vendor/minified exclusion (`is_excluded_generated_path`: `node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, `coverage/`, and `*.min.js`) so tracked-but-generated files cannot leak into the index.",
+          "reason": "revision echoes 'pipeline indexes Git-tracked .rs, .ts, .tsx, .js, and .jsx files' (R5)"
+        },
+        {
+          "source": "frozen-inputs/AGENTS.md",
+          "line": 127,
+          "quote": "- Code indexer invariants: one shared `code_files`/`vec_code` pipeline indexes Git-tracked `.rs`, `.ts`, `.tsx`, `.js`, and `.jsx` files; `crates/daftprompt-indexer/src/code.rs` owns extension-based language dispatch, and production CLI/UI paths must remain language-neutral. The shared discovery path also enforces a centralized generated/vendor/minified exclusion (`is_excluded_generated_path`: `node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, `coverage/`, and `*.min.js`) so tracked-but-generated files cannot leak into the index.",
+          "reason": "the indexed extension set quoted verbatim in the revision (R5)"
+        }
+      ],
+      "threshold": 0.25,
       "allowed_pairs": [
         {
           "subject_kind": "Subsystem",
@@ -313,8 +353,31 @@
     },
     {
       "predicate": "excludes",
-      "description": "A subsystem or process leaves a defined set of paths out of its operation.",
+      "description": "A subsystem or process leaves a defined set of paths out of its operation — e.g. the shared discovery path enforces a centralized generated/vendor/minified exclusion (`is_excluded_generated_path`: `node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, `coverage/`, and `*.min.js`) so tracked-but-generated files cannot leak into the index.",
       "origin": "added_task2",
+      "description_origin": "revised_task4",
+      "description_previous": "A subsystem or process leaves a defined set of paths out of its operation.",
+      "description_support": [
+        {
+          "source": "frozen-inputs/AGENTS.md",
+          "line": 127,
+          "quote": "- Code indexer invariants: one shared `code_files`/`vec_code` pipeline indexes Git-tracked `.rs`, `.ts`, `.tsx`, `.js`, and `.jsx` files; `crates/daftprompt-indexer/src/code.rs` owns extension-based language dispatch, and production CLI/UI paths must remain language-neutral. The shared discovery path also enforces a centralized generated/vendor/minified exclusion (`is_excluded_generated_path`: `node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, `coverage/`, and `*.min.js`) so tracked-but-generated files cannot leak into the index.",
+          "reason": "revision echoes 'a centralized generated/vendor/minified exclusion' (R6)"
+        },
+        {
+          "source": "frozen-inputs/AGENTS.md",
+          "line": 127,
+          "quote": "- Code indexer invariants: one shared `code_files`/`vec_code` pipeline indexes Git-tracked `.rs`, `.ts`, `.tsx`, `.js`, and `.jsx` files; `crates/daftprompt-indexer/src/code.rs` owns extension-based language dispatch, and production CLI/UI paths must remain language-neutral. The shared discovery path also enforces a centralized generated/vendor/minified exclusion (`is_excluded_generated_path`: `node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, `coverage/`, and `*.min.js`) so tracked-but-generated files cannot leak into the index.",
+          "reason": "the exclusion hook named verbatim in the revision (R6)"
+        },
+        {
+          "source": "frozen-inputs/AGENTS.md",
+          "line": 127,
+          "quote": "- Code indexer invariants: one shared `code_files`/`vec_code` pipeline indexes Git-tracked `.rs`, `.ts`, `.tsx`, `.js`, and `.jsx` files; `crates/daftprompt-indexer/src/code.rs` owns extension-based language dispatch, and production CLI/UI paths must remain language-neutral. The shared discovery path also enforces a centralized generated/vendor/minified exclusion (`is_excluded_generated_path`: `node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, `coverage/`, and `*.min.js`) so tracked-but-generated files cannot leak into the index.",
+          "reason": "revision echoes the source's exclusion rationale (R6)"
+        }
+      ],
+      "threshold": 0.25,
       "allowed_pairs": [
         {
           "subject_kind": "Subsystem",
@@ -333,8 +396,25 @@
     },
     {
       "predicate": "fuses",
-      "description": "A feature combines named technologies or signals through a stated fusion method.",
+      "description": "A feature combines named technologies or signals through a stated fusion method — e.g. hybrid search fuses FTS5 (keyword) + sqlite-vec (vector KNN) via Reciprocal Rank Fusion.",
       "origin": "added_task2",
+      "description_origin": "revised_task4",
+      "description_previous": "A feature combines named technologies or signals through a stated fusion method.",
+      "description_support": [
+        {
+          "source": "frozen-inputs/AGENTS.md",
+          "line": 92,
+          "quote": "Hybrid search                  ← FTS5 (keyword) + sqlite-vec (vector KNN) via Reciprocal Rank Fusion",
+          "reason": "the fused technology pair quoted verbatim in the revision (R7)"
+        },
+        {
+          "source": "frozen-inputs/AGENTS.md",
+          "line": 92,
+          "quote": "Hybrid search                  ← FTS5 (keyword) + sqlite-vec (vector KNN) via Reciprocal Rank Fusion",
+          "reason": "revision echoes 'via Reciprocal Rank Fusion' (R7)"
+        }
+      ],
+      "threshold": 0.25,
       "allowed_pairs": [
         {
           "subject_kind": "Feature",
@@ -353,8 +433,31 @@
     },
     {
       "predicate": "degrades_to",
-      "description": "Behavior under a stated failure condition falls back to a simpler mode.",
+      "description": "Under a stated failure condition behavior falls back to a simpler mode — e.g. model download failure degrades to FTS5-only search, a non-git folder degrades to substring search (failures degrade, never panic).",
       "origin": "added_task2",
+      "description_origin": "revised_task4",
+      "description_previous": "Behavior under a stated failure condition falls back to a simpler mode.",
+      "description_support": [
+        {
+          "source": "frozen-inputs/AGENTS.md",
+          "line": 135,
+          "quote": "- **Failures degrade, never panic:** model download failure → FTS5-only search; non-git folder → substring search; parse error in a supported `.rs`, `.ts`, `.tsx`, `.js`, or `.jsx` file → index what is parseable, log, continue (one transaction per file so a bad file doesn't roll back the batch).",
+          "reason": "revision echoes 'model download failure -> FTS5-only search' (R9)"
+        },
+        {
+          "source": "frozen-inputs/AGENTS.md",
+          "line": 135,
+          "quote": "- **Failures degrade, never panic:** model download failure → FTS5-only search; non-git folder → substring search; parse error in a supported `.rs`, `.ts`, `.tsx`, `.js`, or `.jsx` file → index what is parseable, log, continue (one transaction per file so a bad file doesn't roll back the batch).",
+          "reason": "revision echoes 'non-git folder -> substring search' (R9)"
+        },
+        {
+          "source": "frozen-inputs/AGENTS.md",
+          "line": 135,
+          "quote": "- **Failures degrade, never panic:** model download failure → FTS5-only search; non-git folder → substring search; parse error in a supported `.rs`, `.ts`, `.tsx`, `.js`, or `.jsx` file → index what is parseable, log, continue (one transaction per file so a bad file doesn't roll back the batch).",
+          "reason": "revision echoes the source's 'Failures degrade, never panic' framing (R9)"
+        }
+      ],
+      "threshold": 0.25,
       "allowed_pairs": [
         {
           "subject_kind": "FailureMode",
@@ -470,7 +573,7 @@
           "tail": [
             "ProcessRole"
           ],
-          "description": "A command serves a named role or function in the development workflow."
+          "description": "A command serves a named role or function in the development workflow — e.g. `cargo check --workspace` is the canonical correctness gate, run after every change."
         },
         "indexes": {
           "canonical_predicate": "indexes",
@@ -480,7 +583,7 @@
           "tail": [
             "FileExtensionSet"
           ],
-          "description": "A subsystem reads and indexes a defined set of files or content."
+          "description": "A subsystem reads and indexes a defined set of files — e.g. one shared `code_files`/`vec_code` pipeline indexes Git-tracked `.rs`, `.ts`, `.tsx`, `.js`, and `.jsx` files."
         },
         "excludes": {
           "canonical_predicate": "excludes",
@@ -490,7 +593,7 @@
           "tail": [
             "PathSet"
           ],
-          "description": "A subsystem or process leaves a defined set of paths out of its operation."
+          "description": "A subsystem or process leaves a defined set of paths out of its operation — e.g. the shared discovery path enforces a centralized generated/vendor/minified exclusion (`is_excluded_generated_path`: `node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, `coverage/`, and `*.min.js`) so tracked-but-generated files cannot leak into the index."
         },
         "fuses": {
           "canonical_predicate": "fuses",
@@ -500,7 +603,7 @@
           "tail": [
             "TechnologyPair"
           ],
-          "description": "A feature combines named technologies or signals through a stated fusion method."
+          "description": "A feature combines named technologies or signals through a stated fusion method — e.g. hybrid search fuses FTS5 (keyword) + sqlite-vec (vector KNN) via Reciprocal Rank Fusion."
         },
         "degrades_to": {
           "canonical_predicate": "degrades_to",
@@ -510,7 +613,7 @@
           "tail": [
             "FallbackBehavior"
           ],
-          "description": "Behavior under a stated failure condition falls back to a simpler mode."
+          "description": "Under a stated failure condition behavior falls back to a simpler mode — e.g. model download failure degrades to FTS5-only search, a non-git folder degrades to substring search (failures degrade, never panic)."
         }
       },
       "declared_constraints": []
@@ -554,7 +657,10 @@
     "R8's object kind hint 'credential' maps to the seed kind Configuration, whose description explicitly names XIAOMI_API_KEY; no separate Credential kind was added and requires(Command, Configuration) already covers the R8 shape.",
     "The seed's example_relations are copied into this artifact as schema sanity checks only (example_triples_role); they are never passed to the model as inference-time examples. No evidence exists that the local API supports relation examples at inference time.",
     "Reference-set kind_hints are informal lowercase hints; the schema kinds above are the authoritative typing vocabulary (mapping recorded in reference_kind_hints).",
-    "No JointIE graph constraints (unique_head, acyclic, ...) are declared: they apply per relation label, not per canonical predicate, so variant labels would fragment them. All pair-level rules are enforced by validate_claim."
+    "No JointIE graph constraints (unique_head, acyclic, ...) are declared: they apply per relation label, not per canonical predicate, so variant labels would fragment them. All pair-level rules are enforced by validate_claim.",
+    "Task 4 (Epic 015): per-relation decision threshold 0.25 is declared for exactly the five predicates no Epic 014 checkpoint ever emitted (serves_as, indexes, excludes, fuses, degrades_to) and forwarded verbatim to JointSchema.relation(threshold=...); every other predicate keeps gliner2's default 0.5 decision bar so the one recovered relation (uses, R1) stays comparable to the canonical run. 0.25 is the JointIE tutorial's own demonstrated per-relation threshold (tutorial/15-joint_ie.md). Rejected alternative: 0.1 — more recall headroom but re-opens the misleading-claim flood `base` showed under loose gating (101/127 misleading); rejected alternative: 0.4 — too timid to move predicates that currently emit nothing.",
+    "Task 4 (Epic 015): the same five predicates' descriptions are rewritten to echo the frozen snapshot's own phrasing — the vocabulary is pulled from each predicate's added_task2 support lines (Epic 014 Task 2 audit trail) — per the GLiNER2 tutorial's clear, specific, example-grounded relation-description guidance. The pre-rewrite text is kept as description_previous and the grounding lines as description_support (description_origin: revised_task4).",
+    "Task 4 (Epic 015): per-predicate thresholds live on predicates[].threshold and are propagated to every derived JointIE label by derive_joint_ie_labels at load time; the model_mapping.joint_ie.labels embed keeps its label-shape-only key set (canonical_predicate, head, tail, description) so Epic 014's loader-derivation equality holds unchanged. Thresholds are not JointIEConfig fields — the run manifest identifies them via the schema artifact sha256."
   ],
   "model_schema_limitations": [
     "gliner2 2.0.0 JointIE typed endpoints are a Cartesian product: joint_ie/constraints.py TypedEndpoints.allows accepts an edge iff the head type is in head_types AND the tail type is in tail_types, and joint_ie/candidates.py CandidateBuilder pairs role spans with itertools.product over head x tail types. A single relation cannot declare 'these pairs only'.",

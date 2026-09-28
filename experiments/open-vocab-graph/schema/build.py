@@ -37,6 +37,11 @@ SEED_SHA256 = "4be96db29417a9bef53dc022c72fe14ca1ea3343ebb6482d2ff0e0a6e82e68f6"
 SEED_XXH3 = "c776d7e579d8aed5"
 SNAPSHOT_SHA256 = "a15dbdb069bcb58542f49bab0775004e62e792b52939aecd2c77886f33567423"
 
+# Epic 014's checked-in artifact sha256. This Epic 015 Task 4 revision
+# supersedes it; the relationship is recorded in the artifact's `revision`
+# block and named by the task4 run label so run manifests carry the note.
+SUPERSEDED_ARTIFACT_SHA256 = "366fa7e59096df4cad61d2306a49b259cf7b5632260861a1c5cc9d5c76136bbc"
+
 SCHEMA_ID = "daftprompt-gliner25-experiment"
 SCHEMA_VERSION = "1.0.0"
 
@@ -182,6 +187,95 @@ PAIR_ADDITIONS = {
     ],
 }
 
+# Task 4 (Epic 015): per-relation decision thresholds and description rewrites
+# for the five predicates no Epic 014 checkpoint ever emitted a candidate for
+# (serves_as, indexes, excludes, fuses, degrades_to — 0 candidates across
+# small/base/multi).
+#
+# Threshold: 0.25 for exactly these five labels. gliner2's per-relation
+# decision bar defaults to 0.5 (RelationSpec.threshold=None falls back to 0.5
+# in joint_ie/candidates.py); 0.25 is the JointIE tutorial's own demonstrated
+# per-relation lowering (tutorial/15-joint_ie.md: .relation(..., threshold=0.25))
+# and shifts each label's centered role logits up enough to test whether the
+# five relations are merely gated, not absent.
+# Rejected alternative: 0.1 — more headroom but re-opens the misleading-claim
+# flood `base` showed under loose gating (101/127 misleading); rejected
+# alternative: 0.4 — too timid to move predicates that currently emit nothing.
+# Only the five zero-emission predicates are lowered; `uses` (the one relation
+# `small` recovers, R1) keeps the default so the change isolates the silent
+# relations and stays comparable to the canonical run.
+#
+# Descriptions: rewritten to echo the frozen snapshot's own phrasing — the
+# vocabulary is pulled from the same `added_task2` support lines recorded on
+# each predicate's allowed pair (Epic 014 Task 2 audit trail) — per the
+# GLiNER2 tutorial's guidance to give relations clear, specific,
+# example-grounded descriptions (tutorial/6 "Provide Descriptions for
+# Ambiguous Relations" + "Clear and specific"). The pre-rewrite text is kept
+# as `description_previous`; the grounding lines are recorded in
+# `description_support` with Task 2's (line, excerpt, reason) shape.
+# Rejected alternative: also rewriting entity-kind descriptions — out of
+# scope; Epic 014 found entity recall already 6/8 and schema gaps 0.
+#
+# predicate -> (threshold, revised description, [(line, excerpt, reason), ...])
+TASK4_PREDICATE_TUNING = {
+    "serves_as": (
+        0.25,
+        "A command serves a named role or function in the development "
+        "workflow — e.g. `cargo check --workspace` is the canonical "
+        "correctness gate, run after every change.",
+        [
+            (81, "canonical correctness gate", "revision echoes the source's 'is the canonical correctness gate' (R4)"),
+            (81, "Run it after every change", "revision echoes the source's 'Run it after every change' (R4)"),
+        ],
+    ),
+    "indexes": (
+        0.25,
+        "A subsystem reads and indexes a defined set of files — e.g. one "
+        "shared `code_files`/`vec_code` pipeline indexes Git-tracked `.rs`, "
+        "`.ts`, `.tsx`, `.js`, and `.jsx` files.",
+        [
+            (127, "pipeline indexes Git-tracked", "revision echoes 'pipeline indexes Git-tracked .rs, .ts, .tsx, .js, and .jsx files' (R5)"),
+            (127, "`.rs`, `.ts`, `.tsx`, `.js`, and `.jsx` files", "the indexed extension set quoted verbatim in the revision (R5)"),
+        ],
+    ),
+    "excludes": (
+        0.25,
+        "A subsystem or process leaves a defined set of paths out of its "
+        "operation — e.g. the shared discovery path enforces a centralized "
+        "generated/vendor/minified exclusion (`is_excluded_generated_path`: "
+        "`node_modules/`, `vendor/`, `dist/`, `build/`, `.next/`, "
+        "`coverage/`, and `*.min.js`) so tracked-but-generated files cannot "
+        "leak into the index.",
+        [
+            (127, "centralized generated/vendor/minified exclusion", "revision echoes 'a centralized generated/vendor/minified exclusion' (R6)"),
+            (127, "is_excluded_generated_path", "the exclusion hook named verbatim in the revision (R6)"),
+            (127, "so tracked-but-generated files cannot leak into the index", "revision echoes the source's exclusion rationale (R6)"),
+        ],
+    ),
+    "fuses": (
+        0.25,
+        "A feature combines named technologies or signals through a stated "
+        "fusion method — e.g. hybrid search fuses FTS5 (keyword) + sqlite-vec "
+        "(vector KNN) via Reciprocal Rank Fusion.",
+        [
+            (92, "FTS5 (keyword) + sqlite-vec (vector KNN)", "the fused technology pair quoted verbatim in the revision (R7)"),
+            (92, "via Reciprocal Rank Fusion", "revision echoes 'via Reciprocal Rank Fusion' (R7)"),
+        ],
+    ),
+    "degrades_to": (
+        0.25,
+        "Under a stated failure condition behavior falls back to a simpler "
+        "mode — e.g. model download failure degrades to FTS5-only search, a "
+        "non-git folder degrades to substring search (failures degrade, "
+        "never panic).",
+        [
+            (135, "model download failure", "revision echoes 'model download failure -> FTS5-only search' (R9)"),
+            (135, "non-git folder", "revision echoes 'non-git folder -> substring search' (R9)"),
+            (135, "Failures degrade, never panic", "revision echoes the source's 'Failures degrade, never panic' framing (R9)"),
+        ],
+    ),
+}
+
 REFERENCE_KIND_HINTS = {
     "application": "Application",
     "library": "Tool",
@@ -229,6 +323,31 @@ DECISIONS = [
     "they apply per relation label, not per canonical predicate, so variant "
     "labels would fragment them. All pair-level rules are enforced by "
     "validate_claim.",
+    "Task 4 (Epic 015): per-relation decision threshold 0.25 is declared for "
+    "exactly the five predicates no Epic 014 checkpoint ever emitted "
+    "(serves_as, indexes, excludes, fuses, degrades_to) and forwarded verbatim "
+    "to JointSchema.relation(threshold=...); every other predicate keeps "
+    "gliner2's default 0.5 decision bar so the one recovered relation (uses, "
+    "R1) stays comparable to the canonical run. 0.25 is the JointIE tutorial's "
+    "own demonstrated per-relation threshold (tutorial/15-joint_ie.md). "
+    "Rejected alternative: 0.1 — more recall headroom but re-opens the "
+    "misleading-claim flood `base` showed under loose gating (101/127 "
+    "misleading); rejected alternative: 0.4 — too timid to move predicates "
+    "that currently emit nothing.",
+    "Task 4 (Epic 015): the same five predicates' descriptions are rewritten "
+    "to echo the frozen snapshot's own phrasing — the vocabulary is pulled "
+    "from each predicate's added_task2 support lines (Epic 014 Task 2 audit "
+    "trail) — per the GLiNER2 tutorial's clear, specific, example-grounded "
+    "relation-description guidance. The pre-rewrite text is kept as "
+    "description_previous and the grounding lines as description_support "
+    "(description_origin: revised_task4).",
+    "Task 4 (Epic 015): per-predicate thresholds live on predicates[]."
+    "threshold and are propagated to every derived JointIE label by "
+    "derive_joint_ie_labels at load time; the model_mapping.joint_ie.labels "
+    "embed keeps its label-shape-only key set (canonical_predicate, head, "
+    "tail, description) so Epic 014's loader-derivation equality holds "
+    "unchanged. Thresholds are not JointIEConfig fields — the run manifest "
+    "identifies them via the schema artifact sha256.",
 ]
 
 MODEL_LIMITATIONS = [
@@ -344,21 +463,31 @@ def build_schema(
     for name, description, subject, obj, support in PREDICATE_ADDITIONS:
         if any(p["predicate"] == name for p in predicates):
             raise ValueError(f"predicate addition {name!r} collides with an existing predicate")
-        predicates.append(
+        entry = {
+            "predicate": name,
+            "description": description,
+            "origin": "added_task2",
+        }
+        tuning = TASK4_PREDICATE_TUNING.get(name)
+        if tuning is not None:
+            threshold, revised_description, revision_support = tuning
+            entry["description"] = revised_description
+            entry["description_origin"] = "revised_task4"
+            entry["description_previous"] = description
+            entry["description_support"] = _support(revision_support, snapshot_lines)
+            entry["threshold"] = threshold
+        entry["allowed_pairs"] = [
             {
-                "predicate": name,
-                "description": description,
+                "subject_kind": subject,
+                "object_kind": obj,
                 "origin": "added_task2",
-                "allowed_pairs": [
-                    {
-                        "subject_kind": subject,
-                        "object_kind": obj,
-                        "origin": "added_task2",
-                        "support": _support(support, snapshot_lines),
-                    }
-                ],
+                "support": _support(support, snapshot_lines),
             }
-        )
+        ]
+        predicates.append(entry)
+    missing_tuning = set(TASK4_PREDICATE_TUNING) - {p["predicate"] for p in predicates}
+    if missing_tuning:
+        raise ValueError(f"Task 4 tuning targets unknown predicates: {sorted(missing_tuning)}")
 
     schema = core.ExperimentSchema(
         {
@@ -385,6 +514,18 @@ def build_schema(
         "experiment": "Epic 014 GLiNER2.5 graph extraction (Task 2)",
         "generator": "experiments/open-vocab-graph/schema/build.py",
         "deterministic": True,
+        "revision": {
+            "epic": "015-gliner25-small-recall-tuning-experiment",
+            "task": "Task 4",
+            "supersedes_artifact_sha256": SUPERSEDED_ARTIFACT_SHA256,
+            "note": "Epic 015 Task 4 revision of Epic 014's artifact "
+            "(366fa7e5…): adds per-relation decision thresholds (0.25) for the "
+            "five zero-emission predicates (serves_as, indexes, excludes, "
+            "fuses, degrades_to) and rewrites their descriptions to echo the "
+            "frozen snapshot's own phrasing. Differs from 366fa7e5… in exactly "
+            "those fields (plus this revision block); kinds, pairs, seed, "
+            "snapshot, and all other predicates are byte-identical.",
+        },
         "seed": {
             "origin": "Epic 013 Task 2 consolidation output (zero-merge pass, "
             "mimo-v2.5-pro), frozen in Epic 014 Task 1",

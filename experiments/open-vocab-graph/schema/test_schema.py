@@ -223,6 +223,62 @@ def test_joint_schema_builds_offline():
     assert uses2.head == ("Command",) and uses2.tail == ("Tool",)
 
 
+def test_per_relation_thresholds_pass_to_joint_schema():
+    """Task 4: the five zero-emission predicates carry a lowered decision
+    threshold that `to_joint_schema` forwards to `JointSchema.relation(...)`;
+    everything else keeps gliner2's default bar. No model download."""
+    schema = core.load_schema()
+    tuned = ["serves_as", "indexes", "excludes", "fuses", "degrades_to"]
+    for name in tuned:
+        pred = schema.predicates[name]
+        assert pred.threshold == 0.25, f"{name} must carry the Task 4 threshold"
+    assert schema.predicates["uses"].threshold is None, (
+        "untuned predicates must keep the gliner2 default (None = 0.5 bar)"
+    )
+    assert schema.predicates["requires"].threshold is None
+
+    labels = schema.joint_ie_labels()
+    for name in tuned:
+        assert labels[name].threshold == 0.25, f"label {name} must inherit its predicate's threshold"
+
+    joint = core.to_joint_schema(schema)
+    specs = {s.name: s for s in joint.relation_specs}
+    for name in tuned:
+        assert getattr(specs[name], "threshold", None) == 0.25, (
+            f"built JointSchema relation {name} must carry threshold 0.25, "
+            f"got {getattr(specs[name], 'threshold', None)!r}"
+        )
+    assert getattr(specs["uses"], "threshold", None) is None
+    assert getattr(specs["uses__2"], "threshold", None) is None
+
+
+def test_task4_description_revisions_are_grounded():
+    """Task 4: the five rewritten descriptions keep origin-style provenance —
+    the pre-rewrite text plus the snapshot lines the revision was grounded
+    against, each quote the exact frozen line."""
+    schema = core.load_schema()
+    snapshot_lines = SNAPSHOT_PATH.read_text(encoding="utf-8").splitlines()
+    tuned = ["serves_as", "indexes", "excludes", "fuses", "degrades_to"]
+    for name in tuned:
+        pred = schema.predicates[name]
+        assert pred.description_origin == "revised_task4", name
+        assert pred.description_previous, f"{name} must keep the pre-rewrite description"
+        assert pred.description != pred.description_previous, name
+        assert pred.description_support, f"{name} must record grounding lines"
+        for support in pred.description_support:
+            assert support.source == "frozen-inputs/AGENTS.md"
+            assert 1 <= support.line <= len(snapshot_lines)
+            assert support.quote == snapshot_lines[support.line - 1], (
+                f"{name} description support on line {support.line} must be the "
+                "exact snapshot line"
+            )
+            assert support.reason.strip()
+    # untouched predicates keep their Task 2 provenance only
+    assert schema.predicates["uses"].description_origin is None
+    assert schema.predicates["uses"].description_previous is None
+    assert schema.predicates["uses"].description_support == ()
+
+
 def test_independent_relation_labels():
     schema = core.load_schema()
     labels = schema.independent_labels()

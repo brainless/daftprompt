@@ -47,6 +47,16 @@ class Predicate:
     description: str
     origin: str
     allowed_pairs: tuple[AllowedPair, ...]
+    # Task 4 (Epic 015) per-relation decision threshold, forwarded verbatim to
+    # JointSchema.relation(threshold=...). None means "gliner2 default" (the
+    # 0.5 decision bar), not "0".
+    threshold: Optional[float] = None
+    # Task 4 description-rewrite provenance, recorded the same way Task 2
+    # records additions: an origin tag plus verbatim source-line support.
+    # description_previous keeps the pre-rewrite text for the audit trail.
+    description_origin: Optional[str] = None  # e.g. "revised_task4"
+    description_previous: Optional[str] = None
+    description_support: tuple[Support, ...] = ()
 
     def pair_is_allowed(self, subject_kind: str, object_kind: str) -> bool:
         return any(
@@ -64,6 +74,7 @@ class JointIELabel:
     head: tuple[str, ...]
     tail: tuple[str, ...]
     description: str
+    threshold: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +125,10 @@ class ExperimentSchema:
                 description=raw["description"],
                 origin=raw["origin"],
                 allowed_pairs=pairs,
+                threshold=raw.get("threshold"),
+                description_origin=raw.get("description_origin"),
+                description_previous=raw.get("description_previous"),
+                description_support=_parse_support(raw.get("description_support", ())),
             )
 
     @property
@@ -168,6 +183,10 @@ def derive_joint_ie_labels(predicates: Mapping[str, Predicate]) -> dict[str, Joi
     and the validator (validate_claim) enforces the canonical declared pairs,
     never the label-level product.
 
+    A predicate's per-relation threshold (Task 4) rides onto every label
+    derived from it: JointSchema.relation's `threshold` is per relation label,
+    and a multi-shape predicate's labels all decode the same predicate.
+
     Rejected alternative: one variant label per allowed pair. It is lossless
     too, but it scatters one predicate over more labels than necessary and
     fragments per-label model calibration; grouping by subject kind is the
@@ -185,6 +204,7 @@ def derive_joint_ie_labels(predicates: Mapping[str, Predicate]) -> dict[str, Joi
                 head=tuple(heads),
                 tail=tuple(tails),
                 description=pred.description,
+                threshold=pred.threshold,
             )
             continue
         groups: dict[str, list[tuple[str, str]]] = {}
@@ -208,6 +228,7 @@ def derive_joint_ie_labels(predicates: Mapping[str, Predicate]) -> dict[str, Joi
                 head=(head,),
                 tail=tuple(group_tails),
                 description=description,
+                threshold=pred.threshold,
             )
     return labels
 
@@ -285,6 +306,14 @@ def to_joint_schema(schema: ExperimentSchema):
     """Build a real gliner2.joint_ie.JointSchema from the artifact.
 
     Imports gliner2 lazily; importing builds no model and needs no download.
+    Per-relation thresholds (Task 4) are forwarded verbatim to
+    `JointSchema.relation(threshold=...)`; a label with no declared threshold
+    keeps gliner2's default decision bar.
+
+    Rejected alternative: also forward per-relation `candidate_threshold`.
+    Epic 015 Task 1 swept the global role/candidate gates down 50x with zero
+    output change, so candidate gating does not bind on this snapshot; only
+    the decision threshold is tuned here.
     """
     from gliner2.joint_ie import JointSchema
 
@@ -296,6 +325,7 @@ def to_joint_schema(schema: ExperimentSchema):
             list(spec.head),
             list(spec.tail),
             description=spec.description,
+            threshold=spec.threshold,
         )
     return joint
 
