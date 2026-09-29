@@ -31,14 +31,15 @@ touching `schema/core.py` and regenerating `schema/gliner25-schema.json`.
 Because `small` is cheap (17-113 s wall, ~1 GB peak RSS in Epic 014's runs),
 this epic can afford a genuine sweep rather than a single tuned run.
 
-**Status:** In progress — Tasks 1-4 done (threshold/top-k sweep found no
-improvement; greedy vs. beam found no recall/misleading change and no speed
-win; `independent` variant emitted zero relation candidates and recovered
-0/9 — stop condition not met, no threshold sweep run; Task 4's schema change
-— per-relation thresholds 0.25 + snapshot-echoing descriptions for the five
-zero-emission predicates, artifact `9e687ed8…` superseding `366fa7e5…` —
-emitted none of those five predicates and left output JSON-equal to canonical
-at 1/9, 0% misleading). Task 5 pending.
+**Status:** Done (2026-09-28) — all five tasks complete. No lever (threshold/
+top-k sweep, optimizer, `independent` variant, schema change) improved on
+Epic 014's canonical `small` run (1/9 recovery, 0% misleading); the
+`independent` stop condition was not met (0/9). Decision (Task 5,
+`experiments/open-vocab-graph/REPORT-small-tuning.md`): decoding/schema tuning
+has a ceiling here — adopt nothing, keep the canonical config as the `small`
+baseline, and move next to a different approach (fine-tuning, a different
+model family, or LLM relation extraction), with the LLM-or-human entailment
+review gate retained in any pipeline.
 
 ## Goals
 
@@ -562,7 +563,15 @@ dominates the differences (Task 1 saw 1038-1349 MB across identical runs).
 
 ### Task 5: Decide and report
 
-**Status:** Not started.
+**Status:** Done (2026-09-28). Report written to
+`experiments/open-vocab-graph/REPORT-small-tuning.md`. **No configuration
+improved on the canonical baseline** (1/9, 0% misleading) — the best
+configuration is the baseline itself (untuned defaults, `beam`, schema
+`366fa7e5…`, represented warm-cache by `20260928T130515Z-beam`). Decision:
+**option (c) — decoding/schema tuning has a ceiling here**; adopt nothing as a
+new baseline and move next to a different approach (fine-tuning `small` on
+relation examples, a different model family, or LLM relation extraction), with
+the LLM-or-human entailment review gate retained in any pipeline.
 
 **Depends on:** Tasks 1-4.
 
@@ -580,16 +589,26 @@ to a saved run artifact, and update this epic's task statuses.
 
 **Acceptance criteria:**
 
-- [ ] A concise report exists at
+- [x] A concise report exists at
       `experiments/open-vocab-graph/REPORT-small-tuning.md`, links every
       metric to a saved run artifact, and does not compare across a changed
       schema without labeling it as such (mirroring Epic 014 Task 8's
-      cross-schema labeling discipline).
-- [ ] The recommendation names a specific configuration (or explicitly
+      cross-schema labeling discipline). (Report written: every table row
+      carries its run id and every metric cites
+      `manifest.json`/`summary.json`/`relations.json`/`scoring/`; the Task 4
+      row is labeled **cross-schema** (`9e687ed8…` vs `366fa7e5…`) in §0 and
+      again in the results table.)
+- [x] The recommendation names a specific configuration (or explicitly
       states none improved on the baseline) and gives the reasoning in terms
-      of recall vs. misleading rate vs. cost, not recall alone.
-- [ ] This epic's task statuses and overall status are updated to reflect
-      what was actually run.
+      of recall vs. misleading rate vs. cost, not recall alone. (§3 states
+      explicitly that none improved on the baseline and names the canonical
+      config as the best found; trade-off given on all three axes — recall
+      1/9 max vs 0/9 independent, misleading 0% earned vs vacuous, cost
+      equivalent or worse for every lever; §4 recommends option (c) with the
+      Task 3 stop-condition outcome (0/9, not met) in the reasoning.)
+- [x] This epic's task statuses and overall status are updated to reflect
+      what was actually run. (Task 5 status Done with decision summary;
+      overall `**Status:**` updated to Done with the final decision.)
 
 ## Intended file changes
 
