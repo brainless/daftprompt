@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/daftprompt-indexer", "experiments/open-vocab-graph"]
+members = [".", "crates/daftprompt-indexer"]
 
 [package]
 name = "daftprompt"

@@ -1,5 +1,7 @@
 # Epic 014: GLiNER2.5 Graph Extraction Experiment
 
+> **Status: Superseded / code removed (2026-10-10).** The experiment was completed, but its code, reports, and frozen inputs were deleted from the working tree ahead of a new approach. They remain in git history (`git show b351721`). Task statuses below describe the state when the epic was done, not what is in the repo now.
+
 ## Overview
 
 Epic 013 tested LLM-discovered entity kinds and predicates followed by sequential

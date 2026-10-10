@@ -1,5 +1,7 @@
 # Epic 015: GLiNER2.5-small Recall Tuning Experiment
 
+> **Status: Superseded / code removed (2026-10-10).** The experiment was completed, but its code, reports, and frozen inputs were deleted from the working tree ahead of a new approach. They remain in git history (`git show cf7845b / 9dbcffa`). Task statuses below describe the state when the epic was done, not what is in the repo now.
+
 ## Overview
 
 Epic 014 compared three GLiNER2.5 JointIE checkpoints on the frozen AGENTS.md

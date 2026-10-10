@@ -26,14 +26,6 @@ Thumbs.db
 # Local credentials
 .env
 
-# Repo-local Python virtualenv (Epic 014 GLiNER2.5 experiment)
-/.venv/
-
-# Experiment output folders and Python bytecode
-output/
-__pycache__/
-*.pyc
-
 # Local provenance graph search history
 /.daftprompt/graph-search/
 

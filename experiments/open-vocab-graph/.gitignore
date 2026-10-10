@@ -1,6 +1,0 @@
-# Epic 013 LLM run artifacts (never overwrite)
-output/
-
-# Epic 014 GLiNER2.5 run outputs (Task 3+) and downloaded-checkpoint caches
-gliner-runs/
-.model-cache/

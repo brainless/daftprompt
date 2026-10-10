@@ -1,5 +1,7 @@
 # Epic 013: Open-Vocabulary Graph Schema Experiment
 
+> **Status: Superseded / code removed (2026-10-10).** The experiment was completed, but its code, reports, and frozen inputs (`experiments/open-vocab-graph/`) were deleted from the working tree, along with Epics 014 and 015, ahead of a new approach. They remain in git history (`git show cebe59c`). Task statuses below describe the state when the epic was done, not what is in the repo now.
+
 ## Introduction
 
 Epic 011 introduced an experimental document provenance graph CLI (`graph
