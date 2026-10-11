@@ -31,3 +31,6 @@ Thumbs.db
 
 # Coding agents
 .commandcode
+
+# Agent chat run logs and per-project state (Epic 016)
+/.projects/
