@@ -1,0 +1,21 @@
+{
+  "format_version": 1,
+  "id": "prose-multiline-question",
+  "category": "prose",
+  "note": "A question that wraps across two lines, testing multiline spans.",
+  "text": "We are considering a new cache layer between the API and Redis.\nIt would need an owner before we can schedule the work.\n\nShould we build it this quarter, or wait for the rate-limit\nwork to land first?\n",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 121,
+      "end": 200,
+      "quote": "Should we build it this quarter, or wait for the rate-limit\nwork to land first?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    }
+  ],
+  "answer_links": []
+}

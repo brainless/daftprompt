@@ -1,0 +1,21 @@
+{
+  "format_version": 1,
+  "id": "prose-rhetorical",
+  "category": "prose",
+  "note": "A rhetorical question stays unlabelled; the genuine question is annotated.",
+  "text": "The release branch was cut on Friday and the tests are green.\n\nWho cares about the old dashboard? Nobody uses it.\nShould we retire it in the next release?\n",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 114,
+      "end": 154,
+      "quote": "Should we retire it in the next release?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    }
+  ],
+  "answer_links": []
+}

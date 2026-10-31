@@ -1,0 +1,33 @@
+{
+  "format_version": 1,
+  "id": "json-question-answer",
+  "category": "json",
+  "note": "JSON text whose question and answer values are linked; the @alex mention in a note is incidental.",
+  "text": "{\n  \"status\": \"needs_input\",\n  \"question\": \"Should the parser retry on invalid output?\",\n  \"answer\": \"Yes, up to three attempts.\",\n  \"note\": \"@alex raised the retry budget last week.\"\n}\n",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 44,
+      "end": 86,
+      "quote": "Should the parser retry on invalid output?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "start": 102,
+      "end": 128,
+      "quote": "Yes, up to three attempts.",
+      "labels": []
+    }
+  ],
+  "answer_links": [
+    {
+      "from": "e2",
+      "to": "e1"
+    }
+  ]
+}

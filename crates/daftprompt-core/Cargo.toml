@@ -1,0 +1,43 @@
+[package]
+name = "daftprompt-core"
+description = "Shared parsing, validation, agent, and graph-construction library."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+daftprompt-types.workspace = true
+rig.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+# Only the live evaluation binary loads `.env`; see the `live-eval` feature.
+dotenvy = { workspace = true, optional = true }
+# Only the timer is used, for per-attempt timeouts. The library stays
+# runtime-agnostic otherwise.
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+schemars.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+
+[[bin]]
+name = "evaluate-scribe"
+path = "src/bin/evaluate_scribe.rs"
+# The evaluation binary is opt-in: ordinary builds and tests do not compile a
+# provider transport or require credentials.
+required-features = ["live-eval"]
+
+[features]
+default = []
+# Enables the live Scribe evaluation binary: the provider transport and `.env`
+# loading (requiring `OPENAI_API_KEY` or `NEURALWATT_API_KEY` at run time). The Tokio runtime features come
+# from the workspace dependency.
+live-eval = ["rig/reqwest", "rig/rustls", "dep:dotenvy"]
+
+[lints.cargo]
+# The architecture fixes this dependency: Rig is the agent framework used by
+# Scribe in epic 001, task 2. Keep the direction in place from the start.
+unused_dependencies = "allow"

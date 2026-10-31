@@ -1,0 +1,25 @@
+{
+  "format_version": 1,
+  "id": "code-todo-question",
+  "category": "code",
+  "note": "A question in a code comment; a quoted rhetorical question in another comment is not actionable.",
+  "source": {
+    "kind": "file",
+    "reference": "src/cache.rs"
+  },
+  "text": "fn cache_key(user: &User) -> String {\n    // should the key include the tenant id?\n    format!(\"user:{}\", user.id)\n}\n\nfn rate_limit() {\n    // \"Who cares?\" is what the old comment said.\n    todo!()\n}\n",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 42,
+      "end": 82,
+      "quote": "// should the key include the tenant id?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    }
+  ],
+  "answer_links": []
+}

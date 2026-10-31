@@ -1,0 +1,37 @@
+{
+  "format_version": 1,
+  "id": "document-adr",
+  "category": "document",
+  "note": "A pasted document whose open question is answered further down.",
+  "source": {
+    "kind": "file",
+    "reference": "docs/adr/014-token-cache.md"
+  },
+  "text": "# ADR 014: token cache\n\n## Decision\n\nWe will cache parsed tokens in memory.\n\n## Open question\n\nShould the cache be shared across workers?\n\n## Answer\n\nNo. Each worker keeps its own cache; sharing adds a network hop.\n",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 95,
+      "end": 137,
+      "quote": "Should the cache be shared across workers?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "start": 150,
+      "end": 214,
+      "quote": "No. Each worker keeps its own cache; sharing adds a network hop.",
+      "labels": []
+    }
+  ],
+  "answer_links": [
+    {
+      "from": "e2",
+      "to": "e1"
+    }
+  ]
+}

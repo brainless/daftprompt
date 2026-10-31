@@ -1,0 +1,37 @@
+{
+  "format_version": 1,
+  "id": "email-crlf-answer",
+  "category": "email",
+  "note": "CRLF email text with a locally answered question; byte ranges preserve the carriage returns.",
+  "source": {
+    "kind": "email",
+    "author": "Sam"
+  },
+  "text": "Hi team,\r\n\r\nShould we ship the cache on Friday?\r\n\r\nYes, ship it after the migration.\r\n",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 12,
+      "end": 47,
+      "quote": "Should we ship the cache on Friday?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "start": 51,
+      "end": 84,
+      "quote": "Yes, ship it after the migration.",
+      "labels": []
+    }
+  ],
+  "answer_links": [
+    {
+      "from": "e2",
+      "to": "e1"
+    }
+  ]
+}

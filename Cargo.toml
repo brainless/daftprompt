@@ -1,0 +1,63 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Rig's floor; the workspace also builds on the pinned nightly in
+# rust-toolchain.toml (see docs/development.md).
+rust-version = "1.95.0"
+publish = false
+
+[workspace.dependencies]
+# Workspace crates.
+daftprompt-types = { path = "crates/daftprompt-types" }
+daftprompt-core = { path = "crates/daftprompt-core" }
+
+# Serialization contracts (`daftprompt-types` stays limited to these two).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+
+# Shared library.
+thiserror = "2"
+sha2 = "0.10"
+rig = { git = "https://github.com/0xPlaygrounds/rig.git", rev = "7dfd8a4229a9d89af159489687cb14b404b2871d", default-features = false, features = [
+  "agent",
+] }
+
+# Loads a local `.env` at startup of the API and the live evaluation binary.
+dotenvy = "0.15"
+
+# HTTP service.
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+http-body-util = "0.1"
+# Request/response plumbing for the API tests.
+tower = { version = "0.5", features = ["util"] }
+
+# Native GUI.
+akar-core = { git = "https://github.com/brainless/akar.git", rev = "969079c2e3d14d1843c5e7ba2dccfb4c93c06459" }
+akar-layout = { git = "https://github.com/brainless/akar.git", rev = "969079c2e3d14d1843c5e7ba2dccfb4c93c06459" }
+akar-components = { git = "https://github.com/brainless/akar.git", rev = "969079c2e3d14d1843c5e7ba2dccfb4c93c06459" }
+akar-winit = { git = "https://github.com/brainless/akar.git", rev = "969079c2e3d14d1843c5e7ba2dccfb4c93c06459" }
+ureq = "3"
+# akar's host integration: akar does not re-export its winit/wgpu surface
+# types, so the app declares the same versions akar builds against.
+wgpu = "29"
+winit = "0.30"
+pollster = "0.4"
+# Same version akar's text pipeline uses; the content view draws text with an
+# explicit viewport clip so scrolled blocks cannot paint over the app chrome.
+glyphon = "0.11"
+# System clipboard for textarea copy/paste. The default `image-data` feature is
+# off: only text is used, and it would pull in the image stack.
+arboard = { version = "3.7", default-features = false }
+
+[profile.dev]
+# Keep debuginfo useful without making large GUI/LLM dependency builds heavy.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

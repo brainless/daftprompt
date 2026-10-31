@@ -1,0 +1,28 @@
+[package]
+name = "daftprompt-gui"
+description = "Native akar desktop app for daftprompt."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# The GUI talks to the API over HTTP and shares plain data types only. It must
+# never depend on daftprompt-core or daftprompt-api.
+[dependencies]
+daftprompt-types.workspace = true
+akar-core.workspace = true
+akar-layout.workspace = true
+akar-components.workspace = true
+akar-winit.workspace = true
+ureq.workspace = true
+serde_json.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+pollster.workspace = true
+glyphon.workspace = true
+arboard.workspace = true
+
+[lints.cargo]
+# The akar crates, shared types, and HTTP client are used by the two-column
+# parse view added in epic 001, task 5.
+unused_dependencies = "allow"

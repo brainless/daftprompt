@@ -1,0 +1,7 @@
+[toolchain]
+# Pinned on 2026-10-31. akar needs a nightly toolchain with
+# `rustc-codegen-cranelift`; Rig's floor (1.95.0) is well below this nightly.
+# See docs/development.md for setup and verification commands.
+channel = "nightly-2026-10-25"
+components = ["rustc-codegen-cranelift", "rustfmt", "clippy"]
+profile = "minimal"

@@ -1,0 +1,50 @@
+{
+  "format_version": 1,
+  "id": "email-quoted-answer",
+  "category": "email",
+  "note": "A quoted question answered by the reply, plus a second quoted question explicitly assigned to @ops-team.",
+  "source": {
+    "kind": "email",
+    "reference": "thread-cache-rollout",
+    "author": "Priya"
+  },
+  "text": "From: Priya\nSubject: Re: cache rollout\n\n> Should we enable the cache in staging this week?\n\nYes, enable it behind the flag.\n\n> Who owns the rollout checklist? @ops-team please confirm.\n",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 42,
+      "end": 90,
+      "quote": "Should we enable the cache in staging this week?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "start": 92,
+      "end": 123,
+      "quote": "Yes, enable it behind the flag.",
+      "labels": []
+    },
+    {
+      "id": "e3",
+      "start": 127,
+      "end": 184,
+      "quote": "Who owns the rollout checklist? @ops-team please confirm.",
+      "labels": [
+        {
+          "kind": "question",
+          "assignee": "@ops-team"
+        }
+      ]
+    }
+  ],
+  "answer_links": [
+    {
+      "from": "e2",
+      "to": "e1"
+    }
+  ]
+}
