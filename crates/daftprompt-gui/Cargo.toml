@@ -20,6 +20,7 @@ wgpu.workspace = true
 winit.workspace = true
 pollster.workspace = true
 glyphon.workspace = true
+arboard.workspace = true
 
 [lints.cargo]
 # The akar crates, shared types, and HTTP client are used by the two-column

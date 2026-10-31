@@ -213,8 +213,8 @@ async fn empty_extraction_builds_payload_root_and_run_metadata() {
     assert_eq!(result.source, None);
 
     assert_eq!(result.run.agent, "scribe");
-    assert_eq!(result.run.provider_id.as_deref(), Some("test-provider"));
-    assert_eq!(result.run.model_id.as_deref(), Some("stub-model"));
+    assert_eq!(result.run.provider.as_deref(), Some("test-provider"));
+    assert_eq!(result.run.model.as_deref(), Some("stub-model"));
     assert_eq!(result.run.prompt_version.as_deref(), Some("scribe-v1"));
     assert_eq!(result.run.status, RunStatus::Done);
     assert_eq!(result.run.attempts, 1);
@@ -1169,12 +1169,12 @@ async fn a_zero_attempt_budget_still_makes_one_attempt() {
 }
 
 #[tokio::test]
-async fn provider_failures_are_explicit() {
+async fn provider_failures_fail_fast_without_retrying() {
     let model = StubModel::new(vec![
         Err(ModelError::Provider("quota exceeded".to_owned())),
-        Err(ModelError::Provider("quota exceeded".to_owned())),
+        Ok(Extraction::default()),
     ]);
-    let scribe = Scribe::new(config().with_max_attempts(2), model);
+    let scribe = Scribe::new(config().with_max_attempts(3), model);
     let error = scribe
         .parse(ParseRequest::new("Text."))
         .await
@@ -1184,7 +1184,7 @@ async fn provider_failures_are_explicit() {
         ParseError::Provider { detail } => assert!(detail.contains("quota")),
         other => panic!("expected provider error, got {other:?}"),
     }
-    assert_eq!(scribe.model().calls(), 2);
+    assert_eq!(scribe.model().calls(), 1);
 }
 
 #[tokio::test]
@@ -1201,12 +1201,12 @@ async fn internal_adapter_failures_are_not_retried() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn timeouts_are_explicit_and_consume_attempts() {
+async fn timeouts_fail_fast_without_retrying() {
     let model = StubModel::pending();
     let scribe = Scribe::new(
         config()
             .with_timeout(Duration::from_millis(10))
-            .with_max_attempts(2),
+            .with_max_attempts(3),
         model,
     );
     let error = scribe
@@ -1218,7 +1218,7 @@ async fn timeouts_are_explicit_and_consume_attempts() {
         ParseError::Timeout { detail } => assert!(detail.contains("exceeded")),
         other => panic!("expected timeout, got {other:?}"),
     }
-    assert_eq!(scribe.model().calls(), 2);
+    assert_eq!(scribe.model().calls(), 1);
 }
 
 // ---------------------------------------------------------------------------

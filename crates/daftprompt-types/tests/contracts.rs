@@ -169,8 +169,8 @@ fn graph_records_round_trip_as_json() {
         run: Run {
             id: "r1".to_owned(),
             agent: "scribe".to_owned(),
-            provider_id: Some("openai".to_owned()),
-            model_id: Some("gpt-4o-mini".to_owned()),
+            provider: Some("openai".to_owned()),
+            model: Some("gpt-4o-mini".to_owned()),
             prompt_version: Some("scribe-v1".to_owned()),
             started_at: "2026-10-31T00:00:00Z".to_owned(),
             ended_at: Some("2026-10-31T00:00:01Z".to_owned()),

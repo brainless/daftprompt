@@ -23,9 +23,9 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScribeConfig {
     /// Provider identifier recorded on the run, for example `openai`.
-    pub provider_id: Option<String>,
+    pub provider: Option<String>,
     /// Model identifier recorded on the run, for example `gpt-4o-mini`.
-    pub model_id: Option<String>,
+    pub model: Option<String>,
     /// Maximum accepted input size in UTF-8 bytes.
     pub max_input_bytes: usize,
     /// Maximum accepted number of segments (`\n`-separated lines).
@@ -40,8 +40,8 @@ pub struct ScribeConfig {
 impl Default for ScribeConfig {
     fn default() -> Self {
         Self {
-            provider_id: None,
-            model_id: None,
+            provider: None,
+            model: None,
             max_input_bytes: DEFAULT_MAX_INPUT_BYTES,
             max_segments: DEFAULT_MAX_SEGMENTS,
             max_attempts: DEFAULT_MAX_ATTEMPTS,
@@ -57,14 +57,14 @@ impl ScribeConfig {
     }
 
     /// Record the provider identifier on the run.
-    pub fn with_provider(mut self, provider_id: impl Into<String>) -> Self {
-        self.provider_id = Some(provider_id.into());
+    pub fn with_provider(mut self, provider: impl Into<String>) -> Self {
+        self.provider = Some(provider.into());
         self
     }
 
     /// Record the model identifier on the run.
-    pub fn with_model(mut self, model_id: impl Into<String>) -> Self {
-        self.model_id = Some(model_id.into());
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
         self
     }
 

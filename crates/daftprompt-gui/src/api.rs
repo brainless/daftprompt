@@ -218,8 +218,8 @@ mod tests {
             "run": {
                 "id": "run",
                 "agent": "scribe",
-                "provider_id": "openai",
-                "model_id": "gpt-4o-mini",
+                "provider": "openai",
+                "model": "gpt-4o-mini",
                 "prompt_version": "scribe-v1",
                 "started_at": "now",
                 "ended_at": "now",
@@ -286,7 +286,7 @@ mod tests {
             .parse("Plan\nQ?\nA\n")
             .expect("parse the stub result");
         assert_eq!(result.payload.content, "Plan\nQ?\nA\n");
-        assert_eq!(result.run.model_id.as_deref(), Some("gpt-4o-mini"));
+        assert_eq!(result.run.model.as_deref(), Some("gpt-4o-mini"));
         server.join().expect("stub server");
     }
 

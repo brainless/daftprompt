@@ -7,10 +7,14 @@
 //! HTTP runs on a background thread and reports through a channel. While a
 //! request is in flight the event loop wakes on a short deadline to poll that
 //! channel; rendering never blocks. This crate talks only to `daftprompt-types`
-//! and the documented `POST /parse` endpoint; it never links the parser.
+//! and the documented `POST /parse` endpoint; it never links the parser. At
+//! startup it may run the compiled `daftprompt-api` binary as a child process
+//! (see `spawn`), stopped when the window closes.
 
 mod api;
+mod clipboard;
 mod render;
+mod spawn;
 mod view;
 
 use std::sync::Arc;
@@ -28,6 +32,7 @@ use akar_layout::{
 };
 use akar_winit::{ActivationProgress, StartupActivation, process_window_event};
 use api::{ApiError, ParseClient};
+use clipboard::{ClipboardRequest, SystemClipboard};
 use daftprompt_types::ParseResult;
 use render::{ContentLayout, draw_content, draw_notice};
 use view::{Block, ParseView, Phase, build_blocks, result_summary};
@@ -45,6 +50,7 @@ use winit::{
 const SIDEBAR_WIDTH: f32 = 340.0;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const CURSOR_BLINK: Duration = Duration::from_millis(500);
+const API_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 fn main() {
     let api = match ParseClient::from_env() {
@@ -59,13 +65,30 @@ fn main() {
         api.url()
     );
 
+    // Starting the child is quick (no readiness wait); a request made before
+    // the API is up simply reports the connection error.
+    let (api_process, api_note) = match spawn::start_from_env() {
+        spawn::Startup::NotManaged => (None, None),
+        spawn::Startup::Spawned(process) => (Some(process), None),
+        spawn::Startup::Failed(note) => {
+            eprintln!("daftprompt-gui: {note}");
+            (None, Some(note))
+        }
+    };
+
     let event_loop = EventLoop::new().expect("could not create the event loop");
     let mut app = App {
         state: None,
         activation: StartupActivation::for_unbundled_launch(),
         api,
+        api_process,
+        api_note,
     };
-    if let Err(error) = event_loop.run_app(&mut app) {
+    let result = event_loop.run_app(&mut app);
+    // Drop explicitly so the child is stopped even on the error path, where
+    // `process::exit` would skip destructors.
+    drop(app);
+    if let Err(error) = result {
         eprintln!("daftprompt-gui: the event loop stopped: {error}");
         std::process::exit(1);
     }
@@ -80,6 +103,10 @@ struct App {
     state: Option<GuiState>,
     activation: StartupActivation,
     api: ParseClient,
+    /// The API child started by this app, killed and waited on when dropped.
+    api_process: Option<spawn::ApiProcess>,
+    /// A spawn failure or early child exit to show in the UI.
+    api_note: Option<String>,
 }
 
 struct GuiState {
@@ -104,6 +131,13 @@ struct GuiState {
     text: String,
     edit_state: TextEditState,
     input_scroll: f32,
+    /// Created on first use; only touched on the main thread.
+    clipboard: SystemClipboard,
+    /// Clipboard work requested by the textarea this frame, served after the
+    /// frame because akar clears one-frame input in `end_frame`.
+    clipboard_request: ClipboardRequest,
+    /// The last clipboard failure, shown in the composer footer.
+    clipboard_note: Option<String>,
 
     parse_view: ParseView,
     blocks: Vec<Block>,
@@ -112,6 +146,7 @@ struct GuiState {
     scroll_y: f32,
 
     api: ParseClient,
+    api_note: Option<String>,
     tx: Sender<WorkerMessage>,
     rx: Receiver<WorkerMessage>,
     started: Instant,
@@ -188,12 +223,16 @@ impl ApplicationHandler for App {
             text: String::new(),
             edit_state: TextEditState::default(),
             input_scroll: 0.0,
+            clipboard: SystemClipboard::default(),
+            clipboard_request: ClipboardRequest::default(),
+            clipboard_note: None,
             parse_view: ParseView::default(),
             blocks: Vec::new(),
             content: None,
             content_width: 0.0,
             scroll_y: 0.0,
             api: self.api.clone(),
+            api_note: self.api_note.clone(),
             tx,
             rx,
             started: Instant::now(),
@@ -234,7 +273,17 @@ impl ApplicationHandler for App {
             _ => {}
         }
 
+        // akar-winit forwards winit's key text; for Cmd/Ctrl shortcuts that
+        // would type the shortcut letter next to the clipboard action.
+        let chars_before = state.core.input.chars.len();
         process_window_event(&mut state.core.input, &event);
+        if matches!(event, WindowEvent::KeyboardInput { .. }) {
+            clipboard::discard_shortcut_chars(
+                &mut state.core.input.chars,
+                chars_before,
+                state.core.input.modifiers,
+            );
+        }
 
         if !matches!(event, WindowEvent::RedrawRequested) {
             state.window.request_redraw();
@@ -244,6 +293,18 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
         let mut wake_at = None;
+
+        if self.api_note.is_none()
+            && let Some(process) = &mut self.api_process
+            && let Some(note) = process.exit_note()
+        {
+            // The child is gone; keep the guard so it is still reaped on drop.
+            self.api_note = Some(note);
+            if let Some(state) = &mut self.state {
+                state.api_note = self.api_note.clone();
+                state.window.request_redraw();
+            }
+        }
 
         if let Some(state) = &self.state {
             if state.parse_view.is_loading() {
@@ -262,6 +323,12 @@ impl ApplicationHandler for App {
                 wake_at =
                     Some(wake_at.map_or(activation_wake, |current| current.min(activation_wake)));
             }
+        }
+
+        if self.api_process.is_some() && self.api_note.is_none() {
+            // Notice an early child exit without busy-waiting.
+            let check = now + API_CHECK_INTERVAL;
+            wake_at = Some(wake_at.map_or(check, |current| current.min(check)));
         }
 
         match wake_at {
@@ -347,6 +414,8 @@ fn render(state: &mut GuiState) {
 
     state.queue.submit(std::iter::once(encoder.finish()));
     output.present();
+
+    serve_clipboard(state);
 
     if state.parse_view.is_loading() {
         state.window.request_redraw();
@@ -577,7 +646,7 @@ fn draw_sidebar(state: &mut GuiState, theme: &AkarTheme, now: Instant) {
     let focused = state.core.input.focused_id == Some(input_id);
     let elapsed_ms = now.duration_since(state.started).as_millis();
     let cursor_visible = !focused || (elapsed_ms / CURSOR_BLINK.as_millis()).is_multiple_of(2);
-    let _response = akar_textarea(
+    let response = akar_textarea(
         &mut state.core,
         &state.layout,
         state.input_node,
@@ -588,6 +657,10 @@ fn draw_sidebar(state: &mut GuiState, theme: &AkarTheme, now: Instant) {
         cursor_visible,
         theme,
     );
+    let request = ClipboardRequest::from_response(&response);
+    if !request.is_empty() {
+        state.clipboard_request = request;
+    }
 
     let mut button_style = ButtonStyle::empty();
     let busy = state.parse_view.is_loading();
@@ -614,10 +687,13 @@ fn draw_sidebar(state: &mut GuiState, theme: &AkarTheme, now: Instant) {
         line_height: Some(16.0),
         ..TextStyle::empty()
     };
-    let footer = format!(
+    let mut footer = format!(
         "POST {}\nEach Parse replaces the previous blocks.",
         state.api.url()
     );
+    if let Some(note) = &state.clipboard_note {
+        footer.push_str(&format!("\n{note}"));
+    }
     akar_paragraph(
         &mut state.core,
         &state.layout,
@@ -632,20 +708,44 @@ fn draw_sidebar(state: &mut GuiState, theme: &AkarTheme, now: Instant) {
     }
 }
 
+/// Serves the clipboard request recorded during the frame that just ended.
+///
+/// Paste is queued with `push_paste` for the textarea's widget id and a redraw
+/// is requested, so the focused textarea applies it on the next frame. Doing
+/// this after `end_frame` matters: it clears one-frame input, including pastes.
+fn serve_clipboard(state: &mut GuiState) {
+    let request = std::mem::take(&mut state.clipboard_request);
+    if request.is_empty() {
+        return;
+    }
+    let outcome = clipboard::service(&mut state.clipboard, request);
+    if let Some(text) = outcome.paste {
+        let target = state.layout.widget_id(state.input_node);
+        state.core.input.push_paste(target, text);
+    }
+    state.clipboard_note = outcome.error;
+    state.window.request_redraw();
+}
+
 fn draw_main(state: &mut GuiState, theme: &AkarTheme) {
     let (title, meta, notice) = match state.parse_view.phase() {
-        Phase::Idle => (
-            "Source blocks",
-            "No result yet. Parsing starts only when you choose Parse text.".to_owned(),
-            Some((
-                "Paste ordinary text in the left column — a chat reply, a plan, a code \
+        Phase::Idle => {
+            let mut text = "Paste ordinary text in the left column — a chat reply, a plan, a code \
                  review, or an email quotation.\n\nScribe marks questions, answer links, \
                  and explicit @assignees. Unlabelled text stays as it is. Each Parse \
                  replaces the blocks shown here."
-                    .to_owned(),
-                theme.muted_content,
-            )),
-        ),
+                .to_owned();
+            let mut color = theme.muted_content;
+            if let Some(note) = &state.api_note {
+                text = format!("API problem: {note}\n\n{text}");
+                color = theme.error;
+            }
+            (
+                "Source blocks",
+                "No result yet. Parsing starts only when you choose Parse text.".to_owned(),
+                Some((text, color)),
+            )
+        }
         Phase::Loading => (
             "Parsing…",
             "Waiting for the API on a background thread. Rendering stays responsive.".to_owned(),
@@ -670,8 +770,12 @@ fn draw_main(state: &mut GuiState, theme: &AkarTheme) {
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "The parse failed without a message.".to_owned());
             if error.is_some_and(|error| error.kind == "connection") {
+                if let Some(note) = &state.api_note {
+                    detail.push_str(&format!("\n\nAPI process: {note}"));
+                }
                 detail.push_str(
-                    "\n\nStart the API with OPENAI_API_KEY=... cargo run -p daftprompt-api, \
+                    "\n\nThe GUI starts a built daftprompt-api itself (cargo build -p \
+                     daftprompt-api); otherwise start it with cargo run -p daftprompt-api, \
                      or set DAFTPROMPT_API_URL to its /parse endpoint.",
                 );
             }

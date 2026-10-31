@@ -12,6 +12,7 @@ daftprompt-types.workspace = true
 axum.workspace = true
 tokio = { workspace = true, features = ["net", "signal"] }
 serde_json.workspace = true
+dotenvy.workspace = true
 http-body-util.workspace = true
 # The API process builds the provider client from environment credentials. Rig's
 # reqwest/rustls transport is enabled here only; the core manifest stays free of

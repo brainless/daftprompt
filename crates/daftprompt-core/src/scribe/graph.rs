@@ -139,8 +139,8 @@ pub(crate) fn build(
     let run = Run {
         id: run_id.clone(),
         agent: "scribe".to_owned(),
-        provider_id: config.provider_id.clone(),
-        model_id: config.model_id.clone(),
+        provider: config.provider.clone(),
+        model: config.model.clone(),
         prompt_version: Some(prompt::PROMPT_VERSION.to_owned()),
         started_at,
         ended_at: Some(now()),

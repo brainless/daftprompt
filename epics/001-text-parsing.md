@@ -54,8 +54,8 @@ Small models are unreliable at character or line/column offsets, so the model ne
 ### Limits and failures
 
 - Input is limited to a configurable maximum, by default 32 KiB of UTF-8 and 1,000 segments. Oversized input is rejected before any model call; never silently truncate it.
-- One configurable attempt budget (default: 3 attempts in total) covers both deserialization failures and validation failures. Rig's `TypedRun::retries` only retries runs that error, return nothing, or return output that does not parse, so validation failures are retried by Scribe's own loop around the extractor. Each retry is a fresh attempt without corrective feedback.
-- When the budget runs out, return an explicit error (invalid output, oversized input, timeout, provider failure). Never return a partly invalid graph.
+- One configurable attempt budget (default: 3 attempts in total) covers deserialization failures and validation failures only. Provider errors and per-attempt timeouts fail fast: they are returned immediately without retrying, so worst-case latency is one timeout. Rig's `TypedRun::retries` only retries runs that error, return nothing, or return output that does not parse, so validation failures are retried by Scribe's own loop around the extractor. Each retry is a fresh attempt without corrective feedback.
+- When the budget runs out (or a provider error or timeout occurs), return an explicit error (invalid output, oversized input, timeout, provider failure). Never return a partly invalid graph.
 
 ## Tasks
 
@@ -67,7 +67,7 @@ Small models are unreliable at character or line/column offsets, so the model ne
 - Implement segmentation, quote anchoring, and conversion from byte ranges to 1-based line/column ranges in core.
 - akar requires a nightly toolchain with `rustc-codegen-cranelift` (see akar's `rust-toolchain.toml`). Add a root `rust-toolchain.toml` pinned to a dated nightly with that component, verified to build akar, Rig, and the rest of the workspace. Record the date.
 - Inspect dependency manifests before choosing versions; record dependency revisions and reproducible build commands. Keep GUI dependencies out of core and types.
-- Use upstream Git URLs pinned to explicit revisions for external dependencies. Local checkouts are reference-only, never external path dependencies or path patches; relative paths are reserved for this project's own workspace crates.
+- Dependencies not published on crates.io (Rig, akar) use their upstream Git URL pinned to an explicit revision. crates.io dependencies are declared with versions in the workspace `Cargo.toml`, pinned exactly by the committed `Cargo.lock`, and their resolved versions are recorded in `docs/development.md`. Local checkouts are reference-only, never external path dependencies or path patches; relative paths are reserved for this project's own workspace crates.
 
 ### 2. Implement Scribe in the shared library
 
@@ -105,7 +105,7 @@ Do this before the API and GUI work, so prompt tuning is measured.
 
 Check the relevant sources again when implementing each task; do not assume online examples match these checkouts.
 
-Dependency Git URLs: Rig at `https://github.com/0xPlaygrounds/rig.git` and akar at `https://github.com/brainless/akar.git`. Record upstream Git URLs for other dependencies when adding them. The local paths below are only for inspecting source and examples.
+Dependency Git URLs: Rig at `https://github.com/0xPlaygrounds/rig.git` and akar at `https://github.com/brainless/akar.git`. Other dependencies come from crates.io; record their resolved versions in `docs/development.md`. The local paths below are only for inspecting source and examples.
 
 - Rig: `~/Projects/rig/examples/extractor/src/main.rs`, `crates/rig-agent/src/extractor.rs`, and the root `Cargo.toml`. The inspected extractor supports typed output through the `submit` tool, retries for errored/empty/unparseable runs (`crates/rig-agent/src/agent/typed.rs`), and `append_preamble` for Scribe-specific instructions.
 - akar: `~/Projects/akar/examples/canvas-basic-rust/` for app setup; `examples/demo-rust/src/main.rs` for `akar_textarea`; `crates/akar-winit/` for input integration and wake deadlines (`src/activation.rs`). Inspect the workspace manifest and `rust-toolchain.toml` (nightly with `rustc-codegen-cranelift`) for compatible graphics dependencies and toolchain.

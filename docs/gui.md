@@ -22,26 +22,41 @@ The workspace pins the nightly toolchain akar needs (see
 cargo build -p daftprompt-gui
 ```
 
-Start the API in another terminal. It needs provider credentials and builds the
-Scribe client itself:
+The GUI starts the API for you. `cargo run -p daftprompt-gui` builds only the
+GUI, not the API binary, so build it first:
 
 ```sh
-OPENAI_API_KEY=... cargo run -p daftprompt-api
-```
-
-Then start the app:
-
-```sh
+cargo build -p daftprompt-api
 cargo run -p daftprompt-gui
 ```
 
-Press `Ctrl+C` in the API terminal to stop it; close the window to stop the app.
+At startup, if `DAFTPROMPT_API_URL` is unset (the default local URL) and
+`DAFTPROMPT_GUI_SPAWN_API` is not `0`, the GUI checks whether something already
+listens on `127.0.0.1:8080` (a 200 ms connect probe). If nothing does, it spawns
+the `daftprompt-api` binary found next to the GUI executable (cargo's target
+directory), or at `DAFTPROMPT_API_BIN`. The child inherits the environment, the
+working directory (so the API's own `.env` loading works), and stdout/stderr, so
+its logs stay in the GUI's terminal. The GUI never waits for readiness: a parse
+before the API is up shows the normal connection error. When the window closes
+the child is killed and waited on. If the binary is missing or cannot start, the
+idle and connection-error states say so; if the child exits early (for example
+a missing API key) the GUI notices within about a second and shows that too.
+
+To run the API yourself instead, set `DAFTPROMPT_GUI_SPAWN_API=0`, or start it
+first (the GUI reuses a listener on the default address):
+
+```sh
+cargo run -p daftprompt-api
+```
+
 The API has no authentication and binds to loopback by default. Keep it there
 unless you provide your own access control.
 
 | variable | default | meaning |
 | --- | --- | --- |
 | `DAFTPROMPT_API_URL` | `http://127.0.0.1:8080/parse` | Endpoint the GUI posts to. Must be the full `/parse` URL |
+| `DAFTPROMPT_GUI_SPAWN_API` | unset | `0` stops the GUI from spawning the API. Spawning also happens only when `DAFTPROMPT_API_URL` is unset |
+| `DAFTPROMPT_API_BIN` | `daftprompt-api` beside the GUI executable | Path to the API binary to spawn |
 | `DAFTPROMPT_GUI_TIMEOUT_SECS` | `300` | Client transport timeout. The API's own default attempt budget allows three 60-second model calls |
 
 ## Using the app
@@ -54,8 +69,32 @@ unless you provide your own access control.
 3. The right column has four states: idle instructions, a loading message, the
    parsed blocks, or an explicit error. Each successful or failed submission
    replaces the previous result; nothing accumulates like a chat.
-4. Scroll the right column with the wheel. A thin scrollbar appears when the
+4. Copy and paste use the system clipboard (see below).
+5. Scroll the right column with the wheel. A thin scrollbar appears when the
    content is taller than the viewport.
+
+### Clipboard
+
+With the textarea focused, **Cmd+V** (macOS) or **Ctrl+V** (elsewhere) pastes the
+system clipboard's text at the cursor, replacing any selection, and **Cmd+C** /
+**Ctrl+C** copies the selection. akar's textarea has no cut shortcut, so cut is
+not supported; select and delete after copying instead. Non-text clipboard
+content (an image, say) is ignored quietly; real failures such as an
+unavailable clipboard appear as one line in the composer footer and clear on the
+next successful clipboard action. akar's `normalize_paste` converts CRLF to LF
+in the textarea, so pasted Windows line endings arrive as LF; the text is
+otherwise inserted unchanged.
+
+`clipboard.rs` holds the logic. The textarea reports `copy_text` and
+`request_paste` in its response; `main.rs` records them during the frame and
+serves them after the frame is presented (akar clears one-frame input in
+`end_frame`). Copy writes the clipboard through `arboard`; paste reads it on the
+main thread and queues `InputState::push_paste(textarea widget id, text)`, then
+requests a redraw so the focused textarea applies it on the next frame. The
+`arboard::Clipboard` is created on first use. The window does not enable IME,
+and akar-winit ignores `Ime` events, so a paste cannot arrive twice; the host
+also drops the character winit attaches to a Cmd/Ctrl shortcut key so Cmd+V
+does not type a `v`.
 
 Sample text for the demo (the API's own sample is similar):
 
@@ -127,6 +166,11 @@ The GUI's deterministic tests cover:
   HTTP exchange that decodes a `ParseResult`;
 - the two-column layout at the default and minimum window sizes, including the
   textarea sitting above the Parse button;
+- the spawn decision (custom URL, disabled flag, existing listener) and API
+  binary path resolution, as pure functions with no subprocess;
+- clipboard request mapping, paste/copy against a fake clipboard (the real one is
+  never touched), quiet handling of empty or non-text content, and error
+  messages instead of panics;
 - content layout stacking and viewport clipping for scrolled blocks.
 
 No test needs a model or provider credentials.
@@ -140,9 +184,9 @@ limitation recorded by the [Scribe baseline](evaluations/scribe-baseline.md).
 
 To perform the run later:
 
-1. Start the API with a configured small model, for example
-   `OPENAI_API_KEY=... DAFTPROMPT_API_MODEL=gpt-4o-mini cargo run -p daftprompt-api`.
-2. Start the GUI and parse the sample above.
+1. Put credentials in `.env` (see `.env.example`) and build the API:
+   `cargo build -p daftprompt-api`.
+2. Start the GUI (`cargo run -p daftprompt-gui`; it spawns the API) and parse the sample above.
 3. Record what the blocks actually show: missed or false questions, span text
    that includes or excludes too much, wrong statuses, answer links, assignees,
    invalid-output rate, attempts, and latency. A useful report should say which

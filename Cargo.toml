@@ -27,6 +27,9 @@ rig = { git = "https://github.com/0xPlaygrounds/rig.git", rev = "7dfd8a4229a9d89
   "agent",
 ] }
 
+# Loads a local `.env` at startup of the API and the live evaluation binary.
+dotenvy = "0.15"
+
 # HTTP service.
 axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
@@ -48,6 +51,9 @@ pollster = "0.4"
 # Same version akar's text pipeline uses; the content view draws text with an
 # explicit viewport clip so scrolled blocks cannot paint over the app chrome.
 glyphon = "0.11"
+# System clipboard for textarea copy/paste. The default `image-data` feature is
+# off: only text is used, and it would pull in the image stack.
+arboard = { version = "3.7", default-features = false }
 
 [profile.dev]
 # Keep debuginfo useful without making large GUI/LLM dependency builds heavy.

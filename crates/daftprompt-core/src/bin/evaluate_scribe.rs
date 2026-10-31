@@ -9,13 +9,18 @@
 //!
 //! - `DAFTPROMPT_EVAL_LIVE=1` — required to call the model.
 //! - `DAFTPROMPT_EVAL_PROVIDER` — `openai` (default; OpenAI-compatible
-//!   endpoints work through `OPENAI_BASE_URL`).
-//! - `DAFTPROMPT_EVAL_MODEL` — model id, default `gpt-4o-mini`.
+//!   endpoints work through `OPENAI_BASE_URL`) or `neuralwatt`.
+//! - `DAFTPROMPT_EVAL_MODEL` — model id, default `gpt-4o-mini` for `openai`
+//!   and `qwen3.6-35b-fast` for `neuralwatt`.
 //! - `DAFTPROMPT_EVAL_PROMPT_VERSION` — optional guard; must equal the
 //!   compiled prompt version (currently `scribe-v1`).
 //! - `DAFTPROMPT_EVAL_MAX_ATTEMPTS` — total attempts, default 3.
 //! - `DAFTPROMPT_EVAL_TIMEOUT_SECS` — per-attempt timeout, default 60.
 //! - `OPENAI_API_KEY` — read by the provider client, never by this crate.
+//! - `NEURALWATT_API_KEY`, optional `NEURALWATT_BASE_URL` — for `neuralwatt`.
+//!
+//! A `.env` file in the working directory (or a parent) is loaded first; real
+//! environment variables take precedence over it.
 //!
 //! Usage:
 //!
@@ -37,10 +42,17 @@ use daftprompt_core::{
     DEFAULT_MAX_ATTEMPTS, DEFAULT_TIMEOUT, PROMPT_VERSION, Scribe, ScribeConfig,
 };
 use daftprompt_types::{ParseError, ParseRequest};
-use rig::providers::openai::OpenAI;
+use rig::DynModel;
+use rig::operation::Completion;
+use rig::providers::openai::{OpenAI, OpenAIConfig};
 
-const DEFAULT_PROVIDER: &str = "openai";
-const DEFAULT_MODEL: &str = "gpt-4o-mini";
+const PROVIDER_OPENAI: &str = "openai";
+const PROVIDER_NEURALWATT: &str = "neuralwatt";
+const DEFAULT_PROVIDER: &str = PROVIDER_OPENAI;
+const DEFAULT_OPENAI_MODEL: &str = "gpt-4o-mini";
+const DEFAULT_NEURALWATT_MODEL: &str = "qwen3.6-35b-fast";
+/// Neuralwatt's OpenAI-compatible base URL (<https://docs.neuralwatt.com/api/overview.md>).
+const DEFAULT_NEURALWATT_BASE_URL: &str = "https://api.neuralwatt.com/v1";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -54,6 +66,7 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<ExitCode, String> {
+    load_dotenv()?;
     let options = match parse_args(env::args().skip(1))? {
         Some(options) => options,
         None => {
@@ -73,7 +86,13 @@ async fn run() -> Result<ExitCode, String> {
 
     let provider =
         env_string("DAFTPROMPT_EVAL_PROVIDER").unwrap_or_else(|| DEFAULT_PROVIDER.to_owned());
-    let model = env_string("DAFTPROMPT_EVAL_MODEL").unwrap_or_else(|| DEFAULT_MODEL.to_owned());
+    let model = env_string("DAFTPROMPT_EVAL_MODEL").unwrap_or_else(|| {
+        if provider == PROVIDER_NEURALWATT {
+            DEFAULT_NEURALWATT_MODEL.to_owned()
+        } else {
+            DEFAULT_OPENAI_MODEL.to_owned()
+        }
+    });
     let max_attempts = env_u32("DAFTPROMPT_EVAL_MAX_ATTEMPTS", DEFAULT_MAX_ATTEMPTS)?;
     let timeout_secs = env_u64("DAFTPROMPT_EVAL_TIMEOUT_SECS", DEFAULT_TIMEOUT.as_secs())?;
     let timeout = Duration::from_secs(timeout_secs);
@@ -99,9 +118,9 @@ async fn run() -> Result<ExitCode, String> {
         return finish(&options.output, &report, ExitCode::SUCCESS);
     }
 
-    if provider != DEFAULT_PROVIDER {
+    if provider != PROVIDER_OPENAI && provider != PROVIDER_NEURALWATT {
         report.not_run = Some(format!(
-            "provider {provider:?} is not wired into this evaluation; only {DEFAULT_PROVIDER:?} is supported, with OpenAI-compatible endpoints selected through OPENAI_BASE_URL."
+            "provider {provider:?} is not wired into this evaluation; supported providers are {PROVIDER_OPENAI:?} and {PROVIDER_NEURALWATT:?}."
         ));
         return finish(&options.output, &report, ExitCode::from(2));
     }
@@ -115,8 +134,8 @@ async fn run() -> Result<ExitCode, String> {
         return finish(&options.output, &report, ExitCode::from(2));
     }
 
-    let client = match OpenAI::from_env() {
-        Ok(client) => client,
+    let completion_model = match build_model(&provider, &model) {
+        Ok(model) => model,
         Err(error) => {
             report.not_run = Some(format!(
                 "the live run could not start because provider credentials were unavailable: {error}"
@@ -124,8 +143,6 @@ async fn run() -> Result<ExitCode, String> {
             return finish(&options.output, &report, ExitCode::from(2));
         }
     };
-
-    let completion_model = client.completion(model.clone());
     let config = ScribeConfig::new()
         .with_provider(provider)
         .with_model(model)
@@ -218,6 +235,34 @@ async fn run() -> Result<ExitCode, String> {
             ExitCode::SUCCESS
         },
     )
+}
+
+/// Load `.env` if present: missing is fine, real environment variables win,
+/// and a malformed file is a startup error.
+fn load_dotenv() -> Result<(), String> {
+    match dotenvy::dotenv() {
+        Ok(_) => Ok(()),
+        Err(error) if error.not_found() => Ok(()),
+        Err(error) => Err(format!("could not load .env: {error}")),
+    }
+}
+
+/// Build the completion model for `provider`; the same selection as the API.
+///
+/// Neuralwatt serves OpenAI-compatible Chat Completions, so it uses the
+/// explicit chat wire rather than OpenAI's default Responses route.
+fn build_model(provider: &str, model: &str) -> Result<DynModel<Completion>, String> {
+    if provider == PROVIDER_NEURALWATT {
+        let api_key =
+            env_string("NEURALWATT_API_KEY").ok_or_else(|| "set NEURALWATT_API_KEY".to_owned())?;
+        let base_url = env_string("NEURALWATT_BASE_URL")
+            .unwrap_or_else(|| DEFAULT_NEURALWATT_BASE_URL.to_owned());
+        let client = OpenAIConfig::new(api_key).with_base_url(base_url).client();
+        Ok(client.chat(model.to_owned()).into())
+    } else {
+        let client = OpenAI::from_env().map_err(|error| error.to_string())?;
+        Ok(client.completion(model.to_owned()).into())
+    }
 }
 
 fn finish(path: &Path, report: &Report, code: ExitCode) -> Result<ExitCode, String> {

@@ -273,8 +273,8 @@ pub fn truncate_for_display(text: &str, max_chars: usize) -> String {
 
 /// A compact run/provenance line for the main pane header.
 pub fn result_summary(result: &ParseResult) -> String {
-    let provider = result.run.provider_id.as_deref().unwrap_or("?");
-    let model = result.run.model_id.as_deref().unwrap_or("?");
+    let provider = result.run.provider.as_deref().unwrap_or("?");
+    let model = result.run.model.as_deref().unwrap_or("?");
     let attempts = result.run.attempts;
     let mut parts = vec![
         result.run.agent.clone(),
@@ -409,8 +409,8 @@ mod tests {
             run: Run {
                 id: "run".to_owned(),
                 agent: "scribe".to_owned(),
-                provider_id: Some("openai".to_owned()),
-                model_id: Some("gpt-4o-mini".to_owned()),
+                provider: Some("openai".to_owned()),
+                model: Some("gpt-4o-mini".to_owned()),
                 prompt_version: Some("scribe-v1".to_owned()),
                 started_at: "now".to_owned(),
                 ended_at: Some("now".to_owned()),

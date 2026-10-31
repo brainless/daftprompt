@@ -2,7 +2,8 @@
 //!
 //! Provider credentials and model settings come from the process environment;
 //! the server binds to loopback by default. See `docs/api.md` for the full
-//! variable list and a sample request.
+//! variable list and a sample request. A `.env` file in the working directory
+//! is loaded first; real environment variables take precedence over it.
 
 use std::env;
 use std::net::SocketAddr;
@@ -15,12 +16,19 @@ use daftprompt_core::{
     DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_INPUT_BYTES, DEFAULT_MAX_SEGMENTS, DEFAULT_TIMEOUT, Parser,
     Scribe, ScribeConfig,
 };
-use rig::providers::openai::OpenAI;
+use rig::DynModel;
+use rig::operation::Completion;
+use rig::providers::openai::{OpenAI, OpenAIConfig};
 
 /// Loopback only: the experiment has no authentication and no persistence.
 const DEFAULT_ADDR: &str = "127.0.0.1:8080";
-const DEFAULT_PROVIDER: &str = "openai";
-const DEFAULT_MODEL: &str = "gpt-4o-mini";
+const PROVIDER_OPENAI: &str = "openai";
+const PROVIDER_NEURALWATT: &str = "neuralwatt";
+const DEFAULT_PROVIDER: &str = PROVIDER_OPENAI;
+const DEFAULT_OPENAI_MODEL: &str = "gpt-4o-mini";
+const DEFAULT_NEURALWATT_MODEL: &str = "qwen3.6-35b-fast";
+/// Neuralwatt's OpenAI-compatible base URL (<https://docs.neuralwatt.com/api/overview.md>).
+const DEFAULT_NEURALWATT_BASE_URL: &str = "https://api.neuralwatt.com/v1";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -34,22 +42,10 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), String> {
+    load_dotenv()?;
     let settings = Settings::from_env()?;
 
-    if settings.provider != DEFAULT_PROVIDER {
-        return Err(format!(
-            "provider {:?} is not wired into this service; only {:?} is supported, \
-             with OpenAI-compatible endpoints selected through OPENAI_BASE_URL",
-            settings.provider, DEFAULT_PROVIDER
-        ));
-    }
-
-    // The provider client reads OPENAI_API_KEY and OPENAI_BASE_URL itself; the
-    // service never writes credentials to source or configuration files.
-    let client = OpenAI::from_env().map_err(|error| {
-        format!("provider credentials are unavailable (set OPENAI_API_KEY): {error}")
-    })?;
-    let completion_model = client.completion(settings.model.clone());
+    let completion_model = build_model(&settings.provider, &settings.model)?;
 
     let scribe_config = ScribeConfig::new()
         .with_provider(settings.provider.clone())
@@ -86,6 +82,49 @@ async fn run() -> Result<(), String> {
         .map_err(|error| format!("the HTTP server stopped: {error}"))
 }
 
+/// Load `.env` from the working directory (or a parent) if one exists.
+///
+/// A missing file is fine, variables already set in the process environment
+/// win over the file, and a malformed file is a startup error.
+fn load_dotenv() -> Result<(), String> {
+    match dotenvy::dotenv() {
+        Ok(_) => Ok(()),
+        Err(error) if error.not_found() => Ok(()),
+        Err(error) => Err(format!("could not load .env: {error}")),
+    }
+}
+
+/// Build the completion model for `provider`.
+///
+/// OpenAI uses `client.completion`, which follows Rig's default OpenAI route.
+/// Neuralwatt is OpenAI-compatible but serves Chat Completions, so it uses the
+/// explicit chat wire (`POST {base}/chat/completions`) rather than the
+/// Responses API. Credentials are read from the environment here, never stored.
+fn build_model(provider: &str, model: &str) -> Result<DynModel<Completion>, String> {
+    match provider {
+        PROVIDER_OPENAI => {
+            // The provider client reads OPENAI_API_KEY and OPENAI_BASE_URL itself.
+            let client = OpenAI::from_env().map_err(|error| {
+                format!("provider credentials are unavailable (set OPENAI_API_KEY): {error}")
+            })?;
+            Ok(client.completion(model.to_owned()).into())
+        }
+        PROVIDER_NEURALWATT => {
+            let api_key = env_string("NEURALWATT_API_KEY").ok_or_else(|| {
+                "provider credentials are unavailable (set NEURALWATT_API_KEY)".to_owned()
+            })?;
+            let base_url = env_string("NEURALWATT_BASE_URL")
+                .unwrap_or_else(|| DEFAULT_NEURALWATT_BASE_URL.to_owned());
+            let client = OpenAIConfig::new(api_key).with_base_url(base_url).client();
+            Ok(client.chat(model.to_owned()).into())
+        }
+        other => Err(format!(
+            "provider {other:?} is not wired into this service; supported providers are \
+             {PROVIDER_OPENAI:?} and {PROVIDER_NEURALWATT:?}"
+        )),
+    }
+}
+
 async fn shutdown_signal() {
     if let Err(error) = tokio::signal::ctrl_c().await {
         eprintln!("daftprompt-api: could not listen for Ctrl+C: {error}");
@@ -110,11 +149,14 @@ impl Settings {
             .parse()
             .map_err(|error| format!("DAFTPROMPT_API_ADDR expects an IP:port address: {error}"))?;
 
+        let provider =
+            env_string("DAFTPROMPT_API_PROVIDER").unwrap_or_else(|| DEFAULT_PROVIDER.to_owned());
+
         Ok(Self {
             addr,
-            provider: env_string("DAFTPROMPT_API_PROVIDER")
-                .unwrap_or_else(|| DEFAULT_PROVIDER.to_owned()),
-            model: env_string("DAFTPROMPT_API_MODEL").unwrap_or_else(|| DEFAULT_MODEL.to_owned()),
+            model: env_string("DAFTPROMPT_API_MODEL")
+                .unwrap_or_else(|| default_model(&provider).to_owned()),
+            provider,
             max_input_bytes: env_usize("DAFTPROMPT_API_MAX_INPUT_BYTES", DEFAULT_MAX_INPUT_BYTES)?,
             max_segments: env_usize("DAFTPROMPT_API_MAX_SEGMENTS", DEFAULT_MAX_SEGMENTS)?,
             max_attempts: env_u32("DAFTPROMPT_API_MAX_ATTEMPTS", DEFAULT_MAX_ATTEMPTS)?,
@@ -123,6 +165,14 @@ impl Settings {
                 DEFAULT_TIMEOUT.as_secs(),
             )?),
         })
+    }
+}
+
+fn default_model(provider: &str) -> &'static str {
+    if provider == PROVIDER_NEURALWATT {
+        DEFAULT_NEURALWATT_MODEL
+    } else {
+        DEFAULT_OPENAI_MODEL
     }
 }
 

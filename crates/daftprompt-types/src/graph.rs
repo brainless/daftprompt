@@ -165,9 +165,9 @@ pub struct Run {
     /// Which agent or mode, for example `scribe`.
     pub agent: String,
     /// Provider identifier, for example `openai`.
-    pub provider_id: Option<String>,
+    pub provider: Option<String>,
     /// Model identifier, for example `gpt-4o-mini`.
-    pub model_id: Option<String>,
+    pub model: Option<String>,
     /// Identifier of the prompt revision used, for example `scribe-v1`.
     pub prompt_version: Option<String>,
     pub started_at: String,

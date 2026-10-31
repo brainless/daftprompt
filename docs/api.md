@@ -9,7 +9,14 @@ authentication, session, or history endpoints.
 
 The API process builds the provider client itself and reads its credentials
 from the environment. The default provider is OpenAI, and
-`OPENAI_BASE_URL` selects an OpenAI-compatible endpoint.
+`OPENAI_BASE_URL` selects an OpenAI-compatible endpoint. Neuralwatt is also
+supported (see below).
+
+On startup the process first loads a `.env` file from the working directory (or
+a parent) with `dotenvy::dotenv()` semantics: a missing file is fine, variables
+already set in the real environment take precedence over the file, and a
+malformed file stops startup with an error. `.env` is git-ignored; copy
+[`.env.example`](../.env.example) and fill it in.
 
 ```sh
 rustup toolchain install nightly-2026-10-25 \
@@ -31,15 +38,36 @@ this command does.
 
 | variable | default | meaning |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | required | Read by `OpenAI::from_env()`, never by daftprompt source |
+| `OPENAI_API_KEY` | required for `openai` | Read by `OpenAI::from_env()`, never by daftprompt source |
 | `OPENAI_BASE_URL` | provider default | Optional OpenAI-compatible endpoint |
+| `NEURALWATT_API_KEY` | required for `neuralwatt` | Bearer key for Neuralwatt |
+| `NEURALWATT_BASE_URL` | `https://api.neuralwatt.com/v1` | Optional override of Neuralwatt's OpenAI-compatible base URL |
 | `DAFTPROMPT_API_ADDR` | `127.0.0.1:8080` | Bind address (`IP:port`). Keep it on loopback unless you add your own access control |
-| `DAFTPROMPT_API_PROVIDER` | `openai` | Only `openai` is wired; the base URL selects a compatible service |
-| `DAFTPROMPT_API_MODEL` | `gpt-4o-mini` | Model identifier recorded on the run |
+| `DAFTPROMPT_API_PROVIDER` | `openai` | `openai` or `neuralwatt`; recorded as `run.provider` |
+| `DAFTPROMPT_API_MODEL` | `gpt-4o-mini` (`qwen3.6-35b-fast` for `neuralwatt`) | Model identifier recorded as `run.model` |
 | `DAFTPROMPT_API_MAX_INPUT_BYTES` | `32768` | UTF-8 byte limit for the submitted text; oversized text is rejected, never truncated |
 | `DAFTPROMPT_API_MAX_SEGMENTS` | `1000` | `\n`-separated segment limit |
-| `DAFTPROMPT_API_MAX_ATTEMPTS` | `3` | Total attempts, including invalid model output |
+| `DAFTPROMPT_API_MAX_ATTEMPTS` | `3` | Total attempts for invalid model output; provider errors and timeouts are never retried |
 | `DAFTPROMPT_API_TIMEOUT_SECS` | `60` | Per-attempt model timeout |
+
+### Neuralwatt
+
+Neuralwatt is OpenAI-API-compatible. Its base URL is
+`https://api.neuralwatt.com/v1`
+([docs](https://docs.neuralwatt.com/api/overview.md)); Chat Completions is
+served at `/v1/chat/completions`. The OpenAI provider in Rig defaults to the
+Responses API, which compatible providers generally do not serve (Neuralwatt
+limits `/v1/responses` to enrolled accounts), so the API builds the Neuralwatt
+model with Rig's explicit Chat Completions wire
+(`OpenAIConfig::new(key).with_base_url(url).client().chat(model)`).
+
+```sh
+# .env
+DAFTPROMPT_API_PROVIDER=neuralwatt
+NEURALWATT_API_KEY=...
+# DAFTPROMPT_API_MODEL defaults to qwen3.6-35b-fast
+cargo run -p daftprompt-api
+```
 
 The JSON request envelope is capped at six times the text limit plus 16 KiB, so
 JSON escaping and optional source metadata have room without hiding an
@@ -115,7 +143,7 @@ Abbreviated example (IDs, hashes, and timestamps vary):
     { "node_id": "node-s1", "start_byte": 5, "end_byte": 28 },
     { "node_id": "node-s2", "start_byte": 42, "end_byte": 58 }
   ],
-  "run": { "id": "run-1", "agent": "scribe", "provider_id": "openai", "model_id": "gpt-4o-mini", "prompt_version": "scribe-v1", "started_at": "…", "ended_at": "…", "status": "done", "attempts": 1 },
+  "run": { "id": "run-1", "agent": "scribe", "provider": "openai", "model": "gpt-4o-mini", "prompt_version": "scribe-v1", "started_at": "…", "ended_at": "…", "status": "done", "attempts": 1 },
   "run_inputs": [{ "run_id": "run-1", "node_id": "node-root" }],
   "tool_calls": [{ "id": "tool-1", "run_id": "run-1", "seq": 0, "tool": "submit", "input": "{...}", "output_hash": null, "created_at": "…" }]
 }
@@ -144,6 +172,8 @@ request never returns a partly valid graph.
 }
 ```
 
-Oversized input is checked before the first model call. Invalid output is
-retried from scratch, without feedback, until the attempt budget is exhausted;
-the 422 body reports how many attempts were used.
+Oversized input is checked before the first model call. Invalid output
+(deserialization or validation failures) is retried from scratch, without
+feedback, until the attempt budget is exhausted; the 422 body reports how many
+attempts were used. Provider errors (502) and timeouts (504) are not retried:
+they are returned immediately, so the worst-case latency is one timeout.

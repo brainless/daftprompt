@@ -25,8 +25,8 @@ Read [docs/PRD.md](docs/PRD.md), [docs/data-model.md](docs/data-model.md), and t
 
 ## Dependency and verification workflow
 
-- Reference all external dependencies by their upstream Git URLs, pinned to explicit revisions in Cargo manifests. Rig: `https://github.com/0xPlaygrounds/rig.git`; akar: `https://github.com/brainless/akar.git`. Record the upstream Git URL for other dependencies as they are introduced.
-- Local dependency checkouts are for source/example reference only. Do not use local paths or local path patches for external dependencies. Relative path dependencies between this project's own workspace crates are appropriate.
+- Dependencies not published on crates.io (Rig, akar) use their upstream Git URL pinned to an explicit revision in the workspace `Cargo.toml`. Rig: `https://github.com/0xPlaygrounds/rig.git`; akar: `https://github.com/brainless/akar.git`. crates.io dependencies are declared with versions in the workspace `Cargo.toml` and pinned exactly by the committed `Cargo.lock`; record the resolved versions in `docs/development.md` (Git copies would be distinct crates from the ones Rig and akar themselves depend on).
+- Local dependency checkouts are for source/example reference only. Do not use local paths or local path patches for any external dependency, Git or crates.io. Relative path dependencies between this project's own workspace crates are appropriate.
 - Inspect local dependency sources before implementing integrations: Rig at `~/Projects/rig`, akar at `~/Projects/akar`, and other available dependencies under `~/Projects/`. Consult installed crate sources or official documentation when needed.
 - Check actual manifests, examples, and toolchain requirements instead of assuming an API from memory. Useful starting points are Rig's `examples/extractor/` and `crates/rig-agent/src/extractor.rs`, and akar's `examples/canvas-basic-rust/` and textarea usage in `examples/demo-rust/`.
 - Record dependency versions/revisions and reproducible setup commands. Keep provider/model settings configurable and credentials outside source code.

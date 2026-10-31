@@ -60,10 +60,13 @@ impl<M: ExtractionModel> Scribe<M> {
 
     /// Parse one submission.
     ///
-    /// Input limits are checked before the first model call. Invalid output is
-    /// retried from scratch without feedback until the attempt budget is
-    /// exhausted, at which point an explicit error is returned. A partly
-    /// valid graph is never returned.
+    /// Input limits are checked before the first model call. The attempt
+    /// budget covers invalid output only: deserialization and validation
+    /// failures are retried from scratch without feedback until the budget is
+    /// exhausted, at which point an explicit error is returned. A provider
+    /// error or a per-attempt timeout is returned immediately without
+    /// retrying, so worst-case latency is one timeout. A partly valid graph is
+    /// never returned.
     pub async fn parse(&self, request: ParseRequest) -> Result<ParseResult, ParseError> {
         let text = request.text.as_str();
 
@@ -97,7 +100,7 @@ impl<M: ExtractionModel> Scribe<M> {
             segments: render_segments(text),
         };
         let max_attempts = self.config.effective_max_attempts();
-        let mut last_error = AttemptFailure::Internal("no attempt ran".to_owned());
+        let mut last_invalid = "no attempt ran".to_owned();
 
         for attempt in 1..=max_attempts {
             let outcome =
@@ -105,16 +108,18 @@ impl<M: ExtractionModel> Scribe<M> {
 
             match outcome {
                 Err(_elapsed) => {
-                    last_error = AttemptFailure::Timeout(format!(
-                        "the model call exceeded {:?} on attempt {attempt} of {max_attempts}",
-                        self.config.timeout
-                    ));
+                    return Err(ParseError::Timeout {
+                        detail: format!(
+                            "the model call exceeded {:?} on attempt {attempt} of {max_attempts}",
+                            self.config.timeout
+                        ),
+                    });
                 }
                 Ok(Err(ModelError::Invalid(detail))) => {
-                    last_error = AttemptFailure::Invalid(detail);
+                    last_invalid = detail;
                 }
                 Ok(Err(ModelError::Provider(detail))) => {
-                    last_error = AttemptFailure::Provider(detail);
+                    return Err(ParseError::Provider { detail });
                 }
                 Ok(Err(ModelError::Internal(detail))) => {
                     return Err(ParseError::Internal { detail });
@@ -132,13 +137,16 @@ impl<M: ExtractionModel> Scribe<M> {
                         );
                     }
                     Err(error) => {
-                        last_error = AttemptFailure::Invalid(error.to_string());
+                        last_invalid = error.to_string();
                     }
                 },
             }
         }
 
-        Err(last_error.into_parse_error(max_attempts))
+        Err(ParseError::InvalidOutput {
+            detail: last_invalid,
+            attempts: max_attempts,
+        })
     }
 }
 
@@ -152,25 +160,6 @@ impl Scribe<RigExtractor> {
         M: Into<rig::DynModel<rig::operation::Completion>>,
     {
         Self::new(config, RigExtractor::from_model(model))
-    }
-}
-
-/// The last failed attempt, kept so the final error names the real cause.
-enum AttemptFailure {
-    Invalid(String),
-    Provider(String),
-    Timeout(String),
-    Internal(String),
-}
-
-impl AttemptFailure {
-    fn into_parse_error(self, attempts: u32) -> ParseError {
-        match self {
-            Self::Invalid(detail) => ParseError::InvalidOutput { detail, attempts },
-            Self::Provider(detail) => ParseError::Provider { detail },
-            Self::Timeout(detail) => ParseError::Timeout { detail },
-            Self::Internal(detail) => ParseError::Internal { detail },
-        }
     }
 }
 
