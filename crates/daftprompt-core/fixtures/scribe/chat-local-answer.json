@@ -1,0 +1,48 @@
+{
+  "format_version": 1,
+  "id": "chat-local-answer",
+  "category": "chat",
+  "note": "One question is answered in the same text, one remains open.",
+  "source": {
+    "kind": "chat",
+    "author": "ada"
+  },
+  "text": "Q: Do we need a migration for the new index?\nA: Yes, add one that drops the old index first.\nQ: Who owns the rollback plan?\n",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 0,
+      "end": 44,
+      "quote": "Q: Do we need a migration for the new index?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "start": 45,
+      "end": 92,
+      "quote": "A: Yes, add one that drops the old index first.",
+      "labels": []
+    },
+    {
+      "id": "e3",
+      "start": 93,
+      "end": 123,
+      "quote": "Q: Who owns the rollback plan?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    }
+  ],
+  "answer_links": [
+    {
+      "from": "e2",
+      "to": "e1"
+    }
+  ]
+}

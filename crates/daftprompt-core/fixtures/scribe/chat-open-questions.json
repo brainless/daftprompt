@@ -1,0 +1,37 @@
+{
+  "format_version": 1,
+  "id": "chat-open-questions",
+  "category": "chat",
+  "note": "Two open questions in a chat reply; one is explicitly assigned to @mira, and @alex is only mentioned.",
+  "source": {
+    "kind": "chat",
+    "author": "ada"
+  },
+  "text": "Next steps for token caching.\n\n@mira should we cache tokens in Redis?\nWhat is the current rate limit for /v1/parse?\n\n@alex mentioned that the cache feels slow, but nothing is assigned here.\n",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 31,
+      "end": 69,
+      "quote": "@mira should we cache tokens in Redis?",
+      "labels": [
+        {
+          "kind": "question",
+          "assignee": "@mira"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "start": 70,
+      "end": 115,
+      "quote": "What is the current rate limit for /v1/parse?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    }
+  ],
+  "answer_links": []
+}

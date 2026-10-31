@@ -1,0 +1,9 @@
+{
+  "format_version": 1,
+  "id": "none-release-notes",
+  "category": "none",
+  "note": "Release notes with no actionable question.",
+  "text": "Release 2.4.0\n- Fix a crash when the cache is empty.\n- Improve log messages.\nShipped on 2026-10-24.\n",
+  "spans": [],
+  "answer_links": []
+}

@@ -11,7 +11,7 @@ Bare minimum. Everything lives in one SQLite database. The vocabulary is fixed a
 - **Assignee**: an optional text handle on a label indicating who is expected to respond, particularly to an open question. It is `@username` or `@team-name`, with no reference to a people or teams table.
 - **Run log**: what agents did (runs, inputs, tool calls). It is stored alongside the graph but is not part of it.
 
-The graph is a forest. Each tree's root is the Node for the user's root prompt (`parent_id IS NULL`). `parent_id` records "said in response to / is a part of". Labels add cross-links.
+The graph is a forest. Each tree's root is the Node for the text that started it — the user's root prompt, or for a standalone import the imported text (`parent_id IS NULL`). `parent_id` records "said in response to / is a part of". Labels add cross-links.
 
 ## Schema
 
@@ -34,6 +34,8 @@ CREATE TABLE node (
 -- A Node has one or more contexts, ordered by seq.
 -- Exactly one of payload_hash / path is set.
 -- Range NULL = whole payload/file. Lines and columns 1-based; end exclusive.
+-- Columns count Unicode scalar values (chars) and lines count \n. CRLF is
+-- preserved, so the \r of a CRLF terminator is a line character.
 CREATE TABLE node_context (
   id            TEXT PRIMARY KEY,
   node_id       TEXT NOT NULL REFERENCES node(id),
@@ -61,11 +63,15 @@ CREATE TABLE label (
 
 -- Run log: outside the graph.
 CREATE TABLE run (
-  id          TEXT PRIMARY KEY,
-  agent       TEXT NOT NULL,              -- which agent / mode
-  started_at  TEXT NOT NULL,
-  ended_at    TEXT,
-  status      TEXT NOT NULL               -- running | done | failed
+  id             TEXT PRIMARY KEY,
+  agent          TEXT NOT NULL,              -- which agent / mode
+  provider       TEXT,                       -- provider id, e.g. openai
+  model          TEXT,                       -- model id, e.g. gpt-4o-mini
+  prompt_version TEXT,                       -- prompt revision, e.g. scribe-v1
+  started_at     TEXT NOT NULL,
+  ended_at       TEXT,
+  status         TEXT NOT NULL,              -- running | done | failed
+  attempts       INTEGER NOT NULL DEFAULT 1  -- attempts used, including invalid output
 );
 
 CREATE TABLE run_input (
@@ -109,6 +115,16 @@ Many-to-many falls out of binary labels: one answer can resolve several question
   - A file NodeContext is stale if the file's current hash ≠ `content_hash`. File ranges can drift. The hash detects this but cannot re-anchor the range.
   - Detected staleness is written as a `stale` label so it can be resolved or dismissed.
 - **Done.** A tree is done when no blocking label in it has status `open` or `deferred`.
+
+## Parsing decisions (Epic 001)
+
+The first parsing experiment fixes these interpretations. They refine the rules above; none of them changes the vocabulary.
+
+- **Payloads are not only chat.** A payload may hold chat text, a file's contents as captured at submission time, clipboard contents, or an email. Captured file contents remain a payload: only a context that really is a file on disk uses `path` and `content_hash`. Provenance (source kind, reference, author) travels next to the text in the parse request and result, separately from the text, and is not persisted in this epic.
+- **Any import can be a tree root.** A standalone submission is a root (`parent_id IS NULL`) even when it was not a user prompt. Its `author` is the source author when the request supplied one, otherwise the literal `unknown`. The author is never derived from the text.
+- **Column units and exclusive ends.** Graph ranges use 1-based lines and 1-based columns counted in Unicode scalar values (`char`s), with an exclusive end position: a span ending at the end of a five-character line has `end_col = 6`. Lines are counted by `\n`; CRLF text is preserved unchanged, so the `\r` of a CRLF terminator counts as a line character. API results and internal spans use half-open byte ranges `[start, end)` that always fall on `char` boundaries.
+- **Question status is Rust-derived.** The model never proposes a status. A `question` label with at least one validated local `answer` link is `resolved`; otherwise it is `open`. `answer` labels have NULL status.
+- **In-memory records mirror the schema.** A `NodeContext` stores a tagged payload-or-file target, so exactly one target is always set, plus an optional range. A `Run` also carries provider, model, prompt version, and attempt count, which are columns in `run`. A parse result additionally lists each span node's half-open byte range so clients can render source blocks without recomputing coordinates.
 
 ## Worked example
 
