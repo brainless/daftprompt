@@ -9,7 +9,7 @@
 //! channel; rendering never blocks. This crate talks only to `daftprompt-types`
 //! and the documented `POST /parse` endpoint; it never links the parser. At
 //! startup it may run the compiled `daftprompt-api` binary as a child process
-//! (see `spawn`), stopped when the window closes.
+//! (see `spawn`), stopped when the app quits or the window closes.
 
 mod api;
 mod clipboard;
@@ -335,6 +335,13 @@ impl ApplicationHandler for App {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
         }
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // On macOS, Cmd+Q terminates the process from inside the event loop,
+        // so `run_app` never returns and `main` never drops the app; stop the
+        // child here instead.
+        drop(self.api_process.take());
     }
 }
 
