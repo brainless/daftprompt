@@ -2,7 +2,7 @@
   "format_version": 1,
   "id": "email-crlf-answer",
   "category": "email",
-  "note": "CRLF email text with a locally answered question; byte ranges preserve the carriage returns.",
+  "note": "CRLF email text with a locally answered question; byte ranges preserve the carriage returns. Epic 002: the answer also requests outstanding work, so it independently carries a task label.",
   "source": {
     "kind": "email",
     "author": "Sam"
@@ -25,7 +25,11 @@
       "start": 51,
       "end": 84,
       "quote": "Yes, ship it after the migration.",
-      "labels": []
+      "labels": [
+        {
+          "kind": "task"
+        }
+      ]
     }
   ],
   "answer_links": [

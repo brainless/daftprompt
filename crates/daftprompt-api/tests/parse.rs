@@ -117,12 +117,16 @@ async fn successful_result() -> ParseResult {
             ExtractedAnnotation {
                 kind: AnnotationKind::Question,
                 span: "s1".to_owned(),
+                questions: Vec::new(),
+                alternatives: Vec::new(),
                 answers: Vec::new(),
                 assignee: Some("@infra-team".to_owned()),
             },
             ExtractedAnnotation {
                 kind: AnnotationKind::Answer,
                 span: "s2".to_owned(),
+                questions: Vec::new(),
+                alternatives: Vec::new(),
                 answers: vec!["s1".to_owned()],
                 assignee: None,
             },
@@ -455,4 +459,69 @@ async fn only_post_is_served_on_parse() {
         .expect("the router answers");
 
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn expanded_results_serialize_numbers_and_relationships() {
+    let extraction: Extraction = serde_json::from_value(serde_json::json!({
+        "spans": [
+            {"id":"t","start_segment":4,"end_segment":4},
+            {"id":"r","start_segment":2,"end_segment":2},
+            {"id":"q","start_segment":1,"end_segment":1},
+            {"id":"a","start_segment":3,"end_segment":3}
+        ],
+        "annotations": [
+            {"kind":"recommendation","span":"r","questions":["q"]},
+            {"kind":"task","span":"t","assignee":"@alex"},
+            {"kind":"answer","span":"a","answers":["q"]},
+            {"kind":"question","span":"q"}
+        ]
+    }))
+    .unwrap();
+    let result = Scribe::new(ScribeConfig::new(), StubModel { extraction })
+        .parse(ParseRequest::new(
+            "Choose?\nI suggest caching.\nWe choose caching.\n@alex, benchmark it.",
+        ))
+        .await
+        .unwrap();
+    let (status, body) = post(
+        app(StubParser::returning(Ok(result)), ApiConfig::default()),
+        r#"{"text":"input"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let decoded: ParseResult = serde_json::from_value(body.clone()).unwrap();
+    assert_eq!(
+        decoded
+            .spans
+            .iter()
+            .map(|s| s.display_id)
+            .collect::<Vec<_>>(),
+        [1, 2, 3, 4]
+    );
+    for (kind, source, target) in [
+        (LabelKind::RecommendationFor, 1, 0),
+        (LabelKind::Answer, 2, 0),
+    ] {
+        let label = decoded.labels.iter().find(|l| l.kind == kind).unwrap();
+        assert_eq!(label.src_node_id, decoded.spans[source].node_id);
+        assert_eq!(
+            label.dst_node_id.as_deref(),
+            Some(decoded.spans[target].node_id.as_str())
+        );
+    }
+    let task = decoded
+        .labels
+        .iter()
+        .find(|l| l.kind == LabelKind::Task)
+        .unwrap();
+    assert_eq!(task.status, Some(LabelStatus::Open));
+    assert_eq!(task.assignee.as_deref(), Some("@alex"));
+    assert!(
+        body["labels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l["kind"] == "recommendation")
+    );
 }

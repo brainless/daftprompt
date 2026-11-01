@@ -151,7 +151,8 @@ fn build_span(
     let mut children = Vec::new();
     let mut badges = Vec::new();
 
-    let badge_specs = badges_for(&span.labels);
+    let mut badge_specs = vec![(format!("#{}", span.display_id), BadgeVariant::Default)];
+    badge_specs.extend(badges_for(&span.labels));
     if !badge_specs.is_empty() {
         let mut badge_nodes = Vec::with_capacity(badge_specs.len());
         for (text, variant) in badge_specs {
@@ -206,26 +207,13 @@ fn build_span(
     children.push(quote);
 
     let mut answer_lines = Vec::new();
-    for label in &span.labels {
-        if let Some(target) = &label.target {
-            let text = format!("answers → {target}");
-            let node = layout.new_leaf(Style {
-                size: Size {
-                    width: Dimension::percent(1.0),
-                    height: length(ANSWER_LINE_HEIGHT),
-                },
-                ..Default::default()
-            });
-            children.push(node);
-            answer_lines.push((node, text));
-        }
-    }
-    for answer in &span.answered_by {
-        let text = format!("answered by: {answer}");
+    for text in relationship_lines(span) {
+        let height =
+            estimated_text_height(&text, inner_width, theme.font_size_sm, ANSWER_LINE_HEIGHT);
         let node = layout.new_leaf(Style {
             size: Size {
                 width: Dimension::percent(1.0),
-                height: length(ANSWER_LINE_HEIGHT),
+                height: length(height),
             },
             ..Default::default()
         });
@@ -270,13 +258,37 @@ fn build_span(
     )
 }
 
+fn relationship_lines(span: &SpanView) -> Vec<String> {
+    let mut lines = Vec::new();
+    for label in &span.labels {
+        if let Some(target) = &label.target {
+            let verb = if label.kind == daftprompt_types::LabelKind::Answer {
+                "answers"
+            } else {
+                "recommendation for"
+            };
+            lines.push(format!("{verb} → {target}"));
+        }
+    }
+    for (prefix, targets) in [
+        ("answered by", &span.answered_by),
+        ("recommendations", &span.recommended_by),
+        ("alternative to", &span.alternatives),
+    ] {
+        for target in targets {
+            lines.push(format!("{prefix}: {target}"));
+        }
+    }
+    lines
+}
+
 /// Badge text and variant for one label: kind plus status, and an assignee
 /// handle as its own badge.
 fn badges_for(labels: &[LabelView]) -> Vec<(String, BadgeVariant)> {
     let mut badges = Vec::new();
     for label in labels {
         let (text, variant) = match label.kind {
-            daftprompt_types::LabelKind::Question => {
+            daftprompt_types::LabelKind::Question | daftprompt_types::LabelKind::Task => {
                 let status = match label.status {
                     Some(daftprompt_types::LabelStatus::Resolved) => "resolved",
                     Some(daftprompt_types::LabelStatus::Deferred) => "deferred",
@@ -289,8 +301,28 @@ fn badges_for(labels: &[LabelView]) -> Vec<(String, BadgeVariant)> {
                     Some(daftprompt_types::LabelStatus::Dismissed) => BadgeVariant::Default,
                     Some(daftprompt_types::LabelStatus::Open) | None => BadgeVariant::Warning,
                 };
-                (format!("question · {status}"), variant)
+                (
+                    format!(
+                        "{} · {status}",
+                        if label.kind == daftprompt_types::LabelKind::Task {
+                            "task"
+                        } else {
+                            "question"
+                        }
+                    ),
+                    variant,
+                )
             }
+            daftprompt_types::LabelKind::Recommendation => {
+                ("recommendation".to_owned(), BadgeVariant::Primary)
+            }
+            daftprompt_types::LabelKind::RecommendationFor => {
+                ("recommendation for".to_owned(), BadgeVariant::Primary)
+            }
+            daftprompt_types::LabelKind::AlternativeTo => {
+                ("alternative".to_owned(), BadgeVariant::Primary)
+            }
+
             daftprompt_types::LabelKind::Answer => ("answer".to_owned(), BadgeVariant::Primary),
             daftprompt_types::LabelKind::Conflict => ("conflict".to_owned(), BadgeVariant::Error),
             daftprompt_types::LabelKind::Supersedes => {
@@ -633,6 +665,7 @@ mod tests {
 
     fn span(text: &str) -> Block {
         Block::Span(SpanView {
+            display_id: 1,
             node_id: "n".to_owned(),
             start_byte: 0,
             end_byte: text.len(),
@@ -643,7 +676,9 @@ mod tests {
                 assignee: Some("@infra-team".to_owned()),
                 target: None,
             }],
-            answered_by: vec!["A first answer".to_owned()],
+            answered_by: vec!["#2 · A first answer".to_owned()],
+            recommended_by: Vec::new(),
+            alternatives: Vec::new(),
         })
     }
 
@@ -675,6 +710,46 @@ mod tests {
             ("question · resolved".to_owned(), BadgeVariant::Success)
         );
         assert_eq!(badges[1], ("@team".to_owned(), BadgeVariant::Info));
+    }
+
+    #[test]
+    fn new_badges_and_relationship_lines_are_distinct() {
+        let Block::Span(mut span) = span("Suggestion") else {
+            unreachable!()
+        };
+        span.labels = vec![
+            LabelView {
+                kind: LabelKind::Task,
+                status: Some(LabelStatus::Open),
+                assignee: Some("@alex".into()),
+                target: None,
+            },
+            LabelView {
+                kind: LabelKind::Recommendation,
+                status: None,
+                assignee: None,
+                target: None,
+            },
+        ];
+        span.recommended_by = vec!["#3 · Suggested option".into()];
+        span.alternatives = vec!["#4 · Other option".into()];
+        let badges = badges_for(&span.labels);
+        assert_eq!(badges[0].0, "task · open");
+        assert_eq!(badges[1].0, "@alex");
+        assert_eq!(badges[2].0, "recommendation");
+        assert_eq!(
+            relationship_lines(&span),
+            [
+                "answered by: #2 · A first answer",
+                "recommendations: #3 · Suggested option",
+                "alternative to: #4 · Other option"
+            ]
+        );
+        let content = build_content(&[Block::Span(span)], 500.0, &AKAR_THEME_DARK).unwrap();
+        let EntryKind::Span { badges, .. } = &content.entries[0].kind else {
+            unreachable!()
+        };
+        assert_eq!(badges[0].text, "#1");
     }
 
     #[test]

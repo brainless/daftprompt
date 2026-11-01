@@ -1,0 +1,69 @@
+{
+  "format_version": 1,
+  "id": "standalone-alternatives",
+  "category": "chat",
+  "note": "Epic 002 semantic boundary coverage",
+  "text": "Three alternatives:\nOption A: Cache locally. Avoid a network hop.\nOption B: Use shared Redis. Share entries.\nOption C: Skip caching. Keep it simple.\nSeparately, I recommend latency metrics.",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 20,
+      "end": 65,
+      "quote": "Option A: Cache locally. Avoid a network hop.",
+      "labels": [
+        {
+          "kind": "recommendation"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "start": 66,
+      "end": 108,
+      "quote": "Option B: Use shared Redis. Share entries.",
+      "labels": [
+        {
+          "kind": "recommendation"
+        }
+      ]
+    },
+    {
+      "id": "e3",
+      "start": 109,
+      "end": 148,
+      "quote": "Option C: Skip caching. Keep it simple.",
+      "labels": [
+        {
+          "kind": "recommendation"
+        }
+      ]
+    },
+    {
+      "id": "e4",
+      "start": 149,
+      "end": 189,
+      "quote": "Separately, I recommend latency metrics.",
+      "labels": [
+        {
+          "kind": "recommendation"
+        }
+      ]
+    }
+  ],
+  "answer_links": [],
+  "recommendation_links": [],
+  "alternative_links": [
+    {
+      "from": "e2",
+      "to": "e1"
+    },
+    {
+      "from": "e1",
+      "to": "e3"
+    },
+    {
+      "from": "e3",
+      "to": "e2"
+    }
+  ]
+}

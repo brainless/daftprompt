@@ -87,7 +87,7 @@ pub struct PredictedLabel {
     pub kind: AnnotationKind,
     /// Index into [`Prediction::spans`].
     pub span: usize,
-    /// Only set for `question` labels.
+    /// Only set for `question` or `task` labels.
     pub assignee: Option<String>,
 }
 
@@ -106,6 +106,8 @@ pub struct Prediction {
     pub spans: Vec<PredictedSpan>,
     pub labels: Vec<PredictedLabel>,
     pub answer_links: Vec<PredictedAnswerLink>,
+    pub recommendation_links: Vec<PredictedAnswerLink>,
+    pub alternative_links: Vec<PredictedAnswerLink>,
 }
 
 impl Prediction {
@@ -127,6 +129,8 @@ impl Prediction {
 
         let mut labels = Vec::new();
         let mut answer_links = Vec::new();
+        let mut recommendation_links = Vec::new();
+        let mut alternative_links = Vec::new();
         for label in &result.labels {
             let Some(source) = span_index(&label.src_node_id) else {
                 continue;
@@ -151,6 +155,28 @@ impl Prediction {
                         to: target,
                     });
                 }
+                LabelKind::Recommendation | LabelKind::Task => labels.push(PredictedLabel {
+                    kind: if label.kind == LabelKind::Task {
+                        AnnotationKind::Task
+                    } else {
+                        AnnotationKind::Recommendation
+                    },
+                    span: source,
+                    assignee: label.assignee.clone(),
+                }),
+                LabelKind::RecommendationFor | LabelKind::AlternativeTo => {
+                    if let Some(target) = label.dst_node_id.as_deref().and_then(span_index) {
+                        let links = if label.kind == LabelKind::AlternativeTo {
+                            &mut alternative_links
+                        } else {
+                            &mut recommendation_links
+                        };
+                        links.push(PredictedAnswerLink {
+                            from: source,
+                            to: target,
+                        });
+                    }
+                }
                 LabelKind::Conflict | LabelKind::Supersedes | LabelKind::Stale => {}
             }
         }
@@ -159,6 +185,8 @@ impl Prediction {
             spans,
             labels,
             answer_links,
+            recommendation_links,
+            alternative_links,
         }
     }
 }

@@ -2,7 +2,7 @@
   "format_version": 1,
   "id": "chat-local-answer",
   "category": "chat",
-  "note": "One question is answered in the same text, one remains open.",
+  "note": "One question is answered in the same text, one remains open. Epic 002: the answer also requests outstanding work, so it independently carries a task label.",
   "source": {
     "kind": "chat",
     "author": "ada"
@@ -25,7 +25,11 @@
       "start": 45,
       "end": 92,
       "quote": "A: Yes, add one that drops the old index first.",
-      "labels": []
+      "labels": [
+        {
+          "kind": "task"
+        }
+      ]
     },
     {
       "id": "e3",

@@ -86,8 +86,8 @@ Scribe parser over HTTP.
 ## Scribe
 
 Scribe lives in `daftprompt-core::scribe`. Its system prompt is versioned in
-`crates/daftprompt-core/prompts/scribe-v1.md`, included at compile time, and recorded on
-every run as `scribe-v1`.
+`crates/daftprompt-core/prompts/scribe-v3.md`, included at compile time, and recorded on
+every run as `scribe-v3`.
 
 - `Scribe::parse(ParseRequest)` is the transport-independent entry point. The API can
   also hold an `Arc<dyn scribe::Parser>`.
@@ -114,23 +114,23 @@ text, and text with no actionable content. It includes locally answered and unan
 questions plus explicit and incidental `@` mentions. Each file records:
 
 - the complete text and optional source metadata;
-- expected spans as half-open byte ranges plus a verbatim `quote` and their `question`
-  labels (with an optional `assignee`);
-- expected `answer` links between spans by local span id.
+- expected spans as half-open byte ranges plus a verbatim `quote` and unary `question`,
+  `recommendation`, and `task` labels (questions/tasks may carry an explicit `assignee`);
+- expected `answer`, `recommendation_links`, and symmetric `alternative_links` between spans by local span id.
 
 `load_fixtures` validates the format before scoring: quotes must equal their byte range,
 ranges must be trimmed and on `char` boundaries, spans must not overlap, handle shapes
-must be valid, and answer links must target expected questions. A malformed fixture
+must be valid, answer and recommendation links must target expected questions, and alternatives must join recommendations. A malformed fixture
 fails the ordinary test suite.
 
-Scores are reported for spans, labels, answer links, and assignees, each under two span
+Scores are reported for spans, labels, answer links, unary recommendations, tasks, recommendation-question links, symmetric alternative pairs, and assignees, each under two span
 matching modes:
 
 - **exact** — byte ranges are equal after trimming surrounding whitespace;
 - **lenient** — overlap divided by union is at least `0.5`.
 
 A label is correct when its kind matches on a matched span, an answer link when both
-ends match, and an assignee when the handle is identical on a matched question. Matching
+ends match, and an assignee when both label kind and handle match on a matched question or task. Matching
 is one-to-one and greedy, preferring exact pairs and then higher overlap. Reports also
 list every missed, unexpected, approximate, or mismatched item, plus parse failures with
 their explicit error kind and reason, attempts per parse, and latency.
@@ -201,7 +201,7 @@ drive the router with a stub `Parser`, so they need no credentials.
 `daftprompt-gui` is the two-column akar app. The left column holds a multiline
 textarea anchored at the bottom and a Parse button; the right column renders the
 original text in source order as scrollable blocks with label badges, statuses,
-assignees, and answer targets. Each submission replaces the previous result.
+assignees, API display IDs, and answer/recommendation/alternative links. Each submission replaces the previous result.
 
 ```sh
 # Build the API binary, then run the app; it starts the API itself.
@@ -234,3 +234,20 @@ cargo clippy -p daftprompt-core --features live-eval --bins -- -D warnings
 ```
 
 Ordinary tests must not need LLM credentials. Live model evaluations are opt-in and are documented with the parsing task.
+
+## Epic 002 verification
+
+The parser uses Scribe v3. Deterministic tests cover recommendation/task fields, target
+kinds, self and duplicate links (including reversed alternatives), many-to-many links,
+source-order contiguous display IDs, multiple labels sharing a number, standalone
+recommendations, explicit alternative sets, and complementary plans. The fixture set
+contains 19 texts; relationship labels do not increase the recommendation entity count.
+
+The [Scribe v3 Neuralwatt report](evaluations/scribe-v3-neuralwatt-qwen3.6-35b-fast.md)
+records the opt-in live run with `qwen3.6-35b-fast`. The 11 original fixtures retain all
+question and answer expectations. `chat-local-answer` and `email-crlf-answer` additionally
+expect a task on their explicit action-request answer spans; these are independent labels
+justified by the expanded contract. Eight new fixtures exercise advice/decision boundaries,
+standalone alternatives, complementary plans, requests and commitments, completed work,
+incidental mentions, and many-to-many recommendations. Historical baseline reports have
+no live v2 scores, so no quantitative v2/v3 model comparison is claimed.

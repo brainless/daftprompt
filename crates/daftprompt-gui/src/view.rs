@@ -115,6 +115,7 @@ pub struct LabelView {
 /// One validated span, rendered from its exact source range.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpanView {
+    pub display_id: u32,
     pub node_id: String,
     pub start_byte: usize,
     pub end_byte: usize,
@@ -123,6 +124,8 @@ pub struct SpanView {
     pub labels: Vec<LabelView>,
     /// Answer spans that point at this question, if any.
     pub answered_by: Vec<String>,
+    pub recommended_by: Vec<String>,
+    pub alternatives: Vec<String>,
 }
 
 /// A source-ordered piece of the original text.
@@ -155,12 +158,37 @@ pub fn build_blocks(result: &ParseResult) -> Vec<Block> {
         .collect();
     spans.sort_by_key(|span| (span.start_byte, span.end_byte));
 
-    let node_text: HashMap<&str, &str> = spans
+    // Reject ambiguous identities without inventing replacement numbers.
+    let mut ids = HashMap::new();
+    let mut nodes = HashMap::new();
+    for span in &spans {
+        *ids.entry(span.display_id).or_insert(0) += 1;
+        *nodes.entry(span.node_id.as_str()).or_insert(0) += 1;
+    }
+    spans.retain(|span| {
+        span.display_id > 0 && ids[&span.display_id] == 1 && nodes[span.node_id.as_str()] == 1
+    });
+    let mut end = 0;
+    spans.retain(|span| {
+        if span.start_byte < end {
+            return false;
+        }
+        end = span.end_byte;
+        true
+    });
+    let node_text: HashMap<&str, String> = spans
         .iter()
         .map(|span| {
             (
                 span.node_id.as_str(),
-                &content[span.start_byte..span.end_byte],
+                format!(
+                    "#{} · {}",
+                    span.display_id,
+                    truncate_for_display(
+                        &content[span.start_byte..span.end_byte],
+                        TARGET_PREVIEW_CHARS
+                    )
+                ),
             )
         })
         .collect();
@@ -177,7 +205,7 @@ pub fn build_blocks(result: &ParseResult) -> Vec<Block> {
         }
 
         let gap = &content[cursor..span.start_byte];
-        if !gap.trim().is_empty() {
+        if !gap.is_empty() {
             blocks.push(Block::Text {
                 text: gap.to_owned(),
             });
@@ -194,30 +222,51 @@ pub fn build_blocks(result: &ParseResult) -> Vec<Block> {
             })
             .unwrap_or_default();
 
-        let answered_by = result
+        let incoming = |kind| {
+            result
+                .labels
+                .iter()
+                .filter(|label| {
+                    label.kind == kind
+                        && label.dst_node_id.as_deref() == Some(span.node_id.as_str())
+                })
+                .filter_map(|label| node_text.get(label.src_node_id.as_str()).cloned())
+                .collect()
+        };
+        let answered_by = incoming(LabelKind::Answer);
+        let recommended_by = incoming(LabelKind::RecommendationFor);
+        let alternatives = result
             .labels
             .iter()
-            .filter(|label| {
-                label.kind == LabelKind::Answer
-                    && label.dst_node_id.as_deref() == Some(span.node_id.as_str())
+            .filter(|label| label.kind == LabelKind::AlternativeTo)
+            .filter_map(|label| {
+                if label.src_node_id == span.node_id {
+                    label.dst_node_id.as_deref()
+                } else if label.dst_node_id.as_deref() == Some(span.node_id.as_str()) {
+                    Some(label.src_node_id.as_str())
+                } else {
+                    None
+                }
             })
-            .filter_map(|label| node_text.get(label.src_node_id.as_str()))
-            .map(|text| truncate_for_display(text, TARGET_PREVIEW_CHARS))
+            .filter_map(|id| node_text.get(id).cloned())
             .collect();
 
         blocks.push(Block::Span(SpanView {
+            display_id: span.display_id,
             node_id: span.node_id.clone(),
             start_byte: span.start_byte,
             end_byte: span.end_byte,
             text: text.to_owned(),
             labels,
             answered_by,
+            recommended_by,
+            alternatives,
         }));
         cursor = span.end_byte;
     }
 
     let rest = &content[cursor..];
-    if !rest.trim().is_empty() {
+    if !rest.is_empty() {
         blocks.push(Block::Text {
             text: rest.to_owned(),
         });
@@ -237,14 +286,14 @@ fn labels_by_source_node(labels: &[Label]) -> HashMap<&str, Vec<&Label>> {
     grouped
 }
 
-fn label_view(label: &Label, node_text: &HashMap<&str, &str>) -> LabelView {
-    let target = if label.kind == LabelKind::Answer {
+fn label_view(label: &Label, node_text: &HashMap<&str, String>) -> LabelView {
+    let target = if matches!(label.kind, LabelKind::Answer | LabelKind::RecommendationFor) {
         label
             .dst_node_id
             .as_deref()
             .and_then(|node_id| node_text.get(node_id))
-            .map(|text| truncate_for_display(text, TARGET_PREVIEW_CHARS))
-            .or_else(|| Some("another block".to_owned()))
+            .cloned()
+            .or_else(|| Some("unavailable target".to_owned()))
     } else {
         None
     };
@@ -396,11 +445,13 @@ mod tests {
             labels,
             spans: vec![
                 SpanInfo {
+                    display_id: 1,
                     node_id: question_id.to_owned(),
                     start_byte: 6,
                     end_byte: 8,
                 },
                 SpanInfo {
+                    display_id: 2,
                     node_id: answer_id.to_owned(),
                     start_byte: 9,
                     end_byte: 10,
@@ -436,7 +487,7 @@ mod tests {
     #[test]
     fn source_order_keeps_unlabelled_text_between_spans() {
         let blocks = build_blocks(&sample_result());
-        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks.len(), 5);
         assert_eq!(
             blocks[0],
             Block::Text {
@@ -450,42 +501,47 @@ mod tests {
         assert_eq!(question.node_id, "q");
         assert_eq!(question.labels[0].status, Some(LabelStatus::Resolved));
         assert_eq!(question.labels[0].assignee.as_deref(), Some("@infra-team"));
-        assert_eq!(question.answered_by, vec!["A".to_owned()]);
+        assert_eq!(question.answered_by, vec!["#2 · A".to_owned()]);
 
-        let Block::Span(answer) = &blocks[2] else {
+        let Block::Span(answer) = &blocks[3] else {
             panic!("expected the answer span");
         };
         assert_eq!(answer.text, "A");
         assert_eq!(answer.labels[0].kind, LabelKind::Answer);
-        assert_eq!(answer.labels[0].target.as_deref(), Some("Q?"));
+        assert_eq!(answer.labels[0].target.as_deref(), Some("#1 · Q?"));
     }
 
     #[test]
-    fn whitespace_only_gaps_do_not_become_blocks() {
-        let blocks = build_blocks(&sample_result());
-        assert!(
-            blocks
-                .iter()
-                .all(|block| !matches!(block, Block::Text { text } if text.trim().is_empty()))
-        );
+    fn whitespace_only_gaps_preserve_original_text() {
+        let result = sample_result();
+        let reconstructed: String = build_blocks(&result)
+            .iter()
+            .map(|block| match block {
+                Block::Text { text } => text.as_str(),
+                Block::Span(span) => span.text.as_str(),
+            })
+            .collect();
+        assert_eq!(reconstructed, result.payload.content);
     }
 
     #[test]
     fn out_of_bounds_and_overlapping_ranges_are_ignored() {
         let mut result = sample_result();
         result.spans.push(SpanInfo {
+            display_id: 3,
             node_id: "bad-boundary".to_owned(),
             start_byte: 7,
             end_byte: 9,
         });
         result.spans.push(SpanInfo {
+            display_id: 1,
             node_id: "out-of-bounds".to_owned(),
             start_byte: 0,
             end_byte: 99,
         });
         let blocks = build_blocks(&result);
         // The valid spans still render, and the malformed ones add no block.
-        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks.len(), 5);
     }
 
     #[test]
@@ -495,6 +551,7 @@ mod tests {
         result.labels.clear();
         // "é" occupies bytes 1..3; byte 2 is inside the character.
         result.spans = vec![SpanInfo {
+            display_id: 1,
             node_id: "bad".to_owned(),
             start_byte: 1,
             end_byte: 2,
@@ -506,6 +563,7 @@ mod tests {
         );
 
         result.spans = vec![SpanInfo {
+            display_id: 1,
             node_id: "good".to_owned(),
             start_byte: 1,
             end_byte: 3,
@@ -539,6 +597,7 @@ mod tests {
     fn overlapping_spans_keep_only_the_first_block() {
         let mut result = sample_result();
         result.spans.push(SpanInfo {
+            display_id: 3,
             node_id: "overlap".to_owned(),
             start_byte: 6,
             end_byte: 9,
@@ -552,12 +611,114 @@ mod tests {
     }
 
     #[test]
-    fn empty_text_produces_no_blocks() {
+    fn whitespace_only_text_is_preserved() {
         let mut result = sample_result();
         result.payload.content = "  \n".to_owned();
         result.spans.clear();
         result.labels.clear();
-        assert!(build_blocks(&result).is_empty());
+        assert_eq!(
+            build_blocks(&result),
+            vec![Block::Text {
+                text: "  \n".to_owned()
+            }]
+        );
+    }
+
+    #[test]
+    fn new_relationships_use_api_numbers_and_preserve_source() {
+        let mut result = sample_result();
+        result.payload.content.push_str("R\nT");
+        result.spans.extend([
+            SpanInfo {
+                display_id: 3,
+                node_id: "r".into(),
+                start_byte: 11,
+                end_byte: 12,
+            },
+            SpanInfo {
+                display_id: 4,
+                node_id: "t".into(),
+                start_byte: 13,
+                end_byte: 14,
+            },
+        ]);
+        let base = result.labels[1].clone();
+        for (kind, src, dst) in [
+            (LabelKind::Recommendation, "a", None),
+            (LabelKind::Recommendation, "r", None),
+            (LabelKind::RecommendationFor, "r", Some("q")),
+            (LabelKind::AlternativeTo, "a", Some("r")),
+            (LabelKind::Task, "t", None),
+        ] {
+            let mut label = base.clone();
+            label.kind = kind;
+            label.src_node_id = src.into();
+            label.dst_node_id = dst.map(str::to_owned);
+            if kind == LabelKind::Task {
+                label.status = Some(LabelStatus::Open);
+                label.assignee = Some("@alex".into());
+            }
+            result.labels.push(label);
+        }
+        result.spans.reverse();
+        let blocks = build_blocks(&result);
+        let spans: Vec<_> = blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Span(span) => Some(span),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            spans.iter().map(|span| span.display_id).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+        assert_eq!(spans[0].answered_by, ["#2 · A"]);
+        assert_eq!(spans[0].recommended_by, ["#3 · R"]);
+        assert_eq!(spans[1].alternatives, ["#3 · R"]);
+        assert_eq!(spans[2].alternatives, ["#2 · A"]);
+        assert_eq!(spans[2].labels[1].target.as_deref(), Some("#1 · Q?"));
+        assert!(
+            spans[1]
+                .labels
+                .iter()
+                .find(|l| l.kind == LabelKind::Recommendation)
+                .unwrap()
+                .target
+                .is_none()
+        );
+        assert_eq!(spans[3].labels[0].assignee.as_deref(), Some("@alex"));
+        let source: String = blocks
+            .iter()
+            .map(|block| match block {
+                Block::Text { text } => text.as_str(),
+                Block::Span(span) => span.text.as_str(),
+            })
+            .collect();
+        assert_eq!(source, result.payload.content);
+    }
+
+    #[test]
+    fn malformed_identifiers_are_never_replaced() {
+        let mut result = sample_result();
+        result.spans[0].display_id = 0;
+        let blocks = build_blocks(&result);
+        assert!(
+            blocks
+                .iter()
+                .any(|block| matches!(block, Block::Span(span) if span.display_id == 2))
+        );
+        assert!(
+            !blocks
+                .iter()
+                .any(|block| matches!(block, Block::Span(span) if span.node_id == "q"))
+        );
+        result.spans[0].display_id = 2;
+        assert!(
+            build_blocks(&result)
+                .iter()
+                .all(|block| matches!(block, Block::Text { .. }))
+        );
     }
 
     #[test]

@@ -3,8 +3,11 @@
 //! A span names an inclusive segment range and optionally a verbatim quote.
 //! Without a quote the span covers the first to the last non-whitespace
 //! character of the range. With a quote it must match the original text of the
-//! range exactly, exactly once. Matching is byte- and Unicode-exact: no
-//! normalization, no case folding, and CRLF stays CRLF.
+//! range exactly once. Matching is byte- and Unicode-exact (no case folding, no
+//! Unicode normalization) except that whitespace runs are tolerant: a run of
+//! whitespace in the quote matches one or more whitespace characters in the
+//! text, so a model may write a hard line wrap or CRLF as a single space. The
+//! anchored span always covers the original bytes.
 
 use daftprompt_types::ExtractedSpan;
 
@@ -45,6 +48,13 @@ pub fn anchor_span(source: &str, span: &ExtractedSpan) -> Result<AnchoredSpan, S
 /// The quote is searched for in the original text of the segment range,
 /// including the original line terminators between segments but excluding the
 /// terminator after the last segment.
+///
+/// The quote is trimmed and split into its non-whitespace pieces. Each piece
+/// must match the text byte for byte, and each gap between pieces matches one
+/// or more whitespace characters (space, tab, LF, CRLF, NBSP, ...). A gap never
+/// matches zero characters. The span runs from the first byte of the first
+/// piece to the last byte of the last piece, so it never includes surrounding
+/// whitespace and nothing is rewritten.
 pub fn anchor_reference(
     source: &str,
     start_segment: u32,
@@ -79,10 +89,14 @@ pub fn anchor_reference(
 
     let (start_byte, end_byte) = match quote {
         Some(quote) => {
-            if quote.is_empty() {
+            let pieces: Vec<&str> = quote
+                .split(char::is_whitespace)
+                .filter(|p| !p.is_empty())
+                .collect();
+            if pieces.is_empty() {
                 return Err(SpanError::EmptyQuote);
             }
-            let occurrences = matching_offsets(region, quote);
+            let occurrences = matching_spans(region, &pieces);
             match occurrences.as_slice() {
                 [] => {
                     return Err(SpanError::QuoteNotFound {
@@ -90,7 +104,7 @@ pub fn anchor_reference(
                         segments: range,
                     });
                 }
-                [offset] => (region_start + offset, region_start + offset + quote.len()),
+                [(start, end)] => (region_start + start, region_start + end),
                 _ => {
                     return Err(SpanError::AmbiguousQuote {
                         quote: quote.to_owned(),
@@ -118,16 +132,39 @@ pub fn anchor_reference(
     })
 }
 
-/// Byte offsets at char boundaries where `needle` matches.
+/// Byte ranges, at char boundaries, where the quote `pieces` match.
 ///
-/// Overlapping occurrences count too: `"aa"` occurs twice in `"aaa"`, which
+/// Overlapping occurrences count too: `["aa"]` occurs twice in `"aaa"`, which
 /// makes it ambiguous rather than anchoring at the first position.
-fn matching_offsets(haystack: &str, needle: &str) -> Vec<usize> {
+fn matching_spans(haystack: &str, pieces: &[&str]) -> Vec<(usize, usize)> {
     haystack
         .char_indices()
-        .map(|(offset, _)| offset)
-        .filter(|offset| haystack[*offset..].starts_with(needle))
+        .filter_map(|(offset, _)| match_at(haystack, offset, pieces).map(|end| (offset, end)))
         .collect()
+}
+
+/// End offset of a match of `pieces` starting exactly at `start`, if any.
+///
+/// Pieces match byte for byte. Between pieces, whitespace is consumed
+/// greedily and at least one character is required; this is correct because
+/// pieces never begin with whitespace.
+fn match_at(haystack: &str, start: usize, pieces: &[&str]) -> Option<usize> {
+    let mut position = start;
+    for (index, piece) in pieces.iter().enumerate() {
+        if index > 0 {
+            let rest = &haystack[position..];
+            let gap = rest.len() - rest.trim_start().len();
+            if gap == 0 {
+                return None;
+            }
+            position += gap;
+        }
+        if !haystack[position..].starts_with(piece) {
+            return None;
+        }
+        position += piece.len();
+    }
+    Some(position)
 }
 
 #[cfg(test)]
@@ -178,8 +215,8 @@ mod tests {
 
     #[test]
     fn longer_quote_disambiguates_repeated_text() {
-        let source = "foo foo";
-        assert_eq!(bytes(source, 1, 1, Some(" foo")), (3, 7));
+        let source = "foo foo bar";
+        assert_eq!(bytes(source, 1, 1, Some("foo bar")), (4, 11));
     }
 
     #[test]
@@ -206,18 +243,91 @@ mod tests {
     fn quote_may_span_segments_including_terminators() {
         let source = "first\nsecond\nthird";
         assert_eq!(bytes(source, 1, 2, Some("first\nsecond")), (0, 12));
-        // The terminator after the last segment is outside the span.
-        assert!(anchor(source, 1, 2, Some("second\n")).is_err());
+        // The terminator after the last segment is outside the region and the span.
+        assert_eq!(bytes(source, 1, 2, Some("second\n")), (6, 12));
+        assert!(anchor(source, 1, 2, Some("second third")).is_err());
         // A quote may start or end mid-segment.
         assert_eq!(bytes(source, 1, 2, Some("st\nsec")), (3, 9));
     }
 
     #[test]
-    fn crlf_is_preserved_and_never_matched_as_lf() {
+    fn lf_quote_anchors_in_crlf_text_and_keeps_original_bytes() {
         let source = "first\r\nsecond\r\n";
-        assert_eq!(bytes(source, 1, 2, Some("first\r\nsecond")), (0, 13));
-        // Exact matching: LF-only quotations do not anchor in CRLF text.
-        assert!(anchor(source, 1, 2, Some("first\nsecond")).is_err());
+        let anchored = anchor(source, 1, 2, Some("first\nsecond")).unwrap();
+        assert_eq!((anchored.start_byte, anchored.end_byte), (0, 13));
+        assert_eq!(anchored.text(source), "first\r\nsecond");
+    }
+
+    #[test]
+    fn space_in_quote_anchors_across_a_line_wrap() {
+        let source = "- **Q3 \u{2014} A household above, or unknown, at move-in whose income is now\n\u{2264} 100%.** Our conclusion";
+        let quote = "Q3 \u{2014} A household above, or unknown, at move-in whose income is now \u{2264} 100%.";
+        let anchored = anchor(source, 1, 2, Some(quote)).unwrap();
+        assert_eq!(
+            anchored.text(source),
+            "Q3 \u{2014} A household above, or unknown, at move-in whose income is now\n\u{2264} 100%."
+        );
+    }
+
+    #[test]
+    fn one_quote_space_matches_many_source_whitespace_chars() {
+        assert_eq!(bytes("a \t  b", 1, 1, Some("a b")), (0, 6));
+        assert_eq!(bytes("a\t\tb", 1, 1, Some("a b")), (0, 4));
+    }
+
+    #[test]
+    fn many_quote_spaces_match_one_source_space() {
+        assert_eq!(bytes("a b", 1, 1, Some("a   b")), (0, 3));
+    }
+
+    #[test]
+    fn whitespace_gaps_never_match_zero_characters() {
+        assert!(matches!(
+            anchor("now\u{2264} 100", 1, 1, Some("now \u{2264}")).unwrap_err(),
+            SpanError::QuoteNotFound { .. }
+        ));
+        assert!(matches!(
+            anchor("now\n\u{2264} 100", 1, 2, Some("now\u{2264}")).unwrap_err(),
+            SpanError::QuoteNotFound { .. }
+        ));
+    }
+
+    #[test]
+    fn surrounding_whitespace_in_the_quote_is_ignored() {
+        let source = "x  foo bar  y";
+        let anchored = anchor(source, 1, 1, Some("  foo bar\n")).unwrap();
+        assert_eq!(anchored.text(source), "foo bar");
+    }
+
+    #[test]
+    fn whitespace_only_quote_is_empty() {
+        let error = anchor("a b", 1, 1, Some(" \t\n ")).unwrap_err();
+        assert_eq!(error, SpanError::EmptyQuote);
+    }
+
+    #[test]
+    fn places_differing_only_in_whitespace_are_ambiguous() {
+        let source = "a b\na\nb";
+        let error = anchor(source, 1, 3, Some("a b")).unwrap_err();
+        assert!(matches!(
+            error,
+            SpanError::AmbiguousQuote { occurrences: 2, .. }
+        ));
+    }
+
+    #[test]
+    fn nbsp_in_the_source_matches_a_quote_space() {
+        let source = "a\u{a0}b";
+        assert_eq!(bytes(source, 1, 1, Some("a b")), (0, source.len()));
+    }
+
+    #[test]
+    fn multibyte_and_combining_quotes_match_on_char_boundaries() {
+        let source = "caf\u{e9}\n\u{1f600} e\u{301}t\u{e9}";
+        let anchored = anchor(source, 1, 2, Some("caf\u{e9} \u{1f600} e\u{301}t\u{e9}")).unwrap();
+        assert_eq!(anchored.text(source), source);
+        // A bare combining mark is a valid start: it is its own char.
+        assert_eq!(bytes("e\u{301}", 1, 1, Some("\u{301}")), (1, 3));
     }
 
     #[test]

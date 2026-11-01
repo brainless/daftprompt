@@ -1,0 +1,11 @@
+{
+  "format_version": 1,
+  "id": "completed-and-incidental",
+  "category": "chat",
+  "note": "Epic 002 semantic boundary coverage",
+  "text": "We added tests yesterday.\n@alex was at the meeting.\nThe service can cache entries.",
+  "spans": [],
+  "answer_links": [],
+  "recommendation_links": [],
+  "alternative_links": []
+}

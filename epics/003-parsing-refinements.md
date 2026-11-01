@@ -1,10 +1,10 @@
-# Epic 002: Parsing refinements
+# Epic 003: Parsing refinements
 
 ## Outcome
 
 Refine the Scribe parser from [Epic 001](001-text-parsing.md) based on its baseline evaluation. Epic 001 deliberately chose the simplest workable rules; this epic collects the changes that were deferred.
 
-References: [PRD](../docs/PRD.md), [data model](../docs/data-model.md), and [Epic 001](001-text-parsing.md).
+References: [PRD](../docs/PRD.md), [data model](../docs/data-model.md), [Epic 001](001-text-parsing.md), and [Epic 002](002-recommendations-tasks-and-identifiers.md), which covers recommendations, tasks, and display identifiers.
 
 ## How to use this epic
 
@@ -54,5 +54,4 @@ References: [PRD](../docs/PRD.md), [data model](../docs/data-model.md), and [Epi
 - **Raw attempt logging:** store the raw model output of every attempt, including failed ones, as payloads linked to the run, to make failures easier to inspect.
 - **Stable toolchain for non-GUI crates:** keep `daftprompt-types`, `daftprompt-core`, and `daftprompt-api` building on stable Rust, checked separately from the nightly toolchain akar needs.
 - **Evaluation history:** write evaluation results to a report file per run so results can be compared across prompt versions and models.
-- **Assignees beyond questions:** extract explicit assignment intent on non-question text (for example, "@bob please update the docs"). This needs a new label kind in the data model vocabulary, such as a task or action label.
 - **GUI interaction:** click an answer to jump to the questions it answers, and allow cancelling an in-flight request.

@@ -60,6 +60,8 @@ fn expected_extraction(fixture: &daftprompt_core::eval::Fixture) -> Extraction {
             annotations.push(ExtractedAnnotation {
                 kind: label.kind,
                 span: id.clone(),
+                questions: Vec::new(),
+                alternatives: Vec::new(),
                 answers: Vec::new(),
                 assignee: label.assignee.clone(),
             });
@@ -75,9 +77,30 @@ fn expected_extraction(fixture: &daftprompt_core::eval::Fixture) -> Extraction {
         annotations.push(ExtractedAnnotation {
             kind: AnnotationKind::Answer,
             span: local_ids[from].clone(),
+            questions: Vec::new(),
+            alternatives: Vec::new(),
             answers: vec![local_ids[to].clone()],
             assignee: None,
         });
+    }
+
+    for (links, alternative) in [
+        (&fixture.recommendation_links, false),
+        (&fixture.alternative_links, true),
+    ] {
+        for link in links {
+            let from = fixture.span_index(&link.from).unwrap();
+            let to = fixture.span_index(&link.to).unwrap();
+            let annotation = annotations
+                .iter_mut()
+                .find(|a| a.span == local_ids[from] && a.kind == AnnotationKind::Recommendation)
+                .unwrap();
+            if alternative {
+                annotation.alternatives.push(local_ids[to].clone());
+            } else {
+                annotation.questions.push(local_ids[to].clone());
+            }
+        }
     }
 
     Extraction { spans, annotations }
@@ -131,6 +154,15 @@ async fn every_fixture_scores_perfectly_when_the_model_returns_the_annotations()
             "fixture {:?}: exact assignees",
             fixture.id
         );
+        for counts in [
+            evaluation.recommendation_exact,
+            evaluation.task_exact,
+            evaluation.recommendation_link_exact,
+            evaluation.alternative_exact,
+        ] {
+            assert_eq!(counts.expected, counts.matched, "{}", fixture.id);
+            assert_eq!(counts.predicted, counts.matched, "{}", fixture.id);
+        }
         assert!(
             evaluation.issues.is_empty(),
             "fixture {:?} produced quality issues: {:?}",
@@ -161,4 +193,99 @@ async fn provenance_from_a_fixture_reaches_the_parse_request() {
         .expect("parse succeeds");
 
     assert_eq!(result.source, Some(expected_source));
+}
+
+#[test]
+fn recommendation_links_alternatives_and_task_assignments_score_separately() {
+    use daftprompt_core::eval::{
+        ByteRange, IssueKind, PredictedAnswerLink, PredictedLabel, PredictedSpan,
+    };
+    let fixtures = load_fixtures(default_fixture_dir()).unwrap();
+    let fixture = fixtures
+        .iter()
+        .find(|f| f.id == "standalone-alternatives")
+        .unwrap();
+    let mut prediction = Prediction {
+        spans: fixture
+            .spans
+            .iter()
+            .map(|s| PredictedSpan {
+                range: ByteRange::new(s.start, s.end),
+            })
+            .collect(),
+        labels: fixture
+            .spans
+            .iter()
+            .enumerate()
+            .map(|(span, _)| PredictedLabel {
+                kind: AnnotationKind::Recommendation,
+                span,
+                assignee: None,
+            })
+            .collect(),
+        answer_links: vec![],
+        recommendation_links: vec![],
+        alternative_links: vec![
+            PredictedAnswerLink { from: 0, to: 1 },
+            PredictedAnswerLink { from: 2, to: 0 },
+            PredictedAnswerLink { from: 1, to: 2 },
+        ],
+    };
+    let score = evaluate(fixture, &prediction);
+    assert_eq!(score.alternative_exact.matched, 3);
+    assert_eq!(score.recommendation_exact.predicted, 4);
+    assert!(score.issues.is_empty());
+    prediction.alternative_links.pop();
+    let score = evaluate(fixture, &prediction);
+    assert_eq!(score.alternative_exact.matched, 2);
+    assert!(
+        score
+            .issues
+            .iter()
+            .any(|i| i.kind == IssueKind::MissedAlternativeLink)
+    );
+    let fixture = fixtures
+        .iter()
+        .find(|f| f.id == "advice-not-decision")
+        .unwrap();
+    prediction = Prediction {
+        spans: fixture
+            .spans
+            .iter()
+            .map(|s| PredictedSpan {
+                range: ByteRange::new(s.start, s.end),
+            })
+            .collect(),
+        labels: fixture
+            .spans
+            .iter()
+            .enumerate()
+            .flat_map(|(span, s)| {
+                s.labels.iter().map(move |l| PredictedLabel {
+                    kind: l.kind,
+                    span,
+                    assignee: l.assignee.clone(),
+                })
+            })
+            .collect(),
+        answer_links: vec![],
+        recommendation_links: vec![PredictedAnswerLink { from: 1, to: 0 }],
+        alternative_links: vec![],
+    };
+    let score = evaluate(fixture, &prediction);
+    assert_eq!(score.task_exact.matched, 1);
+    assert_eq!(score.assignee_exact.matched, 1);
+    assert_eq!(score.recommendation_link_exact.matched, 1);
+    assert_eq!(score.answer_exact.predicted, 0);
+    prediction.labels[2].kind = AnnotationKind::Question;
+    let score = evaluate(fixture, &prediction);
+    assert_eq!(score.assignee_exact.matched, 0);
+    assert_eq!(score.task_exact.matched, 0);
+    prediction.recommendation_links.clear();
+    assert!(
+        evaluate(fixture, &prediction)
+            .issues
+            .iter()
+            .any(|i| i.kind == IssueKind::MissedRecommendationLink)
+    );
 }

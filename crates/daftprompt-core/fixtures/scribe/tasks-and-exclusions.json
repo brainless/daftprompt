@@ -1,0 +1,57 @@
+{
+  "format_version": 1,
+  "id": "tasks-and-exclusions",
+  "category": "chat",
+  "note": "Epic 002 semantic boundary coverage",
+  "text": "@alex, can you update the docs?\nI will add tests.\nTODO: benchmark the cache.\nWe could add a cache.\nWe added a cache yesterday.\nI discussed this with @sam.",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 0,
+      "end": 31,
+      "quote": "@alex, can you update the docs?",
+      "labels": [
+        {
+          "kind": "task",
+          "assignee": "@alex"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "start": 32,
+      "end": 49,
+      "quote": "I will add tests.",
+      "labels": [
+        {
+          "kind": "task"
+        }
+      ]
+    },
+    {
+      "id": "e3",
+      "start": 50,
+      "end": 76,
+      "quote": "TODO: benchmark the cache.",
+      "labels": [
+        {
+          "kind": "task"
+        }
+      ]
+    },
+    {
+      "id": "e4",
+      "start": 77,
+      "end": 98,
+      "quote": "We could add a cache.",
+      "labels": [
+        {
+          "kind": "recommendation"
+        }
+      ]
+    }
+  ],
+  "answer_links": [],
+  "recommendation_links": [],
+  "alternative_links": []
+}

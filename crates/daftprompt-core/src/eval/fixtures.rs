@@ -46,6 +46,10 @@ pub struct Fixture {
     /// Answer relationships between expected spans.
     #[serde(default)]
     pub answer_links: Vec<ExpectedAnswerLink>,
+    #[serde(default)]
+    pub recommendation_links: Vec<ExpectedAnswerLink>,
+    #[serde(default)]
+    pub alternative_links: Vec<ExpectedAnswerLink>,
 }
 
 /// The kind of text a fixture covers.
@@ -112,7 +116,7 @@ pub struct ExpectedSpan {
     pub end: usize,
     /// The exact text of `[start, end)`.
     pub quote: String,
-    /// Labels expected on this span. Only `question` is valid here; answer
+    /// Unary question, recommendation, or task labels on this span; answer
     /// labels are expressed as [`ExpectedAnswerLink`]s.
     #[serde(default)]
     pub labels: Vec<ExpectedLabel>,
@@ -122,7 +126,7 @@ pub struct ExpectedSpan {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExpectedLabel {
-    /// The label kind; must be `question`.
+    /// A unary question, recommendation, or task kind.
     pub kind: AnnotationKind,
     /// An optional explicitly assigned handle.
     #[serde(default)]
@@ -202,26 +206,20 @@ impl Fixture {
                 ));
             }
 
-            let mut questions = 0;
+            let mut kinds = HashSet::new();
             for label in &span.labels {
-                if label.kind != AnnotationKind::Question {
+                if label.kind == AnnotationKind::Answer || !kinds.insert(label.kind) {
                     return Err(format!(
-                        "span {:?} has a non-question label; express answers with answer_links",
+                        "span {:?} has invalid or duplicate unary labels",
                         span.id
                     ));
                 }
-                questions += 1;
-                if let Some(assignee) = &label.assignee
-                    && let Err(detail) = validate_handle(assignee)
-                {
-                    return Err(format!("span {:?}: {detail}", span.id));
+                if let Some(assignee) = &label.assignee {
+                    if !matches!(label.kind, AnnotationKind::Question | AnnotationKind::Task) {
+                        return Err("only questions and tasks allow assignees".into());
+                    }
+                    validate_handle(assignee)?;
                 }
-            }
-            if questions > 1 {
-                return Err(format!(
-                    "span {:?} has more than one question label",
-                    span.id
-                ));
             }
         }
 
@@ -267,6 +265,49 @@ impl Fixture {
             }
             referenced.insert(from);
             referenced.insert(to);
+        }
+
+        for (name, relations, target_kind, symmetric) in [
+            (
+                "recommendation",
+                &self.recommendation_links,
+                AnnotationKind::Question,
+                false,
+            ),
+            (
+                "alternative",
+                &self.alternative_links,
+                AnnotationKind::Recommendation,
+                true,
+            ),
+        ] {
+            let mut seen = HashSet::new();
+            for link in relations {
+                let from = self
+                    .span_index(&link.from)
+                    .ok_or("unknown relationship source")?;
+                let to = self
+                    .span_index(&link.to)
+                    .ok_or("unknown relationship target")?;
+                let has = |index: usize, kind| {
+                    self.spans[index]
+                        .labels
+                        .iter()
+                        .any(|label| label.kind == kind)
+                };
+                if from == to || !has(from, AnnotationKind::Recommendation) || !has(to, target_kind)
+                {
+                    return Err(format!("invalid {name} relationship"));
+                }
+                let pair = if symmetric {
+                    (from.min(to), from.max(to))
+                } else {
+                    (from, to)
+                };
+                if !seen.insert(pair) {
+                    return Err(format!("duplicate {name} relationship"));
+                }
+            }
         }
 
         for (index, span) in self.spans.iter().enumerate() {
@@ -423,6 +464,8 @@ mod tests {
             text: text.to_owned(),
             spans,
             answer_links: Vec::new(),
+            recommendation_links: Vec::new(),
+            alternative_links: Vec::new(),
         }
     }
 

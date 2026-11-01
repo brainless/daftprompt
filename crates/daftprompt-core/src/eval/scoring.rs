@@ -102,6 +102,10 @@ pub enum IssueKind {
     UnexpectedAssignee,
     /// A predicted span could not be read from the text.
     UnscorableSpan,
+    MissedRecommendationLink,
+    UnexpectedRecommendationLink,
+    MissedAlternativeLink,
+    UnexpectedAlternativeLink,
 }
 
 impl IssueKind {
@@ -119,6 +123,10 @@ impl IssueKind {
             Self::MissedAssignee => "missed_assignee",
             Self::UnexpectedAssignee => "unexpected_assignee",
             Self::UnscorableSpan => "unscorable_span",
+            Self::MissedRecommendationLink => "missed_recommendation_link",
+            Self::UnexpectedRecommendationLink => "unexpected_recommendation_link",
+            Self::MissedAlternativeLink => "missed_alternative_link",
+            Self::UnexpectedAlternativeLink => "unexpected_alternative_link",
         }
     }
 }
@@ -147,6 +155,14 @@ pub struct Evaluation {
     pub answer_lenient: MatchCounts,
     pub assignee_exact: MatchCounts,
     pub assignee_lenient: MatchCounts,
+    pub recommendation_exact: MatchCounts,
+    pub recommendation_lenient: MatchCounts,
+    pub task_exact: MatchCounts,
+    pub task_lenient: MatchCounts,
+    pub recommendation_link_exact: MatchCounts,
+    pub recommendation_link_lenient: MatchCounts,
+    pub alternative_exact: MatchCounts,
+    pub alternative_lenient: MatchCounts,
     pub issues: Vec<Issue>,
 }
 
@@ -225,6 +241,108 @@ pub fn evaluate(fixture: &Fixture, prediction: &Prediction) -> Evaluation {
         &mut issues,
     );
 
+    let unary = |key, matching: &Matching| {
+        label_counts(
+            &expected_labels
+                .iter()
+                .copied()
+                .filter(|(_, k)| *k == key)
+                .collect(),
+            &predicted_labels
+                .iter()
+                .copied()
+                .filter(|(_, k)| *k == key)
+                .collect(),
+            matching,
+        )
+    };
+    let relations = |expected: &Vec<super::fixtures::ExpectedAnswerLink>,
+                     predicted: &Vec<super::prediction::PredictedAnswerLink>,
+                     symmetric: bool,
+                     matching: &Matching| {
+        let expected: HashSet<_> = expected
+            .iter()
+            .filter_map(|l| Some((fixture.span_index(&l.from)?, fixture.span_index(&l.to)?)))
+            .collect();
+        let predicted: HashSet<_> = predicted.iter().map(|l| (l.from, l.to)).collect();
+        if !symmetric {
+            return link_counts(&expected, &predicted, matching);
+        }
+        let expected: HashSet<_> = expected
+            .into_iter()
+            .map(|(a, b)| (a.min(b), a.max(b)))
+            .collect();
+        let mapped: HashSet<_> = predicted
+            .iter()
+            .filter_map(|(a, b)| {
+                let a = matching.predicted_to_expected.get(*a).copied().flatten()?;
+                let b = matching.predicted_to_expected.get(*b).copied().flatten()?;
+                Some((a.min(b), a.max(b)))
+            })
+            .collect();
+        MatchCounts {
+            expected: expected.len(),
+            predicted: predicted.len(),
+            matched: mapped.intersection(&expected).count(),
+        }
+    };
+
+    for (name, expected, predicted, symmetric) in [
+        (
+            "recommendation",
+            &fixture.recommendation_links,
+            &prediction.recommendation_links,
+            false,
+        ),
+        (
+            "alternative",
+            &fixture.alternative_links,
+            &prediction.alternative_links,
+            true,
+        ),
+    ] {
+        let expected: HashSet<_> = expected
+            .iter()
+            .filter_map(|l| Some((fixture.span_index(&l.from)?, fixture.span_index(&l.to)?)))
+            .collect();
+        let mut predicted: HashSet<_> = predicted.iter().map(|l| (l.from, l.to)).collect();
+        // Orient symmetric predictions in expected index order after matching, so reversed pairs score identically.
+        let expected = if symmetric {
+            expected
+                .into_iter()
+                .map(|(a, b)| (a.min(b), a.max(b)))
+                .collect()
+        } else {
+            expected
+        };
+        if symmetric {
+            predicted = predicted
+                .into_iter()
+                .map(|(a, b)| {
+                    let left = lenient.predicted_to_expected.get(a).copied().flatten();
+                    let right = lenient.predicted_to_expected.get(b).copied().flatten();
+                    if left > right { (b, a) } else { (a, b) }
+                })
+                .collect();
+        }
+        let mut extra = Vec::new();
+        link_issues(
+            fixture, prediction, &expected, &predicted, &lenient, &mut extra,
+        );
+        for mut issue in extra {
+            issue.kind = match (name, issue.kind) {
+                ("recommendation", IssueKind::MissedAnswerLink) => {
+                    IssueKind::MissedRecommendationLink
+                }
+                ("recommendation", _) => IssueKind::UnexpectedRecommendationLink,
+                (_, IssueKind::MissedAnswerLink) => IssueKind::MissedAlternativeLink,
+                _ => IssueKind::UnexpectedAlternativeLink,
+            };
+            issue.detail = issue.detail.replace("answer link", &format!("{name} link"));
+            issues.push(issue);
+        }
+    }
+
     Evaluation {
         span_exact,
         span_lenient,
@@ -234,6 +352,34 @@ pub fn evaluate(fixture: &Fixture, prediction: &Prediction) -> Evaluation {
         answer_lenient,
         assignee_exact,
         assignee_lenient,
+        recommendation_exact: unary(LabelKey::Recommendation, &exact),
+        recommendation_lenient: unary(LabelKey::Recommendation, &lenient),
+        task_exact: unary(LabelKey::Task, &exact),
+        task_lenient: unary(LabelKey::Task, &lenient),
+        recommendation_link_exact: relations(
+            &fixture.recommendation_links,
+            &prediction.recommendation_links,
+            false,
+            &exact,
+        ),
+        recommendation_link_lenient: relations(
+            &fixture.recommendation_links,
+            &prediction.recommendation_links,
+            false,
+            &lenient,
+        ),
+        alternative_exact: relations(
+            &fixture.alternative_links,
+            &prediction.alternative_links,
+            true,
+            &exact,
+        ),
+        alternative_lenient: relations(
+            &fixture.alternative_links,
+            &prediction.alternative_links,
+            true,
+            &lenient,
+        ),
         issues,
     }
 }
@@ -353,6 +499,8 @@ fn link(matching: &mut Matching, expected_index: usize, predicted_index: usize) 
 enum LabelKey {
     Question,
     Answer,
+    Recommendation,
+    Task,
 }
 
 impl LabelKey {
@@ -360,6 +508,8 @@ impl LabelKey {
         match self {
             Self::Question => "question",
             Self::Answer => "answer",
+            Self::Recommendation => "recommendation",
+            Self::Task => "task",
         }
     }
 }
@@ -368,9 +518,13 @@ fn expected_labels(fixture: &Fixture) -> HashSet<(usize, LabelKey)> {
     let mut labels = HashSet::new();
     for (index, span) in fixture.spans.iter().enumerate() {
         for label in &span.labels {
-            if label.kind == AnnotationKind::Question {
-                labels.insert((index, LabelKey::Question));
-            }
+            let key = match label.kind {
+                AnnotationKind::Question => LabelKey::Question,
+                AnnotationKind::Recommendation => LabelKey::Recommendation,
+                AnnotationKind::Task => LabelKey::Task,
+                AnnotationKind::Answer => LabelKey::Answer,
+            };
+            labels.insert((index, key));
         }
     }
     for link in &fixture.answer_links {
@@ -392,6 +546,8 @@ fn predicted_labels(prediction: &Prediction) -> HashSet<(usize, LabelKey)> {
         let key = match label.kind {
             AnnotationKind::Question => LabelKey::Question,
             AnnotationKind::Answer => LabelKey::Answer,
+            AnnotationKind::Recommendation => LabelKey::Recommendation,
+            AnnotationKind::Task => LabelKey::Task,
         };
         labels.insert((label.span, key));
     }
@@ -408,7 +564,12 @@ fn label_counts(
         let Some(predicted_index) = predicted_index else {
             continue;
         };
-        for key in [LabelKey::Question, LabelKey::Answer] {
+        for key in [
+            LabelKey::Question,
+            LabelKey::Answer,
+            LabelKey::Recommendation,
+            LabelKey::Task,
+        ] {
             if expected.contains(&(expected_index, key))
                 && predicted.contains(&(*predicted_index, key))
             {
@@ -469,27 +630,46 @@ fn link_counts(
     }
 }
 
-fn expected_assignees(fixture: &Fixture) -> HashMap<usize, String> {
+fn expected_assignees(fixture: &Fixture) -> HashMap<(usize, LabelKey), String> {
     let mut assignees = HashMap::new();
     for (index, span) in fixture.spans.iter().enumerate() {
         for label in &span.labels {
             if let Some(assignee) = &label.assignee {
-                assignees.insert(index, assignee.clone());
+                assignees.insert(
+                    (
+                        index,
+                        if label.kind == AnnotationKind::Task {
+                            LabelKey::Task
+                        } else {
+                            LabelKey::Question
+                        },
+                    ),
+                    assignee.clone(),
+                );
             }
         }
     }
     assignees
 }
 
-fn predicted_assignees(prediction: &Prediction) -> HashMap<usize, String> {
+fn predicted_assignees(prediction: &Prediction) -> HashMap<(usize, LabelKey), String> {
     let mut assignees = HashMap::new();
     for label in &prediction.labels {
-        if label.kind != AnnotationKind::Question || label.span >= prediction.spans.len() {
+        if !matches!(label.kind, AnnotationKind::Question | AnnotationKind::Task)
+            || label.span >= prediction.spans.len()
+        {
             continue;
         }
         if let Some(assignee) = &label.assignee {
             assignees
-                .entry(label.span)
+                .entry((
+                    label.span,
+                    if label.kind == AnnotationKind::Task {
+                        LabelKey::Task
+                    } else {
+                        LabelKey::Question
+                    },
+                ))
                 .or_insert_with(|| assignee.clone());
         }
     }
@@ -497,23 +677,18 @@ fn predicted_assignees(prediction: &Prediction) -> HashMap<usize, String> {
 }
 
 fn assignee_counts(
-    expected: &HashMap<usize, String>,
-    predicted: &HashMap<usize, String>,
+    expected: &HashMap<(usize, LabelKey), String>,
+    predicted: &HashMap<(usize, LabelKey), String>,
     matching: &Matching,
 ) -> MatchCounts {
-    let mut matched = 0;
-    for (expected_index, predicted_index) in matching.expected_to_predicted.iter().enumerate() {
-        let Some(predicted_index) = predicted_index else {
-            continue;
-        };
-        if let (Some(expected_handle), Some(predicted_handle)) = (
-            expected.get(&expected_index),
-            predicted.get(predicted_index),
-        ) && expected_handle == predicted_handle
-        {
-            matched += 1;
-        }
-    }
+    let matched = expected
+        .iter()
+        .filter(|((index, kind), handle)| {
+            matching.expected_to_predicted[*index]
+                .and_then(|i| predicted.get(&(i, *kind)))
+                .is_some_and(|value| value == *handle)
+        })
+        .count();
     MatchCounts {
         expected: expected.len(),
         predicted: predicted.len(),
@@ -715,14 +890,14 @@ fn link_issues(
 fn assignee_issues(
     fixture: &Fixture,
     prediction: &Prediction,
-    expected: &HashMap<usize, String>,
-    predicted: &HashMap<usize, String>,
+    expected: &HashMap<(usize, LabelKey), String>,
+    predicted: &HashMap<(usize, LabelKey), String>,
     matching: &Matching,
     issues: &mut Vec<Issue>,
 ) {
-    for (expected_index, expected_handle) in expected {
+    for ((expected_index, kind), expected_handle) in expected {
         match matching.expected_to_predicted[*expected_index] {
-            Some(predicted_index) => match predicted.get(&predicted_index) {
+            Some(predicted_index) => match predicted.get(&(predicted_index, *kind)) {
                 Some(predicted_handle) if predicted_handle == expected_handle => {}
                 Some(predicted_handle) => issues.push(Issue {
                     kind: IssueKind::AssigneeMismatch,
@@ -749,9 +924,9 @@ fn assignee_issues(
         }
     }
 
-    for (predicted_index, predicted_handle) in predicted {
+    for ((predicted_index, kind), predicted_handle) in predicted {
         match matching.predicted_to_expected[*predicted_index] {
-            Some(expected_index) if expected.contains_key(&expected_index) => {}
+            Some(expected_index) if expected.contains_key(&(expected_index, *kind)) => {}
             Some(_) => issues.push(Issue {
                 kind: IssueKind::UnexpectedAssignee,
                 detail: format!(
@@ -819,6 +994,8 @@ mod tests {
             text: text.to_owned(),
             spans,
             answer_links: links,
+            recommendation_links: Vec::new(),
+            alternative_links: Vec::new(),
         }
     }
 
@@ -896,6 +1073,8 @@ mod tests {
             spans: vec![predicted_span(0, 23), predicted_span(24, 40)],
             labels: vec![predicted_question(0, None), predicted_answer(1)],
             answer_links: vec![PredictedAnswerLink { from: 1, to: 0 }],
+            recommendation_links: Vec::new(),
+            alternative_links: Vec::new(),
         };
 
         let evaluation = evaluate(&fixture, &prediction);
@@ -928,6 +1107,8 @@ mod tests {
             spans: vec![predicted_span(0, 13)],
             labels: vec![predicted_question(0, None)],
             answer_links: Vec::new(),
+            recommendation_links: Vec::new(),
+            alternative_links: Vec::new(),
         };
 
         let evaluation = evaluate(&fixture, &prediction);
@@ -943,6 +1124,8 @@ mod tests {
             spans: vec![predicted_span(0, 20), predicted_span(24, 40)],
             labels: vec![predicted_question(0, None), predicted_answer(1)],
             answer_links: vec![PredictedAnswerLink { from: 1, to: 0 }],
+            recommendation_links: Vec::new(),
+            alternative_links: Vec::new(),
         };
 
         let evaluation = evaluate(&fixture, &prediction);
@@ -967,6 +1150,8 @@ mod tests {
             spans: vec![predicted_span(0, 10)],
             labels: vec![predicted_question(0, None)],
             answer_links: Vec::new(),
+            recommendation_links: Vec::new(),
+            alternative_links: Vec::new(),
         };
 
         let evaluation = evaluate(&fixture, &prediction);
@@ -986,6 +1171,8 @@ mod tests {
             spans: vec![predicted_span(0, 23)],
             labels: vec![predicted_answer(0)],
             answer_links: Vec::new(),
+            recommendation_links: Vec::new(),
+            alternative_links: Vec::new(),
         };
 
         let evaluation = evaluate(&fixture, &prediction);
@@ -1013,6 +1200,8 @@ mod tests {
             spans: vec![predicted_span(0, 23), predicted_span(24, 40)],
             labels: vec![predicted_question(0, None), predicted_answer(1)],
             answer_links: vec![PredictedAnswerLink { from: 0, to: 1 }],
+            recommendation_links: Vec::new(),
+            alternative_links: Vec::new(),
         };
 
         let evaluation = evaluate(&fixture, &prediction);
@@ -1048,6 +1237,8 @@ mod tests {
             spans: vec![predicted_span(0, 12)],
             labels: vec![predicted_question(0, Some("@alex"))],
             answer_links: Vec::new(),
+            recommendation_links: Vec::new(),
+            alternative_links: Vec::new(),
         };
         let evaluation = evaluate(&assignment, &mismatched);
         assert_eq!(evaluation.assignee_exact.expected, 1);
@@ -1064,6 +1255,8 @@ mod tests {
             spans: vec![predicted_span(0, 12)],
             labels: vec![predicted_question(0, None)],
             answer_links: Vec::new(),
+            recommendation_links: Vec::new(),
+            alternative_links: Vec::new(),
         };
         let evaluation = evaluate(&assignment, &missing);
         assert_eq!(evaluation.assignee_exact.matched, 0);
@@ -1079,6 +1272,8 @@ mod tests {
             spans: vec![predicted_span(0, 12)],
             labels: vec![predicted_question(0, Some("@alex"))],
             answer_links: Vec::new(),
+            recommendation_links: Vec::new(),
+            alternative_links: Vec::new(),
         };
         let evaluation = evaluate(&unchanged, &unexpected);
         assert_eq!(evaluation.assignee_exact.expected, 0);
@@ -1099,6 +1294,8 @@ mod tests {
             spans: vec![predicted_span(50, 62)],
             labels: vec![predicted_question(0, None)],
             answer_links: Vec::new(),
+            recommendation_links: Vec::new(),
+            alternative_links: Vec::new(),
         };
         let evaluation = evaluate(&assignment, &prediction);
         assert_eq!(evaluation.assignee_exact.expected, 1);

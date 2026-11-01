@@ -30,7 +30,7 @@ pub struct RunMetadata {
 #[derive(Debug, Clone)]
 pub enum FixtureStatus {
     /// The parser returned a validated graph, scored against the fixture.
-    Parsed(Evaluation),
+    Parsed(Box<Evaluation>),
     /// The parser returned an explicit error; no graph was scored.
     Failed {
         kind: String,
@@ -56,6 +56,10 @@ pub struct FixtureSummary {
     pub by_category: Vec<(FixtureCategory, usize)>,
     pub expected_spans: usize,
     pub expected_questions: usize,
+    pub expected_recommendations: usize,
+    pub expected_tasks: usize,
+    pub expected_recommendation_links: usize,
+    pub expected_alternative_links: usize,
     pub expected_answer_links: usize,
     pub expected_assignees: usize,
 }
@@ -84,6 +88,23 @@ impl FixtureSummary {
                 .flat_map(|span| &span.labels)
                 .filter(|label| label.kind == daftprompt_types::AnnotationKind::Question)
                 .count(),
+            expected_recommendations: fixtures
+                .iter()
+                .flat_map(|f| &f.spans)
+                .flat_map(|s| &s.labels)
+                .filter(|l| l.kind == daftprompt_types::AnnotationKind::Recommendation)
+                .count(),
+            expected_tasks: fixtures
+                .iter()
+                .flat_map(|f| &f.spans)
+                .flat_map(|s| &s.labels)
+                .filter(|l| l.kind == daftprompt_types::AnnotationKind::Task)
+                .count(),
+            expected_recommendation_links: fixtures
+                .iter()
+                .map(|f| f.recommendation_links.len())
+                .sum(),
+            expected_alternative_links: fixtures.iter().map(|f| f.alternative_links.len()).sum(),
             expected_answer_links: fixtures
                 .iter()
                 .map(|fixture| fixture.answer_links.len())
@@ -166,7 +187,12 @@ impl Report {
         );
         let _ = writeln!(output);
         let _ = writeln!(output, "```sh");
-        let _ = writeln!(output, "OPENAI_API_KEY=... DAFTPROMPT_EVAL_LIVE=1 \\");
+        let _ = writeln!(
+            output,
+            "DAFTPROMPT_EVAL_LIVE=1 DAFTPROMPT_EVAL_PROVIDER={} DAFTPROMPT_EVAL_MODEL={} \\",
+            self.metadata.provider.as_deref().unwrap_or("openai"),
+            self.metadata.model.as_deref().unwrap_or("gpt-4o-mini")
+        );
         let _ = writeln!(
             output,
             "  cargo run -p daftprompt-core --features live-eval --bin evaluate-scribe -- \\"
@@ -208,6 +234,20 @@ impl Report {
         );
         let _ = writeln!(output, "| --- | ---: | ---: | ---: | ---: | ---: |");
         for (name, counts) in [
+            ("recommendation, exact", aggregate.recommendation_exact),
+            ("recommendation, lenient", aggregate.recommendation_lenient),
+            ("task, exact", aggregate.task_exact),
+            ("task, lenient", aggregate.task_lenient),
+            (
+                "recommendation link, exact",
+                aggregate.recommendation_link_exact,
+            ),
+            (
+                "recommendation link, lenient",
+                aggregate.recommendation_link_lenient,
+            ),
+            ("alternative, exact", aggregate.alternative_exact),
+            ("alternative, lenient", aggregate.alternative_lenient),
             ("spans, exact", aggregate.span_exact),
             ("spans, lenient", aggregate.span_lenient),
             ("labels, exact", aggregate.label_exact),
@@ -302,6 +342,29 @@ impl Report {
         }
         let _ = writeln!(output);
 
+        let _ = writeln!(
+            output,
+            "| fixture | recommendations exact / lenient P/R | tasks exact / lenient P/R | recommendation links exact / lenient P/R | alternatives exact / lenient P/R |"
+        );
+        let _ = writeln!(output, "| --- | --- | --- | --- | --- |");
+        for run in &self.runs {
+            if let FixtureStatus::Parsed(e) = &run.status {
+                let _ = writeln!(
+                    output,
+                    "| `{}` | {} / {} | {} / {} | {} / {} | {} / {} |",
+                    run.fixture_id,
+                    pr(e.recommendation_exact),
+                    pr(e.recommendation_lenient),
+                    pr(e.task_exact),
+                    pr(e.task_lenient),
+                    pr(e.recommendation_link_exact),
+                    pr(e.recommendation_link_lenient),
+                    pr(e.alternative_exact),
+                    pr(e.alternative_lenient)
+                );
+            }
+        }
+        let _ = writeln!(output);
         let _ = writeln!(output, "## Failures");
         let _ = writeln!(output);
         let mut wrote_failure = false;
@@ -349,7 +412,12 @@ impl Report {
         let _ = writeln!(output, "## Reproduce");
         let _ = writeln!(output);
         let _ = writeln!(output, "```sh");
-        let _ = writeln!(output, "OPENAI_API_KEY=... DAFTPROMPT_EVAL_LIVE=1 \\");
+        let _ = writeln!(
+            output,
+            "DAFTPROMPT_EVAL_LIVE=1 DAFTPROMPT_EVAL_PROVIDER={} DAFTPROMPT_EVAL_MODEL={} \\",
+            self.metadata.provider.as_deref().unwrap_or("openai"),
+            self.metadata.model.as_deref().unwrap_or("gpt-4o-mini")
+        );
         let _ = writeln!(
             output,
             "  cargo run -p daftprompt-core --features live-eval --bin evaluate-scribe -- \\"
@@ -401,6 +469,14 @@ impl Report {
             self.summary.expected_answer_links,
             self.summary.expected_assignees
         );
+        let _ = writeln!(
+            output,
+            "- {} recommendation label(s), {} task label(s), {} recommendation-question link(s), {} symmetric alternative pair(s)",
+            self.summary.expected_recommendations,
+            self.summary.expected_tasks,
+            self.summary.expected_recommendation_links,
+            self.summary.expected_alternative_links
+        );
         let categories = self
             .summary
             .by_category
@@ -426,11 +502,11 @@ impl Report {
         let _ = writeln!(output, "- **Label:** the kind matches on a matched span.");
         let _ = writeln!(
             output,
-            "- **Answer link:** both ends match an expected link."
+            "- **Relationships:** both ends must match; alternative pairs are symmetric. Unary recommendation counts exclude relationship labels."
         );
         let _ = writeln!(
             output,
-            "- **Assignee:** the handle is identical on a matched question."
+            "- **Assignee:** the handle is identical on a matched question or task."
         );
         let _ = writeln!(
             output,
@@ -448,6 +524,27 @@ impl Report {
             match &run.status {
                 FixtureStatus::Parsed(evaluation) => {
                     aggregate.parsed += 1;
+                    aggregate
+                        .recommendation_exact
+                        .add(evaluation.recommendation_exact);
+                    aggregate
+                        .recommendation_lenient
+                        .add(evaluation.recommendation_lenient);
+                    aggregate.task_exact.add(evaluation.task_exact);
+                    aggregate.task_lenient.add(evaluation.task_lenient);
+                    aggregate
+                        .recommendation_link_exact
+                        .add(evaluation.recommendation_link_exact);
+                    aggregate
+                        .recommendation_link_lenient
+                        .add(evaluation.recommendation_link_lenient);
+                    aggregate
+                        .alternative_exact
+                        .add(evaluation.alternative_exact);
+                    aggregate
+                        .alternative_lenient
+                        .add(evaluation.alternative_lenient);
+
                     aggregate.span_exact.add(evaluation.span_exact);
                     aggregate.span_lenient.add(evaluation.span_lenient);
                     aggregate.label_exact.add(evaluation.label_exact);
@@ -479,6 +576,14 @@ struct Aggregate {
     answer_lenient: MatchCounts,
     assignee_exact: MatchCounts,
     assignee_lenient: MatchCounts,
+    recommendation_exact: MatchCounts,
+    recommendation_lenient: MatchCounts,
+    task_exact: MatchCounts,
+    task_lenient: MatchCounts,
+    recommendation_link_exact: MatchCounts,
+    recommendation_link_lenient: MatchCounts,
+    alternative_exact: MatchCounts,
+    alternative_lenient: MatchCounts,
     parsed: usize,
     failed: usize,
     invalid_output: usize,
@@ -586,6 +691,8 @@ mod tests {
                 }],
             }],
             answer_links: Vec::new(),
+            recommendation_links: Vec::new(),
+            alternative_links: Vec::new(),
         }
     }
 
@@ -630,13 +737,15 @@ mod tests {
                 assignee: Some("@team".to_owned()),
             }],
             answer_links: Vec::new(),
+            recommendation_links: Vec::new(),
+            alternative_links: Vec::new(),
         };
         report.push(FixtureRun {
             fixture_id: "one".to_owned(),
             category: FixtureCategory::Chat,
             attempts: Some(1),
             latency_ms: 12.5,
-            status: FixtureStatus::Parsed(evaluate(&fixtures[0], &prediction)),
+            status: FixtureStatus::Parsed(Box::new(evaluate(&fixtures[0], &prediction))),
         });
         report.push(FixtureRun {
             fixture_id: "two".to_owned(),
