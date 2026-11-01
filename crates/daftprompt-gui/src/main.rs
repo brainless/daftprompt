@@ -12,6 +12,7 @@
 //! (see `spawn`), stopped when the app quits or the window closes.
 
 mod api;
+mod clarify;
 mod clipboard;
 mod render;
 mod spawn;
@@ -32,9 +33,12 @@ use akar_layout::{
 };
 use akar_winit::{ActivationProgress, StartupActivation, process_window_event};
 use api::{ApiError, ParseClient};
+use clarify::{Branches, build_branch_view, panel_blocks};
 use clipboard::{ClipboardRequest, SystemClipboard};
-use daftprompt_types::ParseResult;
-use render::{ContentLayout, draw_content, draw_notice};
+use daftprompt_types::{ClarifyRequest, ClarifyResult, ParseResult};
+use render::{
+    ContentLayout, PanelLayout, build_panel, draw_content, draw_notice, draw_panel_content,
+};
 use view::{Block, ParseView, Phase, build_blocks, result_summary};
 use wgpu::{
     CompositeAlphaMode, CurrentSurfaceTexture, InstanceDescriptor, PresentMode, TextureUsages,
@@ -99,6 +103,12 @@ struct WorkerMessage {
     outcome: Result<ParseResult, ApiError>,
 }
 
+struct ClarifyMessage {
+    display_id: u32,
+    token: u64,
+    outcome: Result<ClarifyResult, ApiError>,
+}
+
 struct App {
     state: Option<GuiState>,
     activation: StartupActivation,
@@ -127,6 +137,12 @@ struct GuiState {
     main_title: NodeId,
     main_meta: NodeId,
     main_body: NodeId,
+    panel_col: NodeId,
+    panel_title: NodeId,
+    panel_close: NodeId,
+    panel_body: NodeId,
+    panel_input: NodeId,
+    panel_send: NodeId,
 
     text: String,
     edit_state: TextEditState,
@@ -136,6 +152,8 @@ struct GuiState {
     /// Clipboard work requested by the textarea this frame, served after the
     /// frame because akar clears one-frame input in `end_frame`.
     clipboard_request: ClipboardRequest,
+    /// The textarea the pending clipboard request came from.
+    clipboard_target: u64,
     /// The last clipboard failure, shown in the composer footer.
     clipboard_note: Option<String>,
 
@@ -145,10 +163,25 @@ struct GuiState {
     content_width: f32,
     scroll_y: f32,
 
+    /// Clarification branches of the current parse result, by span `#N`.
+    branches: Branches,
+    /// The span whose branch the panel shows.
+    open_branch: Option<u32>,
+    followup_text: String,
+    followup_edit: TextEditState,
+    followup_scroll: f32,
+    panel: Option<PanelLayout>,
+    /// `(span, branch revision, width)` the panel layout was built for.
+    panel_key: Option<(u32, u64, i32)>,
+    panel_scroll: f32,
+    panel_open_applied: bool,
+
     api: ParseClient,
     api_note: Option<String>,
     tx: Sender<WorkerMessage>,
     rx: Receiver<WorkerMessage>,
+    clarify_tx: Sender<ClarifyMessage>,
+    clarify_rx: Receiver<ClarifyMessage>,
     started: Instant,
 }
 
@@ -161,7 +194,7 @@ impl ApplicationHandler for App {
         let window_attrs = WindowAttributes::default()
             .with_title("daftprompt — Scribe preview")
             .with_inner_size(LogicalSize::new(1180.0, 760.0))
-            .with_min_inner_size(LogicalSize::new(760.0, 520.0));
+            .with_min_inner_size(LogicalSize::new(960.0, 520.0));
         let window = Arc::new(
             event_loop
                 .create_window(window_attrs)
@@ -202,6 +235,7 @@ impl ApplicationHandler for App {
 
         let (layout, page, nodes) = build_layout();
         let (tx, rx) = mpsc::channel();
+        let (clarify_tx, clarify_rx) = mpsc::channel();
 
         self.state = Some(GuiState {
             window,
@@ -220,21 +254,39 @@ impl ApplicationHandler for App {
             main_title: nodes.main_title,
             main_meta: nodes.main_meta,
             main_body: nodes.main_body,
+            panel_col: nodes.panel_col,
+            panel_title: nodes.panel_title,
+            panel_close: nodes.panel_close,
+            panel_body: nodes.panel_body,
+            panel_input: nodes.panel_input,
+            panel_send: nodes.panel_send,
             text: String::new(),
             edit_state: TextEditState::default(),
             input_scroll: 0.0,
             clipboard: SystemClipboard::default(),
             clipboard_request: ClipboardRequest::default(),
+            clipboard_target: 0,
             clipboard_note: None,
             parse_view: ParseView::default(),
             blocks: Vec::new(),
             content: None,
             content_width: 0.0,
             scroll_y: 0.0,
+            branches: Branches::default(),
+            open_branch: None,
+            followup_text: String::new(),
+            followup_edit: TextEditState::default(),
+            followup_scroll: 0.0,
+            panel: None,
+            panel_key: None,
+            panel_scroll: 0.0,
+            panel_open_applied: false,
             api: self.api.clone(),
             api_note: self.api_note.clone(),
             tx,
             rx,
+            clarify_tx,
+            clarify_rx,
             started: Instant::now(),
         });
     }
@@ -307,11 +359,10 @@ impl ApplicationHandler for App {
         }
 
         if let Some(state) = &self.state {
-            if state.parse_view.is_loading() {
+            if state.parse_view.is_loading() || state.branches.any_pending() {
                 wake_at = Some(now + POLL_INTERVAL);
                 state.window.request_redraw();
-            } else if state.core.input.focused_id == Some(state.layout.widget_id(state.input_node))
-            {
+            } else if textarea_focused(state) {
                 wake_at = Some(now + CURSOR_BLINK);
                 state.window.request_redraw();
             }
@@ -424,9 +475,16 @@ fn render(state: &mut GuiState) {
 
     serve_clipboard(state);
 
-    if state.parse_view.is_loading() {
+    if state.parse_view.is_loading() || state.branches.any_pending() {
         state.window.request_redraw();
     }
+}
+
+fn textarea_focused(state: &GuiState) -> bool {
+    let focused = state.core.input.focused_id;
+    focused == Some(state.layout.widget_id(state.input_node))
+        || (state.open_branch.is_some()
+            && focused == Some(state.layout.widget_id(state.panel_input)))
 }
 
 struct LayoutNodes {
@@ -438,6 +496,12 @@ struct LayoutNodes {
     main_title: NodeId,
     main_meta: NodeId,
     main_body: NodeId,
+    panel_col: NodeId,
+    panel_title: NodeId,
+    panel_close: NodeId,
+    panel_body: NodeId,
+    panel_input: NodeId,
+    panel_send: NodeId,
 }
 
 fn build_layout() -> (Layout, akar_layout::PageLayout, LayoutNodes) {
@@ -578,15 +642,109 @@ fn build_layout() -> (Layout, akar_layout::PageLayout, LayoutNodes) {
     let main_body = layout.new_leaf(Style {
         flex_grow: 1.0,
         flex_basis: Dimension::auto(),
+        size: Size {
+            width: Dimension::auto(),
+            height: Dimension::percent(1.0),
+        },
+        ..Default::default()
+    });
+
+    // The clarification panel sits beside the source view. Closed, it is zero
+    // wide and the source view keeps the whole row.
+    let panel_title = layout.new_leaf(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: Dimension::auto(),
+            height: length(30.0_f32),
+        },
+        ..Default::default()
+    });
+    let panel_close = layout.new_leaf(Style {
+        flex_shrink: 0.0,
+        size: Size {
+            width: length(72.0_f32),
+            height: length(30.0_f32),
+        },
+        ..Default::default()
+    });
+    let panel_header = layout.new_with_children(
+        Style {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: Dimension::percent(1.0),
+                height: length(30.0_f32),
+            },
+            ..Default::default()
+        },
+        &[panel_title, panel_close],
+    );
+    let panel_body = layout.new_leaf(Style {
+        flex_grow: 1.0,
+        flex_basis: Dimension::auto(),
+        size: Size {
+            width: Dimension::percent(1.0),
+            height: Dimension::auto(),
+        },
         margin: Rect {
-            top: length(12.0_f32),
+            top: length(8.0_f32),
             right: length(0.0_f32),
             bottom: length(0.0_f32),
             left: length(0.0_f32),
         },
         ..Default::default()
     });
-    layout.set_children(main, &[main_title, main_meta, main_body]);
+    let panel_input = layout.new_leaf(Style {
+        size: Size {
+            width: Dimension::percent(1.0),
+            height: length(96.0_f32),
+        },
+        margin: Rect {
+            top: length(8.0_f32),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+            left: length(0.0_f32),
+        },
+        ..Default::default()
+    });
+    let panel_send = layout.new_leaf(Style {
+        size: Size {
+            width: Dimension::percent(1.0),
+            height: length(38.0_f32),
+        },
+        margin: Rect {
+            top: length(8.0_f32),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+            left: length(0.0_f32),
+        },
+        ..Default::default()
+    });
+    let panel_col = layout.new_with_children(
+        panel_style(false),
+        &[panel_header, panel_body, panel_input, panel_send],
+    );
+    let main_row = layout.new_with_children(
+        Style {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Row,
+            flex_grow: 1.0,
+            flex_basis: Dimension::auto(),
+            size: Size {
+                width: Dimension::percent(1.0),
+                height: Dimension::auto(),
+            },
+            margin: Rect {
+                top: length(12.0_f32),
+                right: length(0.0_f32),
+                bottom: length(0.0_f32),
+                left: length(0.0_f32),
+            },
+            ..Default::default()
+        },
+        &[main_body, panel_col],
+    );
+    layout.set_children(main, &[main_title, main_meta, main_row]);
 
     (
         layout,
@@ -600,8 +758,39 @@ fn build_layout() -> (Layout, akar_layout::PageLayout, LayoutNodes) {
             main_title,
             main_meta,
             main_body,
+            panel_col,
+            panel_title,
+            panel_close,
+            panel_body,
+            panel_input,
+            panel_send,
         },
     )
+}
+
+/// The panel column: collapsed to nothing when closed, otherwise a share of
+/// the row beside the source view.
+fn panel_style(open: bool) -> Style {
+    Style {
+        display: Display::Flex,
+        flex_direction: FlexDirection::Column,
+        flex_shrink: 0.0,
+        size: Size {
+            width: if open {
+                Dimension::percent(0.44)
+            } else {
+                length(0.0_f32)
+            },
+            height: Dimension::percent(1.0),
+        },
+        margin: Rect {
+            top: length(0.0_f32),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+            left: length(if open { 16.0_f32 } else { 0.0_f32 }),
+        },
+        ..Default::default()
+    }
 }
 
 fn draw_shell(state: &mut GuiState, theme: &AkarTheme) {
@@ -667,6 +856,7 @@ fn draw_sidebar(state: &mut GuiState, theme: &AkarTheme, now: Instant) {
     let request = ClipboardRequest::from_response(&response);
     if !request.is_empty() {
         state.clipboard_request = request;
+        state.clipboard_target = input_id;
     }
 
     let mut button_style = ButtonStyle::empty();
@@ -727,8 +917,7 @@ fn serve_clipboard(state: &mut GuiState) {
     }
     let outcome = clipboard::service(&mut state.clipboard, request);
     if let Some(text) = outcome.paste {
-        let target = state.layout.widget_id(state.input_node);
-        state.core.input.push_paste(target, text);
+        state.core.input.push_paste(state.clipboard_target, text);
     }
     state.clipboard_note = outcome.error;
     state.window.request_redraw();
@@ -820,14 +1009,18 @@ fn draw_main(state: &mut GuiState, theme: &AkarTheme) {
     );
 
     let body_rect = state.layout.rect(state.main_body);
+    let mut clicked_span = None;
     if state.parse_view.phase() == Phase::Success {
         if let Some(content) = &mut state.content {
-            draw_content(
+            let marks = state.branches.marks();
+            clicked_span = draw_content(
                 &mut state.core,
                 content,
                 body_rect,
                 &mut state.scroll_y,
                 theme,
+                &marks,
+                state.open_branch,
             );
         } else {
             draw_notice(
@@ -849,6 +1042,219 @@ fn draw_main(state: &mut GuiState, theme: &AkarTheme) {
             theme,
         );
     }
+
+    if let Some(display_id) = clicked_span {
+        open_branch(state, display_id);
+    }
+    draw_clarify_panel(state, theme);
+}
+
+/// Show `display_id`'s branch, keeping the draft of the one it replaces.
+fn open_branch(state: &mut GuiState, display_id: u32) {
+    if state.open_branch == Some(display_id) {
+        return;
+    }
+    if let Some(previous) = state.open_branch {
+        let draft = std::mem::take(&mut state.followup_text);
+        state.branches.set_draft(previous, draft);
+    }
+    state.followup_text = state.branches.draft(display_id);
+    state.followup_edit = TextEditState::default();
+    state.followup_scroll = 0.0;
+    state.open_branch = Some(display_id);
+    state.panel_key = None;
+}
+
+fn close_branch(state: &mut GuiState) {
+    if let Some(previous) = state.open_branch.take() {
+        let draft = std::mem::take(&mut state.followup_text);
+        state.branches.set_draft(previous, draft);
+    }
+    state.panel = None;
+    state.panel_key = None;
+}
+
+/// A new parse (or a failed one) discards every branch and the panel.
+fn reset_branches(state: &mut GuiState) {
+    state.branches.clear();
+    state.open_branch = None;
+    state.followup_text.clear();
+    state.followup_edit = TextEditState::default();
+    state.panel = None;
+    state.panel_key = None;
+    state.panel_scroll = 0.0;
+}
+
+fn draw_clarify_panel(state: &mut GuiState, theme: &AkarTheme) {
+    // The panel column collapses when no branch is open.
+    let open = state.open_branch.is_some() && state.parse_view.phase() == Phase::Success;
+    if open != state.panel_open_applied {
+        state.layout.set_style(state.panel_col, panel_style(open));
+        state.panel_open_applied = open;
+        // The source view changes width; rebuild it on the next frame.
+        state.content = None;
+        state.content_width = 0.0;
+        state.window.request_redraw();
+        return;
+    }
+    let (true, Some(display_id)) = (open, state.open_branch) else {
+        return;
+    };
+
+    akar_heading(
+        &mut state.core,
+        &state.layout,
+        state.panel_title,
+        &format!("Clarify #{display_id}"),
+        HeadingLevel::H4,
+        None,
+        theme,
+    );
+    let close = akar_button_styled(
+        &mut state.core,
+        &state.layout,
+        state.panel_close,
+        "Close",
+        ButtonVariant::Outline,
+        &ButtonStyle::empty(),
+        theme,
+    );
+    if close.clicked {
+        close_branch(state);
+        return;
+    }
+
+    ensure_panel(state, display_id, theme);
+    let body_rect = state.layout.rect(state.panel_body);
+    if let Some(panel) = &mut state.panel {
+        draw_panel_content(
+            &mut state.core,
+            panel,
+            body_rect,
+            &mut state.panel_scroll,
+            theme,
+        );
+    }
+
+    let pending = state
+        .branches
+        .get(display_id)
+        .is_some_and(clarify::Branch::is_pending);
+    let has_turns = state
+        .branches
+        .get(display_id)
+        .is_some_and(|branch| !branch.turns().is_empty());
+    let input_id = state.layout.widget_id(state.panel_input);
+    let focused = state.core.input.focused_id == Some(input_id);
+    let elapsed_ms = Instant::now().duration_since(state.started).as_millis();
+    let cursor_visible = !focused || (elapsed_ms / CURSOR_BLINK.as_millis()).is_multiple_of(2);
+    let response = akar_textarea(
+        &mut state.core,
+        &state.layout,
+        state.panel_input,
+        &mut state.followup_text,
+        &mut state.followup_edit,
+        &mut state.followup_scroll,
+        if has_turns {
+            "Ask a follow-up…"
+        } else {
+            "Ask about this span…"
+        },
+        cursor_visible,
+        theme,
+    );
+    let request = ClipboardRequest::from_response(&response);
+    if !request.is_empty() {
+        state.clipboard_request = request;
+        state.clipboard_target = input_id;
+    }
+
+    let mut button_style = ButtonStyle::empty();
+    if pending {
+        button_style.fill = Some(theme.base_300);
+        button_style.hover_fill = Some(theme.base_300);
+        button_style.pressed_fill = Some(theme.base_300);
+        button_style.border_color = Some(theme.base_300);
+        button_style.content_color = Some(theme.muted_content);
+    }
+    let send = akar_button_styled(
+        &mut state.core,
+        &state.layout,
+        state.panel_send,
+        if pending {
+            "Explaining…"
+        } else if has_turns {
+            "Ask follow-up"
+        } else {
+            "Ask"
+        },
+        ButtonVariant::Solid,
+        &button_style,
+        theme,
+    );
+    if send.clicked && !pending {
+        submit_clarify(state);
+    }
+}
+
+/// Rebuild the panel layout when the branch, its content, or the width changed.
+fn ensure_panel(state: &mut GuiState, display_id: u32, theme: &AkarTheme) {
+    let width = state.layout.rect(state.panel_body)[2];
+    let revision = state
+        .branches
+        .get(display_id)
+        .map_or(0, clarify::Branch::revision);
+    let key = (display_id, revision, width.round() as i32);
+    if state.panel_key == Some(key) {
+        return;
+    }
+    let Some(parse) = state.parse_view.result() else {
+        return;
+    };
+    let branch = state.branches.get(display_id);
+    let view = build_branch_view(
+        display_id,
+        branch.map(clarify::Branch::turns).unwrap_or(&[]),
+        parse,
+    );
+    let blocks = panel_blocks(&view, branch);
+    state.panel = build_panel(&blocks, width, theme);
+    if state
+        .panel_key
+        .is_none_or(|(id, rev, _)| (id, rev) != (key.0, key.1))
+    {
+        // New content: show the latest turn.
+        state.panel_scroll = f32::MAX;
+    }
+    state.panel_key = Some(key);
+}
+
+fn submit_clarify(state: &mut GuiState) {
+    let Some(display_id) = state.open_branch else {
+        return;
+    };
+    let Some(parse) = state.parse_view.result() else {
+        return;
+    };
+    let question = state.followup_text.clone();
+    let Some((token, request)) = state.branches.begin(parse, display_id, &question) else {
+        return;
+    };
+    spawn_clarify(state, display_id, token, request);
+}
+
+/// Send the request on a worker thread; the render loop only polls the channel.
+fn spawn_clarify(state: &GuiState, display_id: u32, token: u64, request: ClarifyRequest) {
+    let api = state.api.clone();
+    let tx = state.clarify_tx.clone();
+    thread::spawn(move || {
+        let outcome = api.clarify(&request);
+        let _ = tx.send(ClarifyMessage {
+            display_id,
+            token,
+            outcome,
+        });
+    });
 }
 
 fn ensure_content(state: &mut GuiState) {
@@ -880,6 +1286,7 @@ fn submit(state: &mut GuiState) {
         state.content = None;
         state.content_width = 0.0;
         state.scroll_y = 0.0;
+        reset_branches(state);
         return;
     }
 
@@ -890,6 +1297,7 @@ fn submit(state: &mut GuiState) {
     state.content = None;
     state.content_width = 0.0;
     state.scroll_y = 0.0;
+    reset_branches(state);
 
     let text = state.text.clone();
     let api = state.api.clone();
@@ -915,6 +1323,24 @@ fn poll_worker(state: &mut GuiState) {
             state.content = None;
             state.content_width = 0.0;
             state.scroll_y = 0.0;
+        }
+    }
+    while let Ok(message) = state.clarify_rx.try_recv() {
+        let ClarifyMessage {
+            display_id,
+            token,
+            outcome,
+        } = message;
+        if state.branches.finish(display_id, token, outcome)
+            && state.open_branch == Some(display_id)
+            && let Some(branch) = state.branches.get(display_id)
+            && branch.error().is_none()
+            && branch.turns().last().map(|turn| turn.question.as_str())
+                == Some(state.followup_text.as_str())
+        {
+            // The question was answered; clear the input for the next one.
+            state.followup_text.clear();
+            state.followup_edit = TextEditState::default();
         }
     }
 }
@@ -949,6 +1375,31 @@ mod tests {
 
         let body = layout.rect(nodes.main_body);
         assert!(body[2] > 400.0 && body[3] > 500.0);
+    }
+
+    #[test]
+    fn the_clarify_panel_opens_beside_the_source_view() {
+        let (mut layout, page, nodes) = build_layout();
+        layout.compute(page.root, (Some(1180.0), Some(760.0)), |_, _, _, _, _| {
+            Size::ZERO
+        });
+        let closed_body = layout.rect(nodes.main_body);
+        assert_eq!(layout.rect(nodes.panel_col)[2], 0.0);
+
+        layout.set_style(nodes.panel_col, panel_style(true));
+        layout.compute(page.root, (Some(1180.0), Some(760.0)), |_, _, _, _, _| {
+            Size::ZERO
+        });
+        let body = layout.rect(nodes.main_body);
+        let panel = layout.rect(nodes.panel_col);
+        assert!(panel[2] > 250.0, "the panel is readable: {panel:?}");
+        assert!(body[2] > 350.0 && body[2] < closed_body[2]);
+        assert!(panel[0] >= body[0] + body[2], "the panel sits to the right");
+        let input = layout.rect(nodes.panel_input);
+        let send = layout.rect(nodes.panel_send);
+        assert!(send[1] >= input[1] + input[3]);
+        assert!(send[1] + send[3] <= 760.0);
+        assert!(layout.rect(nodes.panel_body)[3] > 150.0);
     }
 
     #[test]

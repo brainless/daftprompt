@@ -7,14 +7,16 @@
 
 use std::env;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
 use daftprompt_api::{ApiConfig, AppState, router};
+use daftprompt_core::project_tools::FsProject;
 use daftprompt_core::{
-    DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_INPUT_BYTES, DEFAULT_MAX_SEGMENTS, DEFAULT_TIMEOUT, Parser,
-    Scribe, ScribeConfig,
+    Clarifier, DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_INPUT_BYTES, DEFAULT_MAX_SEGMENTS,
+    DEFAULT_TIMEOUT, Explainer, ExplainerConfig, Parser, Scribe, ScribeConfig,
 };
 use rig::DynModel;
 use rig::operation::Completion;
@@ -55,8 +57,34 @@ async fn run() -> Result<(), String> {
         .with_timeout(settings.timeout);
     let parser: Arc<dyn Parser> = Arc::new(Scribe::from_rig_model(scribe_config, completion_model));
 
+    // The Explainer has its own provider and model; credentials are shared by
+    // provider name (e.g. NEURALWATT_API_KEY serves both agents).
+    let explainer_config = ExplainerConfig::from_env()
+        .with_input_limits(settings.max_input_bytes, settings.max_segments);
+    let explainer_provider = explainer_config
+        .provider
+        .clone()
+        .unwrap_or_else(|| DEFAULT_PROVIDER.to_owned());
+    let explainer_model = explainer_config.model.clone().unwrap_or_default();
+    let explainer_completion = build_model(&explainer_provider, &explainer_model)?;
+    let mut explainer = Explainer::from_rig_model(explainer_config, explainer_completion);
+    let grounding = match &settings.project_root {
+        Some(root) => {
+            let project = FsProject::new(root).map_err(|error| {
+                format!(
+                    "DAFTPROMPT_PROJECT_ROOT {} is unusable: {error}",
+                    root.display()
+                )
+            })?;
+            explainer = explainer.with_project(Arc::new(project));
+            format!("project (root {})", root.display())
+        }
+        None => "text_only".to_owned(),
+    };
+    let clarifier: Arc<dyn Clarifier> = Arc::new(explainer);
+
     let api_config = ApiConfig::for_input_limit(settings.max_input_bytes);
-    let app = router(AppState::new(parser, api_config));
+    let app = router(AppState::new(parser, api_config).with_clarifier(clarifier));
 
     let listener = tokio::net::TcpListener::bind(settings.addr)
         .await
@@ -74,6 +102,11 @@ async fn run() -> Result<(), String> {
         settings.max_segments,
         settings.max_attempts.max(1),
         settings.timeout.as_secs()
+    );
+
+    println!(
+        "daftprompt-api POST /clarify: explainer provider {explainer_provider}, model \
+         {explainer_model}, grounding {grounding}"
     );
 
     axum::serve(listener, app)
@@ -140,6 +173,7 @@ struct Settings {
     max_segments: usize,
     max_attempts: u32,
     timeout: Duration,
+    project_root: Option<PathBuf>,
 }
 
 impl Settings {
@@ -152,7 +186,21 @@ impl Settings {
         let provider =
             env_string("DAFTPROMPT_API_PROVIDER").unwrap_or_else(|| DEFAULT_PROVIDER.to_owned());
 
+        let project_root = match env_string("DAFTPROMPT_PROJECT_ROOT") {
+            Some(value) => {
+                let path = PathBuf::from(&value);
+                if !path.is_dir() {
+                    return Err(format!(
+                        "DAFTPROMPT_PROJECT_ROOT {value:?} does not exist or is not a directory"
+                    ));
+                }
+                Some(path)
+            }
+            None => None,
+        };
+
         Ok(Self {
+            project_root,
             addr,
             model: env_string("DAFTPROMPT_API_MODEL")
                 .unwrap_or_else(|| default_model(&provider).to_owned()),

@@ -25,7 +25,7 @@ Individuals who use LLM agents for thinking-heavy work: developers on existing p
 - **Labels**: parts of the record are marked as questions, answers, conflicts, superseded, or stale.
 - **Assignee**: an optional handle identifying who is expected to respond to an open question, such as `@username` or `@legal-team`. A team assignment means anyone in that team can respond. Handles are recorded as text; daftprompt does not manage people or team membership.
 - **Branches**: each response the user gives sends a fresh agent off with only the relevant text, not the whole history.
-- **Clarification**: a branch labelled `clarification` for understanding a specific term or statement. It links to the source text and keeps its questions and answers outside the original chat. It does not block the main task by default.
+- **Clarification**: a branch labelled `clarification` for understanding a specific term or statement. The first version targets an extracted span. It links to that span and keeps its questions and explanations outside the original chat. It never blocks the main task and never changes the record's labels or statuses.
 - **Done**: work is complete when no blocking questions, conflicts, or stale items remain.
 
 ## Key flows
@@ -37,7 +37,7 @@ Individuals who use LLM agents for thinking-heavy work: developers on existing p
 5. **Conflict**: a branch's conclusion contradicts something else in the record. The conflict is shown to the user or another agent to resolve. It is never silently overwritten.
 6. **Staleness**: when something a conclusion relied on changes (an edited plan, a changed file), that conclusion is flagged as stale.
 7. **Converge**: the user can always see what is still open. When nothing blocking remains, the work is ready to act on.
-8. **Clarify**: in an ongoing chat, the user asks about a specific part of an agent's reply, such as an unfamiliar term. A separate agent opens a **Clarification** branch linked to that text, consults code or documents anywhere in the project as needed, and explains it with references to the sources it used. The user can continue asking questions in that branch without adding the exchange to the original chat or automatically changing its conclusions.
+8. **Clarify**: the user picks an extracted span of an agent's reply, such as one containing an unfamiliar term, and asks about it. A separate agent opens a **Clarification** branch linked to that span, sees only the span, nearby source text, and the branch's earlier turns, and, when a project root is configured, reads files under that root read-only. It explains the span citing the sources it used, and says when it is working from the text alone. The user can continue asking questions in that branch without adding the exchange to the original chat or changing its conclusions. Arbitrary text selection and persistence of branches are later work.
 
 ## Goals
 
@@ -51,6 +51,12 @@ Individuals who use LLM agents for thinking-heavy work: developers on existing p
 ## Parser expansion
 
 [Epic 002](../epics/002-recommendations-tasks-and-identifiers.md) extends the extraction contract with standalone recommendations and offered options in plans or investigation replies, optional links to local questions, explicit alternative relationships, outstanding tasks with optional explicit assignees, and integer display identifiers. Recommendations alone leave questions open; open tasks will join the blocking items in the completion rule. The stateless contract preserves original text and generated graph identities; each extracted span also has a result-local integer display ID.
+
+## Clarification branch (planned)
+
+[Epic 004](../epics/004-clarification-branch.md) plans the first branch: the user clarifies one extracted span, and a separate agent (**Explainer**) explains it from the surrounding text and, when a project root is configured, read-only project files, citing its sources. Follow-up questions stay in the branch. The branch links to its target with a non-blocking `clarification` label and never changes the record's labels or statuses. The shared contracts (`ClarifyRequest`, `ClarifyResult`, the `clarification` label kind) are defined; the agent, endpoint, and GUI panel follow in later tasks.
+
+Implemented scope is stateless and targets extracted spans only. Later work: clarifying an arbitrary text selection or unlabelled text, persisting branches and verifying client-supplied node IDs, and promoting a clarification finding into the main record.
 
 ## Non-goals (for now)
 

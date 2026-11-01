@@ -16,6 +16,9 @@ use akar_layout::{
     Dimension, Display, FlexDirection, FlexWrap, Layout, NodeId, Rect, Size, Style, length,
 };
 
+use std::collections::BTreeMap;
+
+use crate::clarify::{BlockKind, BranchMark, PanelBlock};
 use crate::view::{Block, LabelView, SpanView};
 
 const BLOCK_PADDING: f32 = 12.0;
@@ -25,6 +28,10 @@ const BADGE_GAP: f32 = 6.0;
 const ANSWER_LINE_HEIGHT: f32 = 20.0;
 /// Keep widget/buffer ids distinct from the app layout and future portals.
 const CONTENT_NAMESPACE: u64 = 2;
+const PANEL_NAMESPACE: u64 = 3;
+const CLARIFY_BUTTON_WIDTH: f32 = 168.0;
+const CLARIFY_BUTTON_HEIGHT: f32 = 28.0;
+const PANEL_CARD_PADDING: f32 = 8.0;
 
 /// One prepared block in the scrollable content layout.
 struct Entry {
@@ -41,6 +48,9 @@ enum EntryKind {
         quote_text: String,
         badges: Vec<BadgeNode>,
         answer_lines: Vec<(NodeId, String)>,
+        /// The Clarify action and the `#N` it opens.
+        clarify: NodeId,
+        display_id: u32,
     },
 }
 
@@ -221,6 +231,16 @@ fn build_span(
         answer_lines.push((node, text));
     }
 
+    let clarify = layout.new_leaf(Style {
+        flex_shrink: 0.0,
+        size: Size {
+            width: length(CLARIFY_BUTTON_WIDTH),
+            height: length(CLARIFY_BUTTON_HEIGHT),
+        },
+        ..Default::default()
+    });
+    children.push(clarify);
+
     let node = layout.new_with_children(
         Style {
             display: Display::Flex,
@@ -252,6 +272,8 @@ fn build_span(
                 quote_text: span.text.clone(),
                 badges,
                 answer_lines,
+                clarify,
+                display_id: span.display_id,
             },
         },
         node,
@@ -329,6 +351,9 @@ fn badges_for(labels: &[LabelView]) -> Vec<(String, BadgeVariant)> {
                 ("supersedes".to_owned(), BadgeVariant::Warning)
             }
             daftprompt_types::LabelKind::Stale => ("stale".to_owned(), BadgeVariant::Error),
+            daftprompt_types::LabelKind::Clarification => {
+                ("clarification".to_owned(), BadgeVariant::Info)
+            }
         };
         badges.push((text, variant));
         if let Some(assignee) = &label.assignee {
@@ -368,15 +393,21 @@ pub fn estimated_text_height(text: &str, width: f32, font_size: f32, line_height
 }
 
 /// Draw a successful result into `rect`, applying scroll and clipping.
+///
+/// `marks` says which spans have a clarification branch and `open` which one the
+/// panel shows. Returns the `#N` whose Clarify action was clicked this frame.
 pub fn draw_content(
     core: &mut AkarCore,
     content: &mut ContentLayout,
     rect: [f32; 4],
     scroll_y: &mut f32,
     theme: &AkarTheme,
-) {
+    marks: &BTreeMap<u32, BranchMark>,
+    open: Option<u32>,
+) -> Option<u32> {
+    let mut clicked_span = None;
     if rect[2] <= 0.0 || rect[3] <= 0.0 {
-        return;
+        return clicked_span;
     }
 
     let response = scroll_area_begin(core, rect, scroll_y, content.total_height());
@@ -403,8 +434,14 @@ pub fn draw_content(
                 quote_text,
                 badges,
                 answer_lines,
+                clarify,
+                display_id,
             } => {
                 draw_panel(core, &content.layout, entry.node, rect, theme);
+                let mark = marks.get(display_id);
+                if mark.is_some() {
+                    draw_branch_marker(core, &content.layout, entry.node, rect, theme);
+                }
                 for badge in badges {
                     draw_badge(
                         core,
@@ -438,12 +475,125 @@ pub fn draw_content(
                         rect,
                     );
                 }
+                let label = clarify_label(mark, open == Some(*display_id));
+                if draw_clarify_button(
+                    core,
+                    &content.layout,
+                    *clarify,
+                    &label,
+                    mark.is_some(),
+                    rect,
+                    theme,
+                ) {
+                    clicked_span = Some(*display_id);
+                }
             }
         }
     }
 
     scroll_area_end(core);
     draw_scrollbar(core, rect, *scroll_y, content.total_height(), theme);
+    clicked_span
+}
+
+/// The Clarify button's text: the action, or the branch it reopens.
+pub fn clarify_label(mark: Option<&BranchMark>, open: bool) -> String {
+    match mark {
+        None => "Clarify".to_owned(),
+        Some(mark) if mark.pending => "Branch · asking…".to_owned(),
+        Some(mark) => format!(
+            "Branch · {} turn{}{}",
+            mark.turns,
+            if mark.turns == 1 { "" } else { "s" },
+            if open { " (open)" } else { "" }
+        ),
+    }
+}
+
+/// A thin accent along the left edge of a card that has a branch.
+fn draw_branch_marker(
+    core: &mut AkarCore,
+    layout: &Layout,
+    node: NodeId,
+    viewport: [f32; 4],
+    theme: &AkarTheme,
+) {
+    let card = layout.rect(node);
+    let bar = intersect([card[0], card[1], 4.0, card[3]], viewport);
+    if bar[2] <= 0.0 || bar[3] <= 0.0 {
+        return;
+    }
+    core.draw_list.push_quad(QuadCall {
+        rect: bar,
+        fill: color_to_f32(theme.info),
+        border_color: [0.0; 4],
+        corner_radii: [2.0; 4],
+        border_width: 0.0,
+        z: Z_BASE,
+        shadow_blur: 0.0,
+        shadow_spread: 0.0,
+        shadow_color: [0.0; 4],
+        shadow_offset: [0.0; 2],
+        _pad: [0.0; 2],
+    });
+}
+
+/// Draw a button inside the scroll area. Hit testing uses the part inside the
+/// viewport, so a partly scrolled button cannot be clicked through the header.
+fn draw_clarify_button(
+    core: &mut AkarCore,
+    layout: &Layout,
+    node: NodeId,
+    label: &str,
+    has_branch: bool,
+    viewport: [f32; 4],
+    theme: &AkarTheme,
+) -> bool {
+    let rect = layout.rect(node);
+    let clipped = intersect(rect, viewport);
+    if clipped[2] <= 0.0 || clipped[3] <= 0.0 {
+        return false;
+    }
+    let hovered = core.input.is_hovering(clipped);
+    let clicked = core.input.is_clicked(clipped);
+    let (fill, border, content) = if has_branch {
+        (theme.info, theme.info, theme.info_content)
+    } else if hovered {
+        (theme.base_300, theme.primary, theme.base_content)
+    } else {
+        (0x0000_0000, theme.primary, theme.base_content)
+    };
+    core.draw_list.push_quad(QuadCall {
+        rect: clipped,
+        fill: color_to_f32(fill),
+        border_color: color_to_f32(border),
+        corner_radii: [theme.radius_field; 4],
+        border_width: theme.border_width,
+        z: Z_BASE,
+        shadow_blur: 0.0,
+        shadow_spread: 0.0,
+        shadow_color: [0.0; 4],
+        shadow_offset: [0.0; 2],
+        _pad: [0.0; 2],
+    });
+    let font_size = theme.font_size_sm;
+    let buffer = core.text_pipeline.set_text_transient(
+        layout.widget_id(node),
+        label,
+        glyphon::Metrics::new(font_size, font_size * 1.2),
+        None,
+        None,
+        None,
+    );
+    core.draw_list.push_text(TextCall {
+        buffer_id: buffer,
+        x: rect[0] + 10.0,
+        y: rect[1] + (rect[3] - font_size) * 0.5,
+        clip: clipped,
+        color: color_to_f32(content),
+        z: Z_BASE,
+    });
+    clicked
 }
 
 /// Draw wrapped text clipped to the scroll viewport.
@@ -461,16 +611,35 @@ fn draw_wrapped_text(
     color: u32,
     viewport: [f32; 4],
 ) {
-    if text.is_empty() {
-        return;
-    }
-    let rect = layout.rect(node);
-    if rect[2] <= 0.0 || !intersects(rect, viewport) {
+    draw_text_at(
+        core,
+        layout.widget_id(node),
+        layout.rect(node),
+        text,
+        font_size,
+        line_height,
+        color,
+        viewport,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_text_at(
+    core: &mut AkarCore,
+    widget_id: u64,
+    rect: [f32; 4],
+    text: &str,
+    font_size: f32,
+    line_height: f32,
+    color: u32,
+    viewport: [f32; 4],
+) {
+    if text.is_empty() || rect[2] <= 0.0 || !intersects(rect, viewport) {
         return;
     }
 
     let buffer = core.text_pipeline.set_text_transient(
-        layout.widget_id(node),
+        widget_id,
         text,
         glyphon::Metrics::new(font_size, line_height),
         Some(rect[2]),
@@ -586,6 +755,146 @@ fn intersect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     let right = (a[0] + a[2]).min(b[0] + b[2]);
     let bottom = (a[1] + a[3]).min(b[1] + b[3]);
     [x, y, (right - x).max(0.0), (bottom - y).max(0.0)]
+}
+
+/// A prepared clarification panel: the branch's blocks stacked at one width.
+pub struct PanelLayout {
+    layout: Layout,
+    entries: Vec<PanelEntry>,
+    total_height: f32,
+}
+
+struct PanelEntry {
+    node: NodeId,
+    kind: BlockKind,
+    text: String,
+}
+
+impl PanelLayout {
+    pub fn total_height(&self) -> f32 {
+        self.total_height
+    }
+}
+
+/// Font size, line height, color, and whether the block sits on a card.
+fn panel_block_style(kind: BlockKind, theme: &AkarTheme) -> (f32, f32, u32, bool) {
+    let base = theme.font_size_base;
+    let small = theme.font_size_sm;
+    match kind {
+        BlockKind::Target => (small, small * 1.5, theme.muted_content, true),
+        BlockKind::Question => (base, base * 1.5, theme.info, false),
+        BlockKind::Explanation => (base, base * 1.5, theme.base_content, true),
+        BlockKind::Citation => (small, small * 1.5, theme.muted_content, false),
+        BlockKind::Meta => (small, small * 1.5, theme.muted_content, false),
+        BlockKind::Notice => (small, small * 1.5, theme.muted_content, false),
+        BlockKind::Error => (base, base * 1.5, theme.error, false),
+    }
+}
+
+/// Build the panel layout for `blocks` at `width`. Returns `None` for no
+/// blocks or an unusably narrow panel. Called when the branch or width changes.
+pub fn build_panel(blocks: &[PanelBlock], width: f32, theme: &AkarTheme) -> Option<PanelLayout> {
+    if blocks.is_empty() || width <= 8.0 {
+        return None;
+    }
+    let mut layout = Layout::new();
+    layout.set_namespace_id(PANEL_NAMESPACE);
+    let mut entries = Vec::with_capacity(blocks.len());
+    let mut children = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        let (font_size, line_height, _, card) = panel_block_style(block.kind, theme);
+        let pad = if card { PANEL_CARD_PADDING } else { 0.0 };
+        let height = estimated_text_height(
+            &block.text,
+            (width - 2.0 * pad).max(8.0),
+            font_size,
+            line_height,
+        ) + 2.0 * pad;
+        let node = layout.new_leaf(Style {
+            size: Size {
+                width: Dimension::percent(1.0),
+                height: length(height),
+            },
+            ..Default::default()
+        });
+        children.push(node);
+        entries.push(PanelEntry {
+            node,
+            kind: block.kind,
+            text: block.text.clone(),
+        });
+    }
+    let root = layout.new_with_children(
+        Style {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: Dimension::percent(1.0),
+                height: Dimension::auto(),
+            },
+            gap: Size {
+                width: length(0.0_f32),
+                height: length(8.0_f32),
+            },
+            padding: Rect {
+                top: length(0.0_f32),
+                right: length(8.0_f32),
+                bottom: length(16.0_f32),
+                left: length(0.0_f32),
+            },
+            ..Default::default()
+        },
+        &children,
+    );
+    layout.compute(root, (Some(width), None), |_, _, _, _, _| Size::ZERO);
+    let total_height = layout.rect(root)[3].max(0.0);
+    Some(PanelLayout {
+        layout,
+        entries,
+        total_height,
+    })
+}
+
+/// Draw the panel into `rect` with its own scroll offset and clipping.
+pub fn draw_panel_content(
+    core: &mut AkarCore,
+    panel: &mut PanelLayout,
+    rect: [f32; 4],
+    scroll_y: &mut f32,
+    theme: &AkarTheme,
+) {
+    if rect[2] <= 0.0 || rect[3] <= 0.0 {
+        return;
+    }
+    let response = scroll_area_begin(core, rect, scroll_y, panel.total_height());
+    panel
+        .layout
+        .set_screen_origin([rect[0], response.content_y]);
+    for entry in &panel.entries {
+        let (font_size, line_height, color, card) = panel_block_style(entry.kind, theme);
+        let mut text_rect = panel.layout.rect(entry.node);
+        if card {
+            draw_panel(core, &panel.layout, entry.node, rect, theme);
+            text_rect = [
+                text_rect[0] + PANEL_CARD_PADDING,
+                text_rect[1] + PANEL_CARD_PADDING,
+                (text_rect[2] - 2.0 * PANEL_CARD_PADDING).max(1.0),
+                (text_rect[3] - 2.0 * PANEL_CARD_PADDING).max(1.0),
+            ];
+        }
+        draw_text_at(
+            core,
+            panel.layout.widget_id(entry.node),
+            text_rect,
+            &entry.text,
+            font_size,
+            line_height,
+            color,
+            rect,
+        );
+    }
+    scroll_area_end(core);
+    draw_scrollbar(core, rect, *scroll_y, panel.total_height(), theme);
 }
 
 /// Draw a non-success state: idle, loading, or an explicit error.
@@ -813,6 +1122,8 @@ mod tests {
             viewport,
             &mut scroll,
             &AKAR_THEME_DARK,
+            &BTreeMap::new(),
+            None,
         );
 
         let text_calls = core.draw_list.text_calls();
@@ -838,6 +1149,90 @@ mod tests {
             viewport_clips > 0,
             "paragraph text uses the full viewport clip"
         );
+    }
+
+    #[test]
+    fn span_cards_get_a_clarify_action_inside_the_card() {
+        let content = build_content(&[span("Should we cache tokens?")], 500.0, &AKAR_THEME_DARK)
+            .expect("content");
+        let EntryKind::Span {
+            clarify,
+            display_id,
+            ..
+        } = &content.entries[0].kind
+        else {
+            unreachable!()
+        };
+        assert_eq!(*display_id, 1);
+        let card = content.layout.rect(content.entries[0].node);
+        let button = content.layout.rect(*clarify);
+        assert!(button[2] > 0.0 && button[3] > 0.0);
+        assert!(button[1] + button[3] <= card[1] + card[3]);
+    }
+
+    #[test]
+    fn branch_marker_labels_describe_the_branch() {
+        assert_eq!(clarify_label(None, false), "Clarify");
+        let mark = BranchMark {
+            turns: 2,
+            pending: false,
+        };
+        assert_eq!(clarify_label(Some(&mark), true), "Branch · 2 turns (open)");
+        let one = BranchMark {
+            turns: 1,
+            pending: false,
+        };
+        assert_eq!(clarify_label(Some(&one), false), "Branch · 1 turn");
+        let pending = BranchMark {
+            turns: 0,
+            pending: true,
+        };
+        assert_eq!(clarify_label(Some(&pending), false), "Branch · asking…");
+    }
+
+    #[test]
+    fn the_panel_stacks_blocks_and_clips_to_its_viewport() {
+        let blocks = vec![
+            PanelBlock {
+                kind: BlockKind::Target,
+                text: "#1 · Should we cache tokens?".to_owned(),
+            },
+            PanelBlock {
+                kind: BlockKind::Question,
+                text: "Q: why?".to_owned(),
+            },
+            PanelBlock {
+                kind: BlockKind::Explanation,
+                text: "Because of cost [1]. ".repeat(20),
+            },
+            PanelBlock {
+                kind: BlockKind::Citation,
+                text: "[1] src/cache.rs:L1–L9".to_owned(),
+            },
+        ];
+        let mut panel = build_panel(&blocks, 320.0, &AKAR_THEME_DARK).expect("panel");
+        let first = panel.layout.rect(panel.entries[0].node);
+        let third = panel.layout.rect(panel.entries[2].node);
+        assert!(third[1] > first[1] + first[3]);
+        assert!(third[3] > first[3], "a long explanation is taller");
+
+        let mut core = AkarCore::mock();
+        core.begin_frame(800, 600, 1.0);
+        let viewport = [400.0, 100.0, 320.0, 150.0];
+        let mut scroll = 0.0;
+        draw_panel_content(
+            &mut core,
+            &mut panel,
+            viewport,
+            &mut scroll,
+            &AKAR_THEME_DARK,
+        );
+        for call in core.draw_list.text_calls() {
+            let DrawCall::Text(call) = call else { continue };
+            assert_eq!(call.clip, viewport);
+        }
+        assert!(build_panel(&[], 320.0, &AKAR_THEME_DARK).is_none());
+        assert!(build_panel(&blocks, 2.0, &AKAR_THEME_DARK).is_none());
     }
 
     #[test]

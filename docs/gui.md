@@ -54,10 +54,11 @@ unless you provide your own access control.
 
 | variable | default | meaning |
 | --- | --- | --- |
-| `DAFTPROMPT_API_URL` | `http://127.0.0.1:8080/parse` | Endpoint the GUI posts to. Must be the full `/parse` URL |
+| `DAFTPROMPT_API_URL` | `http://127.0.0.1:8080/parse` | Endpoint the GUI posts to. Must be the full `/parse` URL; the `/clarify` URL is derived by replacing the last `/parse` segment |
 | `DAFTPROMPT_GUI_SPAWN_API` | unset | `0` stops the GUI from spawning the API. Spawning also happens only when `DAFTPROMPT_API_URL` is unset |
 | `DAFTPROMPT_API_BIN` | `daftprompt-api` beside the GUI executable | Path to the API binary to spawn |
-| `DAFTPROMPT_GUI_TIMEOUT_SECS` | `300` | Client transport timeout. The API's own default attempt budget allows three 60-second model calls |
+| `DAFTPROMPT_GUI_TIMEOUT_SECS` | `300` | Client transport timeout for `/parse`. The API's own default attempt budget allows three 60-second model calls |
+| `DAFTPROMPT_GUI_CLARIFY_TIMEOUT_SECS` | `420` | Client transport timeout for `/clarify`, which allows up to three 120-second attempts |
 
 ## Using the app
 
@@ -114,6 +115,49 @@ other suggestions have no implied alternative or preference.
 
 Each span has one API number even when it has several labels. Numbers belong to
 one result and restart on the next parse. A result with no spans remains valid.
+
+## Clarification branches (epic 004)
+
+Every span card has a **Clarify** action. It opens a panel beside the source
+view (the source column narrows; the blocks and cards are otherwise unchanged).
+A card that has a branch shows an accent bar on its left edge and its button
+reads `Branch · N turns` (or `Branch · asking…`); the button reopens the panel.
+The panel shows:
+
+- the target preview (`#N · <exact span text>`);
+- the turns in order: `Q:` question, the explanation as plain text with its
+  `[n]` markers untouched, then its citation list, and a grounding line
+  (`Project-grounded` or `Text only`);
+- citations as the API computed them: `[1] src/limiter.rs:L12–L30` for files
+  (`path:L5` for one line), and `[2] #1 · <source text>` for a source citation
+  whose byte range lies inside span `#1` (`source · <text>` when it lies in no
+  span). The GUI maps source byte ranges to the submitted text only; it never
+  reads a project file. A marker in the explanation with no listed citation is
+  flagged, and an unusable range or line range is shown as unavailable;
+- the in-flight state (`Explaining…`), or the error under the earlier turns
+  (earlier turns and the typed question are kept so the question can be retried);
+- a follow-up textarea and an **Ask** / **Ask follow-up** button.
+
+Branches live only in memory, per span `#N` of the current parse result. A new
+parse (or a failed one) discards all of them and closes the panel; each branch
+keeps its unsent draft while another branch is open. Each branch allows one
+request at a time (the button reads `Explaining…` and is refused while one is in
+flight); different branches can run concurrently. Replies carry a per-request
+token, so a reply for a discarded branch or an older request is ignored.
+
+`clarify.rs` is pure logic, like `view.rs`: `build_clarify_request` builds the
+`POST /clarify` body from the parse result (`source.text` and `payload_hash`
+from `payload`, `source.metadata` from the parse source, the target from the
+matching `spans` entry, `turns` empty on the first turn and the previous
+`question_node_id` / `explanation_node_id` pairs afterwards), `Branches` holds
+the state machine, and `build_branch_view` / `panel_blocks` produce the view
+model. `render.rs` only lays out and paints it. The request runs on a worker
+thread exactly like `/parse` (`ParseClient::clarify`, the same `ureq` client)
+and reports through a second channel that the render loop polls with
+`try_recv`; the loop wakes every 50 ms while any branch is pending. API errors
+(`payload_mismatch`, `invalid_target`, `invalid_output`, ...) decode into the
+same `ApiError` and appear in the panel. The window's minimum width is 960 px so
+the panel stays readable.
 
 ## How the request stays off the render thread
 
@@ -176,7 +220,15 @@ The GUI's deterministic tests cover:
 - clipboard request mapping, paste/copy against a fake clipboard (the real one is
   never touched), quiet handling of empty or non-text content, and error
   messages instead of panics;
-- content layout stacking and viewport clipping for scrolled blocks.
+- content layout stacking and viewport clipping for scrolled blocks;
+- clarification: request construction from a parse result (first turn, follow-up
+  with earlier node ids, blank question, unknown span), one request per branch,
+  stale replies, failures keeping earlier turns, malformed results (empty
+  explanation, missing node ids) becoming errors, citation rendering (files,
+  source ranges mapped to `#N`, invalid ranges, unlisted markers, Unicode
+  boundaries), panel block order, the `/clarify` URL and a canned HTTP exchange
+  with a `payload_mismatch` error, panel layout beside the source view, and
+  panel clipping.
 
 No test needs a model or provider credentials.
 

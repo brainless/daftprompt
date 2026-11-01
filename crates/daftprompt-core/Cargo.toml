@@ -12,6 +12,8 @@ rig.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+ignore.workspace = true
+globset.workspace = true
 thiserror.workspace = true
 # Only the live evaluation binary loads `.env`; see the `live-eval` feature.
 dotenvy = { workspace = true, optional = true }
@@ -20,6 +22,7 @@ dotenvy = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
+tempfile.workspace = true
 schemars.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 
@@ -28,6 +31,11 @@ name = "evaluate-scribe"
 path = "src/bin/evaluate_scribe.rs"
 # The evaluation binary is opt-in: ordinary builds and tests do not compile a
 # provider transport or require credentials.
+required-features = ["live-eval"]
+
+[[bin]]
+name = "evaluate-explainer"
+path = "src/bin/evaluate_explainer.rs"
 required-features = ["live-eval"]
 
 [features]

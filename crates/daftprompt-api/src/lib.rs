@@ -22,6 +22,11 @@
 //! | `timeout`          | 504    |
 //! | `internal_error`   | 500    |
 //!
+//! `POST /clarify` accepts a [`ClarifyRequest`] and answers with a
+//! [`ClarifyResult`]: one explanation of one extracted span, with citations.
+//! It uses the same error mapping; a payload hash mismatch or an invalid target
+//! is `400`. It never changes the parse result.
+//!
 //! A request whose JSON envelope is too large is rejected with 413 before it
 //! can reach the parser. A partly valid graph is never returned.
 
@@ -34,10 +39,10 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
-use daftprompt_core::{DEFAULT_MAX_INPUT_BYTES, Parser};
+use daftprompt_core::{Clarifier, DEFAULT_MAX_INPUT_BYTES, Parser};
 use http_body_util::LengthLimitError;
 
-pub use daftprompt_types::{ParseError, ParseRequest, ParseResult};
+pub use daftprompt_types::{ClarifyRequest, ClarifyResult, ParseError, ParseRequest, ParseResult};
 
 /// Room for JSON escaping and source metadata beyond the text itself.
 ///
@@ -86,13 +91,25 @@ impl Default for ApiConfig {
 #[derive(Clone)]
 pub struct AppState {
     parser: Arc<dyn Parser>,
+    clarifier: Option<Arc<dyn Clarifier>>,
     config: ApiConfig,
 }
 
 impl AppState {
     /// State over `parser` with `config`.
     pub fn new(parser: Arc<dyn Parser>, config: ApiConfig) -> Self {
-        Self { parser, config }
+        Self {
+            parser,
+            clarifier: None,
+            config,
+        }
+    }
+
+    /// Serve `POST /clarify` with `clarifier`. Without one the route answers
+    /// `500 internal_error`.
+    pub fn with_clarifier(mut self, clarifier: Arc<dyn Clarifier>) -> Self {
+        self.clarifier = Some(clarifier);
+        self
     }
 
     /// The active envelope configuration.
@@ -103,10 +120,49 @@ impl AppState {
 
 /// The HTTP router.
 ///
-/// The only route is stateless `POST /parse`; there are no session, history,
-/// or storage endpoints.
+/// The routes are stateless `POST /parse` and `POST /clarify`; there are no
+/// session, history, or storage endpoints.
 pub fn router(state: AppState) -> Router {
-    Router::new().route("/parse", post(parse)).with_state(state)
+    Router::new()
+        .route("/parse", post(parse))
+        .route("/clarify", post(clarify))
+        .with_state(state)
+}
+
+/// A clarify body carries the source text plus earlier turns and a question,
+/// so its envelope is twice the parse envelope.
+fn clarify_body_limit(config: ApiConfig) -> usize {
+    config.max_body_bytes.saturating_mul(2)
+}
+
+async fn clarify(State(state): State<AppState>, request: Request) -> Response {
+    let limit = clarify_body_limit(state.config);
+    let body = match to_bytes(request.into_body(), limit).await {
+        Ok(body) => body,
+        Err(error) => return error_response(body_error(&error, limit)),
+    };
+
+    let request: ClarifyRequest = match serde_json::from_slice(&body) {
+        Ok(request) => request,
+        Err(error) => {
+            return error_response(ParseError::InvalidRequest {
+                detail: format!(
+                    "the request body is not a valid ClarifyRequest JSON object: {error}"
+                ),
+            });
+        }
+    };
+
+    let Some(clarifier) = &state.clarifier else {
+        return error_response(ParseError::Internal {
+            detail: "clarification is not configured on this service".to_owned(),
+        });
+    };
+
+    match clarifier.clarify(request).await {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => error_response(error),
+    }
 }
 
 async fn parse(State(state): State<AppState>, request: Request) -> Response {
@@ -156,6 +212,9 @@ fn error_response(error: ParseError) -> Response {
 pub fn status_for(error: &ParseError) -> StatusCode {
     match error {
         ParseError::InvalidRequest { .. } => StatusCode::BAD_REQUEST,
+        ParseError::PayloadMismatch { .. } | ParseError::InvalidTarget { .. } => {
+            StatusCode::BAD_REQUEST
+        }
         ParseError::OversizedInput { .. } => StatusCode::PAYLOAD_TOO_LARGE,
         ParseError::InvalidOutput { .. } => StatusCode::UNPROCESSABLE_ENTITY,
         ParseError::Provider { .. } => StatusCode::BAD_GATEWAY,
@@ -182,6 +241,18 @@ mod tests {
                     detail: String::new(),
                 },
                 StatusCode::PAYLOAD_TOO_LARGE,
+            ),
+            (
+                ParseError::PayloadMismatch {
+                    detail: String::new(),
+                },
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                ParseError::InvalidTarget {
+                    detail: String::new(),
+                },
+                StatusCode::BAD_REQUEST,
             ),
             (
                 ParseError::InvalidOutput {

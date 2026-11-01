@@ -85,3 +85,42 @@ pub enum AnnotationKind {
     /// An outstanding requested or committed action.
     Task,
 }
+
+/// One complete Explainer result, submitted through its `submit` output tool.
+///
+/// The model returns an explanation and the sources it used. It never
+/// produces IDs, hashes, byte offsets, labels, or statuses: Rust validates
+/// every citation and builds the records.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExplainerExtraction {
+    /// Non-empty plain-text explanation. It may reference citations as `[1]`,
+    /// `[2]`, ... numbered from 1 in `citations` order.
+    pub explanation: String,
+    /// Sources the explanation relied on. Empty is valid when nothing
+    /// relevant was found.
+    #[serde(default)]
+    pub citations: Vec<ExplainerCitation>,
+}
+
+/// A source cited by an explanation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ExplainerCitation {
+    /// Lines of a project file. The range must lie within lines a `read_file`
+    /// call returned in the same run.
+    File {
+        /// Path relative to the project root.
+        path: String,
+        /// First line, 1-based and inclusive.
+        start_line: u32,
+        /// Last line, 1-based and inclusive.
+        end_line: u32,
+    },
+    /// Segments of the source window the agent was given.
+    Source {
+        /// First segment, 1-based and inclusive, as numbered in the prompt.
+        start_segment: u32,
+        /// Last segment, 1-based and inclusive.
+        end_segment: u32,
+    },
+}

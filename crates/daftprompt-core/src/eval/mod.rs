@@ -11,11 +11,19 @@
 //! parser as the future API and GUI. Ordinary builds and tests need no
 //! credentials.
 
+mod clarify;
 mod fixtures;
 mod prediction;
 mod report;
 mod scoring;
 
+pub use clarify::{
+    CLARIFY_FORMAT_VERSION, CaseScore, CaseTarget, CaseTurn, ClarifyAggregate, ClarifyCategory,
+    ClarifyFixture, ClarifyFixtureError, ClarifyReport, ClarifyRun, ClarifyStatus, Coverage,
+    Expected, ExpectedFile, Observed, claims_not_found, default_clarify_fixture_dir,
+    default_clarify_project_dir, describe_location, load_clarify_fixtures,
+    metadata as clarify_metadata, score as score_clarify,
+};
 pub use fixtures::{
     ExpectedAnswerLink, ExpectedLabel, ExpectedSpan, Fixture, FixtureCategory, FixtureError,
     default_fixture_dir, load_fixtures,

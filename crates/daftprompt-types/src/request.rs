@@ -80,3 +80,72 @@ pub enum SourceKind {
     /// Anything else.
     Other,
 }
+
+/// A request to clarify one extracted span of an earlier parse result.
+///
+/// Like [`ParseRequest`], it is stateless: the client resends the source
+/// text, the target, and the branch's earlier turns. All text is data, never
+/// instructions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClarifyRequest {
+    /// The original submitted text and its identity.
+    pub source: ClarifySource,
+    /// The extracted span being asked about.
+    pub target: ClarifyTarget,
+    /// Earlier questions and explanations in this branch, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turns: Vec<ClarifyTurn>,
+    /// The user's question, preserved unchanged.
+    pub question: String,
+    /// The human identity asking. Otherwise the question author is `unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+}
+
+impl ClarifyRequest {
+    /// The question node author: the supplied author, otherwise `unknown`.
+    pub fn question_author(&self) -> &str {
+        self.author
+            .as_deref()
+            .filter(|author| !author.trim().is_empty())
+            .unwrap_or("unknown")
+    }
+}
+
+/// The source text a clarification refers to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClarifySource {
+    /// The complete original text.
+    pub text: String,
+    /// The payload hash from the parse result. Rust recomputes it from `text`
+    /// and rejects a mismatch.
+    pub payload_hash: String,
+    /// Provenance from the parse result, preserved unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<SourceMetadata>,
+}
+
+/// The extracted span a clarification is about.
+///
+/// `node_id` is an opaque client-supplied reference: without persistence the
+/// API cannot confirm it exists. `display_id` is for display only and is
+/// never an identity. The byte range is half-open and must be in bounds, on
+/// `char` boundaries, and non-empty.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClarifyTarget {
+    pub node_id: String,
+    pub display_id: u32,
+    pub start_byte: usize,
+    pub end_byte: usize,
+}
+
+/// One earlier question and explanation in a branch.
+///
+/// The node IDs are opaque client-supplied references, recorded as given.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClarifyTurn {
+    pub question_node_id: String,
+    pub question: String,
+    pub explanation_node_id: String,
+    pub explanation: String,
+}

@@ -106,6 +106,7 @@ A run's outputs are the nodes and labels whose `run_id` points to it.
 | `conflict`   | binary: src ↔ dst     | yes      | src and dst cannot both hold              |
 | `supersedes` | binary: src → dst     | no       | src replaces dst (edits, resolutions)     |
 | `stale`      | unary                 | yes      | src was built on superseded or changed content |
+| `clarification` | binary: branch question → target | no | src opens a clarification branch about dst; NULL status |
 
 Many-to-many falls out of binary labels: one answer can resolve several questions (several `answer` labels), and a question can have several answers. A question that raises more questions has them as child nodes, each labelled `question`.
 
@@ -137,6 +138,44 @@ The first parsing experiment fixes these interpretations. They refine the rules 
 Every recommendation emits one unary label, independently of its optional `recommendation_for` links. `alternative_to` is symmetric and canonicalized by source order. Only explicitly offered alternatives are linked; a set connects every pair, while complementary plan steps do not imply alternatives. All targets belong to the same submission. Rust rejects self-links, duplicate links (including reversed alternatives), wrong-kind targets, and duplicate unary kinds; one span may carry different justified kinds.
 
 Each extracted span has a `display_id: u32`, numbered consecutively from 1 in source order after validation. Root nodes and unlabelled gaps consume no number. Multiple labels on one span share its number. Numbers are result-local; references across results require run identity. Graph identities and relationship references remain generated strings.
+
+## Epic 004 extension: clarification branch
+
+[Epic 004](../epics/004-clarification-branch.md) adds the `clarification` label kind and no tables. A clarification is for the user's understanding: it never adds or changes `question`, `answer`, `recommendation`, `task`, `conflict`, `supersedes`, or `stale` labels, never alters a status, and its explanation is not parsed by Scribe.
+
+### Branch structure
+
+| record | details |
+|--------|---------|
+| Question payload | The user's question text, unchanged |
+| Question node `Q` | `parent_id` = the target span node for the first turn, or the previous explanation node for a follow-up. `author` = the request author, otherwise `unknown`. No `run_id`. One context: the whole question payload |
+| `clarification(Q₁ → target)` | Only on the first question of a branch; follow-ups chain through `parent_id` and do not repeat it. NULL status, `created_by` = the question author |
+| Explanation payload | The agent's explanation text |
+| Explanation node `E` | `parent_id` = `Q`, `author` = `agent`, `run_id` = the Explainer run. Context `seq 0` is the whole explanation payload; contexts `seq 1…n` are its validated citations in citation order |
+| Run metadata | `run` (agent `explainer`), `run_input` rows for the target, question, and earlier turn nodes, and one `tool_call` per tool invocation, including `submit` |
+
+```text
+span #3 (from the parse result)
+└── Q1  "What does token bucket mean here?"     clarification(Q1 → #3)
+    └── E1  explanation, citations
+        └── Q2  "Why not a fixed window?"
+            └── E2  explanation, citations
+```
+
+### Citation contexts
+
+Each validated citation is a `NodeContext` on the explanation node, numbered from `seq 1` in citation order; `[n]` markers in the explanation refer to `seq n`.
+
+- **File citation:** a `ContextTarget::File` with the project-relative `path`, a Rust-computed `content_hash` (SHA-256 of the file content), and a range covering whole lines: 1-based lines, `start_col` 1, and an exclusive end at column 1 of the line after the last cited line. It is valid only within lines a `read_file` call returned in the same run. The hash is what later staleness detection compares.
+- **Source citation:** a `ContextTarget::Payload` on the source payload with the range of the cited segments.
+
+A `ClarifyResult` also lists citations for rendering (`index`, `context_id`, and either a file path with an inclusive line range or a source byte range), so clients never recompute coordinates. It also records `source_window` (the 1-based inclusive source segments given to the agent and the byte range they cover), so a reader can see exactly what text the Explainer saw.
+
+### Tool output payloads
+
+A `tool_call` stores its JSON arguments in `input`. Its output is stored as a payload (the bounded text returned to the model) referenced by `output_hash`; identical outputs share one content-addressed payload. The `submit` call's output payload may be absent. Together with `run_input`, this records what the agent looked at.
+
+In Epic 004 these records are in memory and stateless; nothing is persisted. Client-supplied node IDs are recorded as given and not verified until persistence exists.
 
 ## Worked example
 

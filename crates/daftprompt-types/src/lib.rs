@@ -7,6 +7,8 @@
 //! - [`ParseRequest`] and [`SourceMetadata`]: what a client submits.
 //! - [`Extraction`]: the schema-defined output the model proposes through
 //!   Rig's `submit` tool. It contains source references, never offsets.
+//! - [`ClarifyRequest`], [`ExplainerExtraction`], and [`ClarifyResult`]: the
+//!   clarification branch's request, model-facing output, and validated result.
 //! - [`ParseResult`] and the graph records: the validated, Rust-built result.
 //! - [`ParseError`]: explicit failures; HTTP status mapping belongs to the API.
 //!
@@ -20,9 +22,16 @@ pub mod graph;
 pub mod request;
 
 pub use error::ParseError;
-pub use extraction::{AnnotationKind, ExtractedAnnotation, ExtractedSpan, Extraction};
-pub use graph::{
-    ContextTarget, Label, LabelKind, LabelStatus, Node, NodeContext, ParseResult, Payload, Run,
-    RunInput, RunStatus, SourceRange, SpanInfo, ToolCall,
+pub use extraction::{
+    AnnotationKind, ExplainerCitation, ExplainerExtraction, ExtractedAnnotation, ExtractedSpan,
+    Extraction,
 };
-pub use request::{ParseRequest, SourceKind, SourceMetadata};
+pub use graph::{
+    CitationInfo, CitationLocation, ClarifyResult, ContextTarget, Grounding, Label, LabelKind,
+    LabelStatus, Node, NodeContext, ParseResult, Payload, Run, RunInput, RunStatus, SourceRange,
+    SourceWindow, SpanInfo, ToolCall,
+};
+pub use request::{
+    ClarifyRequest, ClarifySource, ClarifyTarget, ClarifyTurn, ParseRequest, SourceKind,
+    SourceMetadata,
+};

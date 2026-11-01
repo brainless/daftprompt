@@ -23,6 +23,10 @@ schemars = "1"
 # Shared library.
 thiserror = "2"
 sha2 = "0.10"
+# Project tools: `.gitignore`-aware traversal, glob filters, and test temp dirs.
+ignore = "0.4"
+globset = "0.4"
+tempfile = "3"
 rig = { git = "https://github.com/0xPlaygrounds/rig.git", rev = "7dfd8a4229a9d89af159489687cb14b404b2871d", default-features = false, features = [
   "agent",
 ] }

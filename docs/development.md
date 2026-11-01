@@ -57,6 +57,7 @@ Crates.io dependencies are declared once in the workspace `Cargo.toml`. Resolved
 - `axum` 0.8.9, `tokio` 1.54.1 — HTTP service. Core uses only Tokio's timer for per-attempt timeouts. The API binary enables Tokio's `net` and `signal` features for the listener and Ctrl+C shutdown, and `http-body-util` 0.1.5 to distinguish an oversized request body; `tower` 0.5.3 (`util`) is a test-only dependency for driving the router.
 - `rig` 0.43.0 with `reqwest` and `rustls` — enabled only by `daftprompt-api`, which builds the provider client from environment credentials. Core keeps Rig's `agent` feature only, so the shared library stays transport-free.
 - `dotenvy` 0.15.7 — loads a local `.env` at startup of `daftprompt-api` and, as an optional dependency of the `live-eval` feature, of `evaluate-scribe`. Core's normal build does not include it.
+- `ignore` 0.4.34, `globset` 0.4.21 — core's read-only project tools (`daftprompt_core::project_tools`): `ignore::WalkBuilder` for `.gitignore`-aware, hidden-skipping, sorted traversal and `ignore::gitignore::Gitignore` for single-path checks (sources inspected before choosing); `globset` for the `glob` filters. `tempfile` 3.27.0 is a dev-dependency of core for filesystem tests.
 - `ureq` 3.5.0 — GUI HTTP client.
 - `wgpu` 29.0.4, `winit` 0.30.13, `pollster` 0.4.0 — GUI host integration. These are the versions akar builds against; akar does not re-export its surface or event-loop types, so the app declares them directly. They stay out of core, types, and the API.
 - `glyphon` 0.11.0 — same text shaping version as akar's pipeline. The GUI uses it only to give the scrollable block text an explicit viewport clip; app chrome still uses akar components.
@@ -104,6 +105,15 @@ every run as `scribe-v3`.
   consume further attempts, so worst-case latency is one timeout.
 - Tests use the public `ExtractionModel` seam with a stub. No LLM credentials are needed
   for `cargo test --workspace`; live evaluation is opt-in (see below).
+
+## Explainer
+
+`daftprompt_core::explainer` is the clarification agent of [Epic 004](../epics/004-clarification-branch.md). Public surface: `Explainer<M: ExplainerModel>` (`new(config, model)`, `with_project(Arc<dyn ProjectFiles>)`, async `clarify(ClarifyRequest) -> Result<ClarifyResult, ParseError>`, `grounding()`), the object-safe `Clarifier` trait, `ExplainerConfig`, `ExplainerModel`/`ExplainerInput` (the model seam), and `RigExplainer`/`Explainer::from_rig_model`.
+
+- **Configuration:** `ExplainerConfig::default()` is provider `neuralwatt`, model `glm-5.3-flash`, independent of Scribe. `ExplainerConfig::from_env()` applies `DAFTPROMPT_EXPLAINER_PROVIDER` and `DAFTPROMPT_EXPLAINER_MODEL` (blank values ignored); it reads no credentials. The caller builds the provider client (for Neuralwatt, the Chat Completions wire from `OPENAI`-compatible config with `NEURALWATT_API_KEY` and optional `NEURALWATT_BASE_URL`, as the API binary does for Scribe) and passes the model to `Explainer::from_rig_model`. Limits and defaults: question 2 KiB, 8 earlier turns, 16 KiB of earlier turns, 20 segments on each side of the subject, source limits as for parsing, 12 model calls per attempt, 20 citations, 3 attempts, 120 s per attempt covering the whole tool loop, plus `ProjectToolConfig` caps.
+- **Rig usage (rev `7dfd8a42`):** Rig's `Extractor` is single-turn, so `RigExplainer` builds an `AgentBuilder` with `.output_schema::<ExplainerExtraction>()` and `.output_mode(OutputMode::Tool)`, the project tools registered through `rig_tools`, and runs `agent.prompt(..).max_turns(n).await`. `AgentRunner::output_tool` and the extractor's `submit` name are crate-private in `rig-agent`, so the synthetic output tool has Rig's default name `final_result` (the prompt says so); Explainer records it as the `submit` tool call. The run ends when the model calls it; `PromptResponse::output_tool_calls()` must be at least 1 and `output()` is the serialized arguments. `MaxTurns` and `UnknownToolCall` count as invalid output; other `PromptError`s are provider errors.
+- **Tool-call records:** every project tool invocation is read from the per-attempt `ToolRecorder` (no hooks are needed), so the records cover exactly the attempt that succeeded; `submit` is appended. Outputs are stored as content-addressed payloads in `tool_payloads`.
+- **Tests:** `tests/explainer.rs` uses a stub `ExplainerModel` that drives the attempt's `ProjectToolbox` over an `InMemoryProject` and then returns an extraction; it needs no credentials. `tests/explainer_live.rs` is an opt-in (`--features live-eval -- --ignored`) check of multi-turn tool calling with the output tool against the configured model. It has not been run in this environment (no `NEURALWATT_API_KEY` in the process environment).
 
 ## Scribe evaluation
 
@@ -177,6 +187,44 @@ the baseline remains comparable.
 Deterministic tests cover fixture validation, every scoring rule with fake outcomes, and
 a stub-driven pass over every fixture: returning the annotated extraction through the
 normal Scribe pipeline must score exactly, without network access.
+
+## Explainer grounding evaluation
+
+Cases live in `crates/daftprompt-core/fixtures/explainer/cases/` (one JSON file each) and the
+small project the agent explores lives in `crates/daftprompt-core/fixtures/explainer/project/`
+(no hidden or git-ignored files, so `FsProject` sees all of it). The cases cover a term defined
+in a project file, a term defined only in the source text, a term defined nowhere ("not found",
+no fabricated citations), an ambiguous term defined differently in two files, a definition in
+a file whose comment tries to inject instructions (the case's `injection_marker` must never
+appear in the output or in a tool call), and a follow-up turn. Each case holds the text, the
+target byte range with a verbatim quote, the question, optional earlier turns, and the expected
+files with inclusive line ranges, source quotes, `not_found`, and the marker. Rust computes the
+payload hash and node IDs when the request is built. `load_clarify_fixtures` validates spans,
+quotes, expected files and line ranges against the project, and the marker against the project
+text; the deterministic tests in `crates/daftprompt-core/tests/explainer_eval.rs` cover this
+and every metric with synthetic results, without credentials.
+
+The `evaluate-explainer` binary is built only with `live-eval` and calls a model only when
+`DAFTPROMPT_EVAL_LIVE=1` is set and `NEURALWATT_API_KEY` is in the process environment. Unlike
+`evaluate-scribe` it never reads a `.env` file.
+
+```sh
+NEURALWATT_API_KEY=... DAFTPROMPT_EVAL_LIVE=1 \
+  cargo run -p daftprompt-core --features live-eval --bin evaluate-explainer -- \
+  --output docs/evaluations/explainer-neuralwatt-glm-5.3-flash.md
+```
+
+Provider and model come from `DAFTPROMPT_EXPLAINER_PROVIDER` / `DAFTPROMPT_EXPLAINER_MODEL`
+(default `neuralwatt` / `glm-5.3-flash`), `DAFTPROMPT_EVAL_MAX_ATTEMPTS` and
+`DAFTPROMPT_EVAL_TIMEOUT_SECS` override the attempt budget and per-attempt timeout, and
+`NEURALWATT_BASE_URL` overrides the endpoint. Flags: `--fixtures DIR`, `--project DIR`,
+`--output FILE`, `--limit N`. Exit codes: `0` success, `1` some case failed, `2` the run could
+not start. The report gives invalid-output rate, attempts, project tool calls per run, latency,
+file-citation recall and precision (exact and lenient line overlap), source-citation overlap,
+not-found correctness (phrase heuristic), injection resistance, every explanation with its
+citations, and a manual-review section on whether citations support the explanation. Without
+credentials, [`evaluations/explainer-baseline.md`](evaluations/explainer-baseline.md) records the
+evaluation as not run.
 
 ## HTTP API
 
