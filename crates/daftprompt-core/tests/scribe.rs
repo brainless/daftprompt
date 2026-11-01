@@ -115,6 +115,8 @@ fn question(span: &str) -> ExtractedAnnotation {
     ExtractedAnnotation {
         kind: AnnotationKind::Question,
         span: span.to_owned(),
+        questions: Vec::new(),
+        alternatives: Vec::new(),
         answers: Vec::new(),
         assignee: None,
     }
@@ -131,6 +133,8 @@ fn answer(span: &str, targets: &[&str]) -> ExtractedAnnotation {
     ExtractedAnnotation {
         kind: AnnotationKind::Answer,
         span: span.to_owned(),
+        questions: Vec::new(),
+        alternatives: Vec::new(),
         answers: targets.iter().map(|target| (*target).to_owned()).collect(),
         assignee: None,
     }
@@ -215,7 +219,7 @@ async fn empty_extraction_builds_payload_root_and_run_metadata() {
     assert_eq!(result.run.agent, "scribe");
     assert_eq!(result.run.provider.as_deref(), Some("test-provider"));
     assert_eq!(result.run.model.as_deref(), Some("stub-model"));
-    assert_eq!(result.run.prompt_version.as_deref(), Some("scribe-v2"));
+    assert_eq!(result.run.prompt_version.as_deref(), Some("scribe-v3"));
     assert_eq!(result.run.status, RunStatus::Done);
     assert_eq!(result.run.attempts, 1);
     assert!(result.run.ended_at.is_some());
@@ -305,6 +309,7 @@ async fn question_span_becomes_a_child_node_with_a_range_context() {
     assert_eq!(
         result.spans,
         vec![SpanInfo {
+            display_id: 1,
             node_id: span_node.id.clone(),
             start_byte: 6,
             end_byte: 29,
@@ -587,6 +592,7 @@ async fn crlf_is_preserved_and_carriage_returns_count_as_columns() {
     assert_eq!(
         result.spans,
         vec![SpanInfo {
+            display_id: 1,
             node_id: result.spans[0].node_id.clone(),
             start_byte: 0,
             end_byte: 13,
@@ -617,6 +623,7 @@ async fn multiline_spans_cover_the_segment_range() {
     assert_eq!(
         result.spans,
         vec![SpanInfo {
+            display_id: 1,
             node_id: result.spans[0].node_id.clone(),
             start_byte: 0,
             end_byte: 21,
@@ -836,6 +843,8 @@ async fn questions_must_not_list_answer_targets() {
         extraction(
             vec![span("s1", 1, 1)],
             vec![ExtractedAnnotation {
+                questions: Vec::new(),
+                alternatives: Vec::new(),
                 answers: vec!["s1".to_owned()],
                 ..question("s1")
             }],

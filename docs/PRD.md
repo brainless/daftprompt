@@ -48,6 +48,10 @@ Individuals who use LLM agents for thinking-heavy work: developers on existing p
 - Make conflicts and staleness visible.
 - Full traceability: for any conclusion, show what it was based on and what the agent looked at.
 
+## Parser expansion
+
+[Epic 002](../epics/002-recommendations-tasks-and-identifiers.md) extends the extraction contract with standalone recommendations and offered options in plans or investigation replies, optional links to local questions, explicit alternative relationships, outstanding tasks with optional explicit assignees, and integer display identifiers. Recommendations alone leave questions open; open tasks will join the blocking items in the completion rule. The stateless contract preserves original text and generated graph identities; each extracted span also has a result-local integer display ID.
+
 ## Non-goals (for now)
 
 - Non-text modalities (images, audio).

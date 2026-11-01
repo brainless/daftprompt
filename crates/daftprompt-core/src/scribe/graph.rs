@@ -68,7 +68,7 @@ pub(crate) fn build(
         )
     });
 
-    for index in source_order {
+    for (number, index) in source_order.into_iter().enumerate() {
         let span = &validated.spans[index];
         let node_id = span_node_ids[index].clone();
         nodes.push(Node {
@@ -88,6 +88,11 @@ pub(crate) fn build(
             range: Some(span.range),
         });
         spans.push(SpanInfo {
+            display_id: u32::try_from(number + 1).map_err(|_| {
+                daftprompt_types::ParseError::Internal {
+                    detail: "too many spans for display IDs".to_owned(),
+                }
+            })?,
             node_id,
             start_byte: span.start_byte,
             end_byte: span.end_byte,
@@ -123,6 +128,21 @@ pub(crate) fn build(
             dst_node_id: Some(span_node_ids[answer.target].clone()),
             status: None,
             assignee: None,
+            note_node_id: None,
+            created_by: "agent".to_owned(),
+            run_id: Some(run_id.clone()),
+            created_at: created_at.clone(),
+        });
+    }
+
+    for label in &validated.extra_labels {
+        labels.push(Label {
+            id: new_id("label"),
+            kind: label.kind,
+            src_node_id: span_node_ids[label.source].clone(),
+            dst_node_id: label.target.map(|target| span_node_ids[target].clone()),
+            status: (label.kind == LabelKind::Task).then_some(LabelStatus::Open),
+            assignee: label.assignee.clone(),
             note_node_id: None,
             created_by: "agent".to_owned(),
             run_id: Some(run_id.clone()),

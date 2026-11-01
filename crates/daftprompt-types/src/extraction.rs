@@ -46,9 +46,9 @@ pub struct ExtractedSpan {
 
 /// A label attached to one span.
 ///
-/// Only `question` and locally identifiable `answer` relationships are
-/// extracted in this epic.
+/// Recommendations may link local questions and explicitly offered alternatives.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ExtractedAnnotation {
     /// The label kind.
     pub kind: AnnotationKind,
@@ -57,7 +57,13 @@ pub struct ExtractedAnnotation {
     /// For `answer`: the question span IDs this span answers. Empty otherwise.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub answers: Vec<String>,
-    /// For `question`: an explicitly assigned handle, `@username` or
+    /// Local question targets for a recommendation. Empty for other kinds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<String>,
+    /// Local recommendation alternatives. Submit each unordered pair once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<String>,
+    /// For `question` or `task`: an explicitly assigned handle, `@username` or
     /// `@team-name`. A mention alone is not an assignment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
@@ -74,4 +80,8 @@ pub enum AnnotationKind {
     Question,
     /// The span answers one or more question spans.
     Answer,
+    /// A suggested approach or offered option.
+    Recommendation,
+    /// An outstanding requested or committed action.
+    Task,
 }

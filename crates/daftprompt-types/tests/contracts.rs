@@ -162,6 +162,7 @@ fn graph_records_round_trip_as_json() {
             created_at: "2026-10-31T00:00:00Z".to_owned(),
         }],
         spans: vec![SpanInfo {
+            display_id: 1,
             node_id: "n1".to_owned(),
             start_byte: 0,
             end_byte: 5,

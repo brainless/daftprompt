@@ -1,0 +1,44 @@
+{
+  "format_version": 1,
+  "id": "direct-advice-request",
+  "category": "chat",
+  "note": "Epic 002 semantic boundary coverage",
+  "text": "What do you recommend?\nI recommend caching locally.",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 0,
+      "end": 22,
+      "quote": "What do you recommend?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "start": 23,
+      "end": 51,
+      "quote": "I recommend caching locally.",
+      "labels": [
+        {
+          "kind": "recommendation"
+        }
+      ]
+    }
+  ],
+  "answer_links": [
+    {
+      "from": "e2",
+      "to": "e1"
+    }
+  ],
+  "recommendation_links": [
+    {
+      "from": "e2",
+      "to": "e1"
+    }
+  ],
+  "alternative_links": []
+}

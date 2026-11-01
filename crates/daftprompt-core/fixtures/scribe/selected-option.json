@@ -1,0 +1,35 @@
+{
+  "format_version": 1,
+  "id": "selected-option",
+  "category": "chat",
+  "note": "Epic 002 semantic boundary coverage",
+  "text": "Which option shall we choose?\nWe have selected the shared cache.",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 0,
+      "end": 29,
+      "quote": "Which option shall we choose?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "start": 30,
+      "end": 64,
+      "quote": "We have selected the shared cache.",
+      "labels": []
+    }
+  ],
+  "answer_links": [
+    {
+      "from": "e2",
+      "to": "e1"
+    }
+  ],
+  "recommendation_links": [],
+  "alternative_links": []
+}

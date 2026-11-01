@@ -4,7 +4,7 @@
 columns: a composer on the left with a multiline textarea anchored at the bottom
 and a Parse button, and a wider source view on the right. The right column shows
 the original text as blocks, not a chat transcript: validated spans become cards
-with label badges, statuses, assignee handles, and answer targets, and unlabelled
+with API-assigned `#N` identifiers, label badges, statuses, assignee handles, and relationship targets, and unlabelled
 text between them stays visible in source order.
 
 The app only talks to the API. It depends on `daftprompt-types`, the four akar
@@ -96,24 +96,24 @@ and akar-winit ignores `Ime` events, so a paste cannot arrive twice; the host
 also drops the character winit attaches to a Cmd/Ctrl shortcut key so Cmd+V
 does not type a `v`.
 
-Sample text for the demo (the API's own sample is similar):
+Sample text for the demo:
 
 ```text
-Plan
-Should we cache tokens? @infra-team
-Yes, cache the tokens in Redis.
-
-Deploy on Friday.
+Should we cache tokens?
+I suggest a five-minute cache.
+@alex, please benchmark the cache.
 ```
 
-Expected result: two span cards in source order separated by the unlabelled
-lines. The question card shows a `question · resolved` badge and an `@infra-team`
-badge. The answer card shows an `answer` badge and an `answers → Should we cache
-tokens? @infra-team` line. The plan and deployment lines stay unlabelled.
+Expected result: question **#1** remains `open`; recommendation **#2** shows
+`recommendation for → #1 · Should we cache tokens?`; task **#3** shows
+`task · open` and `@alex`. The question lists incoming recommendations separately
+from `answered by` entries. An actual answer receives its own number and resolves
+the question. Recommendations without a local question show no question target.
+Explicit alternatives list their peers on both cards as `alternative to: #N · …`;
+other suggestions have no implied alternative or preference.
 
-A question with no local answer shows `question · open` instead. A span with no
-labels is impossible in a valid result: every span must be referenced by an
-annotation. A result with no spans is valid and renders one unlabelled block.
+Each span has one API number even when it has several labels. Numbers belong to
+one result and restart on the next parse. A result with no spans remains valid.
 
 ## How the request stays off the render thread
 
@@ -134,8 +134,13 @@ machine also clears the old result when a new submission begins.
 `view.rs` is pure logic. It sorts the API's `spans` byte ranges, checks bounds
 and UTF-8 `char` boundaries defensively, and walks `payload.content` from byte 0
 to the end. Text outside a span becomes an unlabelled block; each span slices the
-exact original bytes. Answer labels show the text of their target question.
-Questions also list any locally validated answer spans as `answered by:`.
+exact original bytes, including whitespace-only gaps. Answer and recommendation
+links resolve node IDs to API display numbers and short source previews.
+Questions list incoming `answered by:` and `recommendations:` separately;
+`alternative to:` appears at both ends of each explicit alternative pair.
+The client never renumbers spans: invalid zero or duplicate numbers and ambiguous
+node IDs are left as unlabelled source text, as are invalid or overlapping ranges.
+Unavailable relationship targets are identified as unavailable.
 
 `render.rs` builds a separate akar layout for the source blocks only when a new
 result arrives or the main column width changes. Scrolling changes that layout's

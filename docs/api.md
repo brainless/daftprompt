@@ -103,10 +103,10 @@ The response is a `ParseResult` as JSON. Its important fields:
 | --- | --- |
 | `payload.content` | The complete original text, stored once |
 | `payload.hash` | SHA-256 of the payload, its identity |
-| `spans` | `{ node_id, start_byte, end_byte }` for every span node. Half-open byte ranges into `payload.content`, always on `char` boundaries |
+| `spans` | `{ node_id, display_id, start_byte, end_byte }` for every span node. Half-open byte ranges into `payload.content`, always on `char` boundaries |
 | `nodes` | One root node (`parent_id` absent) plus one child node per span |
 | `node_contexts` | Each span node's ranged context pointing at the payload (1-based lines/columns, exclusive end) |
-| `labels` | `question` and `answer` records, with Rust-derived question statuses and optional `assignee` handles |
+| `labels` | `question`, `answer`, `recommendation`, `recommendation_for`, `alternative_to`, and `task` records, with Rust-derived statuses and optional question/task `assignee` handles |
 | `source` | The provenance from the request, unchanged |
 | `run`, `run_inputs`, `tool_calls` | In-memory run metadata for the Scribe call |
 
@@ -140,10 +140,10 @@ Abbreviated example (IDs, hashes, and timestamps vary):
     { "id": "label-a", "kind": "answer", "src_node_id": "node-s2", "dst_node_id": "node-s1", "status": null, "assignee": null, "note_node_id": null, "created_by": "agent", "run_id": "run-1", "created_at": "…" }
   ],
   "spans": [
-    { "node_id": "node-s1", "start_byte": 5, "end_byte": 28 },
-    { "node_id": "node-s2", "start_byte": 42, "end_byte": 58 }
+    { "node_id": "node-s1", "display_id": 1, "start_byte": 5, "end_byte": 28 },
+    { "node_id": "node-s2", "display_id": 2, "start_byte": 42, "end_byte": 58 }
   ],
-  "run": { "id": "run-1", "agent": "scribe", "provider": "openai", "model": "gpt-4o-mini", "prompt_version": "scribe-v1", "started_at": "…", "ended_at": "…", "status": "done", "attempts": 1 },
+  "run": { "id": "run-1", "agent": "scribe", "provider": "openai", "model": "gpt-4o-mini", "prompt_version": "scribe-v3", "started_at": "…", "ended_at": "…", "status": "done", "attempts": 1 },
   "run_inputs": [{ "run_id": "run-1", "node_id": "node-root" }],
   "tool_calls": [{ "id": "tool-1", "run_id": "run-1", "seq": 0, "tool": "submit", "input": "{...}", "output_hash": null, "created_at": "…" }]
 }
@@ -177,3 +177,31 @@ Oversized input is checked before the first model call. Invalid output
 feedback, until the attempt budget is exhausted; the 422 body reports how many
 attempts were used. Provider errors (502) and timeouts (504) are not retried:
 they are returned immediately, so the worst-case latency is one timeout.
+
+## Epic 002 contract additions
+
+`SpanInfo.display_id` is an API-assigned integer, consecutive from 1 in source order within one result. Multiple annotations on a span share its number. Clients resolve targets through `node_id` and must not renumber spans. Retain the run identity when saving a display reference outside its result.
+
+The new label enum values are `recommendation` (unary), `recommendation_for` (binary to a question), `alternative_to` (symmetric binary between recommendations, stored in source order), and `task` (unary). Recommendations and relationships have null status; tasks start open and may carry an explicit assignee. Only answer links resolve questions. Standalone recommendations need no question. These fields and enum values are additive; clients using exhaustive enum decoding must update together.
+
+The model contract adds optional `questions` and `alternatives` lists to recommendations; omitted lists default to empty. These local model IDs never become API identities. Rust rejects inappropriate fields, invalid targets, duplicate unary labels or links, reversed alternative duplicates, and self-links before constructing any graph records.
+
+### Mapping relationship targets to display identifiers
+
+For `Should we cache tokens?\nI suggest a five-minute cache.\n@alex, please benchmark the cache.`, the response has these span identities
+(abbreviated; generated IDs vary):
+
+| node ID | display ID | label/status |
+| --- | --- | --- |
+| `node-q` | 1 | `question`, `open` |
+| `node-r` | 2 | `recommendation`, null |
+| `node-t` | 3 | `task`, `open`, assignee `@alex` |
+
+The separate `recommendation_for` label has `src_node_id = node-r` and
+`dst_node_id = node-q`. Looking up those node IDs in `spans` yields **#2 → #1**.
+No answer link exists, so #1 remains open. If an actual answer appears later in
+the same input, its span receives **#4** and its `answer` label points to `node-q`:
+the client displays **#4 answers #1**, and #1 is resolved. A standalone
+recommendation emits no fabricated `recommendation_for` link. Explicit alternatives
+use the same node-ID lookup at both ends and display symmetrically, irrespective
+of stored direction. The API remains `POST /parse`; there are no new endpoints.

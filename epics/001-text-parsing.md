@@ -6,7 +6,7 @@ Paste text into a native akar app, submit it through an API, and inspect the ori
 
 Use a Rust workspace with `daftprompt-types` (shared serializable types), `daftprompt-core` (shared library), `daftprompt-api` (HTTP service), and `daftprompt-gui` (akar app). All parsing, prompts, validation, and graph construction belong in the shared library so a future CLI can reuse them. Organize agents into separate modules with separate system prompts; implement only Scribe now.
 
-References: [PRD](../docs/PRD.md) and [data model](../docs/data-model.md). Deferred refinements are tracked in [Epic 002](002-parsing-refinements.md).
+References: [PRD](../docs/PRD.md) and [data model](../docs/data-model.md). Label and identifier additions are planned in [Epic 002](002-recommendations-tasks-and-identifiers.md). Deferred refinements are tracked in [Epic 003](003-parsing-refinements.md).
 
 ## Scope and decisions
 

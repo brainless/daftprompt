@@ -96,6 +96,14 @@ pub enum LabelKind {
     Question,
     /// Binary: the source answers the destination question.
     Answer,
+    /// Unary: a suggested approach or offered option.
+    Recommendation,
+    /// Binary: a recommendation addresses a local question.
+    RecommendationFor,
+    /// Symmetric binary: explicitly offered alternative recommendations.
+    AlternativeTo,
+    /// Unary: an outstanding action, initially open.
+    Task,
     /// Binary: both nodes cannot hold at the same time.
     Conflict,
     /// Binary: the source replaces the destination.
@@ -107,12 +115,22 @@ pub enum LabelKind {
 impl LabelKind {
     /// Whether the kind is a relationship between two nodes.
     pub fn is_binary(self) -> bool {
-        matches!(self, Self::Answer | Self::Conflict | Self::Supersedes)
+        matches!(
+            self,
+            Self::Answer
+                | Self::RecommendationFor
+                | Self::AlternativeTo
+                | Self::Conflict
+                | Self::Supersedes
+        )
     }
 
     /// Whether the kind blocks completion while `open` or `deferred`.
     pub fn is_blocking(self) -> bool {
-        matches!(self, Self::Question | Self::Conflict | Self::Stale)
+        matches!(
+            self,
+            Self::Question | Self::Task | Self::Conflict | Self::Stale
+        )
     }
 }
 
@@ -209,6 +227,8 @@ pub struct ToolCall {
 /// without recomputing coordinates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpanInfo {
+    /// Result-local consecutive source-order number, beginning at 1.
+    pub display_id: u32,
     pub node_id: String,
     pub start_byte: usize,
     pub end_byte: usize,
@@ -228,7 +248,7 @@ pub struct ParseResult {
     pub nodes: Vec<Node>,
     pub node_contexts: Vec<NodeContext>,
     pub labels: Vec<Label>,
-    /// Byte ranges of the span nodes, in no particular order.
+    /// Byte ranges and display IDs of span nodes, in source order.
     pub spans: Vec<SpanInfo>,
     /// Run metadata for the Scribe run that produced this fragment.
     pub run: Run,

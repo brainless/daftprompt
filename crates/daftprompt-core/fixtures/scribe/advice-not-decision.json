@@ -1,0 +1,51 @@
+{
+  "format_version": 1,
+  "id": "advice-not-decision",
+  "category": "chat",
+  "note": "Epic 002 semantic boundary coverage",
+  "text": "Should we cache tokens?\nI suggest a five-minute cache.\n@alex, please benchmark the cache.",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 0,
+      "end": 23,
+      "quote": "Should we cache tokens?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "start": 24,
+      "end": 54,
+      "quote": "I suggest a five-minute cache.",
+      "labels": [
+        {
+          "kind": "recommendation"
+        }
+      ]
+    },
+    {
+      "id": "e3",
+      "start": 55,
+      "end": 89,
+      "quote": "@alex, please benchmark the cache.",
+      "labels": [
+        {
+          "kind": "task",
+          "assignee": "@alex"
+        }
+      ]
+    }
+  ],
+  "answer_links": [],
+  "recommendation_links": [
+    {
+      "from": "e2",
+      "to": "e1"
+    }
+  ],
+  "alternative_links": []
+}

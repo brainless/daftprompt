@@ -13,7 +13,7 @@
 //! - `DAFTPROMPT_EVAL_MODEL` — model id, default `gpt-4o-mini` for `openai`
 //!   and `qwen3.6-35b-fast` for `neuralwatt`.
 //! - `DAFTPROMPT_EVAL_PROMPT_VERSION` — optional guard; must equal the
-//!   compiled prompt version (currently `scribe-v1`).
+//!   compiled prompt version (currently `scribe-v3`).
 //! - `DAFTPROMPT_EVAL_MAX_ATTEMPTS` — total attempts, default 3.
 //! - `DAFTPROMPT_EVAL_TIMEOUT_SECS` — per-attempt timeout, default 60.
 //! - `OPENAI_API_KEY` — read by the provider client, never by this crate.
@@ -192,7 +192,7 @@ async fn run() -> Result<ExitCode, String> {
                     category: fixture.category,
                     attempts,
                     latency_ms,
-                    status: FixtureStatus::Parsed(evaluation),
+                    status: FixtureStatus::Parsed(Box::new(evaluation)),
                 });
             }
             Err(error) => {

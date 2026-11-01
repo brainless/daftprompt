@@ -99,6 +99,10 @@ A run's outputs are the nodes and labels whose `run_id` points to it.
 |--------------|-----------------------|----------|-------------------------------------------|
 | `question`   | unary                 | yes      | src is an open question                   |
 | `answer`     | binary: src → dst     | no       | src answers question dst                  |
+| `recommendation` | unary | no | src is a suggested approach or offered option |
+| `recommendation_for` | binary: src → question | no | recommendation addresses a local question |
+| `alternative_to` | binary: src ↔ dst | no | recommendations explicitly offered as alternatives |
+| `task` | unary | yes | explicit outstanding requested or committed action |
 | `conflict`   | binary: src ↔ dst     | yes      | src and dst cannot both hold              |
 | `supersedes` | binary: src → dst     | no       | src replaces dst (edits, resolutions)     |
 | `stale`      | unary                 | yes      | src was built on superseded or changed content |
@@ -125,6 +129,14 @@ The first parsing experiment fixes these interpretations. They refine the rules 
 - **Column units and exclusive ends.** Graph ranges use 1-based lines and 1-based columns counted in Unicode scalar values (`char`s), with an exclusive end position: a span ending at the end of a five-character line has `end_col = 6`. Lines are counted by `\n`; CRLF text is preserved unchanged, so the `\r` of a CRLF terminator counts as a line character. API results and internal spans use half-open byte ranges `[start, end)` that always fall on `char` boundaries.
 - **Question status is Rust-derived.** The model never proposes a status. A `question` label with at least one validated local `answer` link is `resolved`; otherwise it is `open`. `answer` labels have NULL status.
 - **In-memory records mirror the schema.** A `NodeContext` stores a tagged payload-or-file target, so exactly one target is always set, plus an optional range. A `Run` also carries provider, model, prompt version, and attempt count, which are columns in `run`. A parse result additionally lists each span node's half-open byte range so clients can render source blocks without recomputing coordinates.
+
+## Epic 002 extension
+
+[Epic 002](../epics/002-recommendations-tasks-and-identifiers.md) extends the contract with recommendations, optional local question links, explicit alternative pairs, and outstanding tasks. Unary recommendations and all recommendation relationships have NULL status. Recommendations alone never resolve questions; only validated answer links do. Tasks start `open`, support optional explicit opaque assignee handles under the same rules as questions, and block completion. Completion and status editing are future work.
+
+Every recommendation emits one unary label, independently of its optional `recommendation_for` links. `alternative_to` is symmetric and canonicalized by source order. Only explicitly offered alternatives are linked; a set connects every pair, while complementary plan steps do not imply alternatives. All targets belong to the same submission. Rust rejects self-links, duplicate links (including reversed alternatives), wrong-kind targets, and duplicate unary kinds; one span may carry different justified kinds.
+
+Each extracted span has a `display_id: u32`, numbered consecutively from 1 in source order after validation. Root nodes and unlabelled gaps consume no number. Multiple labels on one span share its number. Numbers are result-local; references across results require run identity. Graph identities and relationship references remain generated strings.
 
 ## Worked example
 

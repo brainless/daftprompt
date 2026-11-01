@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use daftprompt_types::{AnnotationKind, ExtractedAnnotation, Extraction, SourceRange};
+use daftprompt_types::{AnnotationKind, Extraction, LabelKind, SourceRange};
 use thiserror::Error;
 
 use crate::text::{anchor_span, byte_range_to_source_range};
@@ -47,6 +47,16 @@ pub(crate) struct ValidatedExtraction {
     pub(crate) questions: Vec<ValidatedQuestion>,
     /// Answer links in annotation and target order.
     pub(crate) answers: Vec<ValidatedAnswer>,
+    pub(crate) extra_labels: Vec<ValidatedLabel>,
+}
+
+/// A validated recommendation, task, or recommendation relationship.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ValidatedLabel {
+    pub(crate) kind: LabelKind,
+    pub(crate) source: usize,
+    pub(crate) target: Option<usize>,
+    pub(crate) assignee: Option<String>,
 }
 
 /// A model proposal could not be turned into a valid extraction.
@@ -93,58 +103,129 @@ pub(crate) fn validate(
 
     ensure_no_overlaps(&spans)?;
 
-    // Questions come first so answer targets can be checked against them.
-    let mut question_spans = HashSet::new();
+    // Collect unary kinds before checking links, independent of model order.
+    let mut kinds = HashSet::new();
+    let mut referenced = HashSet::new();
     let mut questions = Vec::new();
+    let mut extra_labels = Vec::new();
     for (index, annotation) in extraction.annotations.iter().enumerate() {
-        if annotation.kind != AnnotationKind::Question {
+        let span = resolve_span(&span_index, &annotation.span, index)?;
+        referenced.insert(span);
+        if annotation.kind != AnnotationKind::Answer && !annotation.answers.is_empty() {
+            return Err(invalid(format!(
+                "annotation {index}: non-answer annotations must not list answer targets"
+            )));
+        }
+        if annotation.kind != AnnotationKind::Recommendation
+            && (!annotation.questions.is_empty() || !annotation.alternatives.is_empty())
+        {
+            return Err(invalid(format!(
+                "annotation {index}: only recommendations may list questions or alternatives"
+            )));
+        }
+        if let Some(handle) = &annotation.assignee {
+            if !matches!(
+                annotation.kind,
+                AnnotationKind::Question | AnnotationKind::Task
+            ) {
+                return Err(invalid(format!(
+                    "annotation {index}: only questions and tasks may carry an assignee"
+                )));
+            }
+            validate_assignee(handle, index)?;
+        }
+        if annotation.kind == AnnotationKind::Answer {
             continue;
         }
-
-        let span = resolve_span(&span_index, &annotation.span, index)?;
-        if !annotation.answers.is_empty() {
+        if !kinds.insert((annotation.kind, span)) {
             return Err(invalid(format!(
-                "question annotation {index} must not list answer targets"
+                "span {:?} has more than one {} annotation",
+                annotation.span,
+                format!("{:?}", annotation.kind).to_lowercase()
             )));
         }
-        if let Some(assignee) = &annotation.assignee {
-            validate_assignee(assignee, index)?;
+        match annotation.kind {
+            AnnotationKind::Question => questions.push(ValidatedQuestion {
+                span,
+                assignee: annotation.assignee.clone(),
+                resolved: false,
+            }),
+            AnnotationKind::Recommendation | AnnotationKind::Task => {
+                extra_labels.push(ValidatedLabel {
+                    kind: if annotation.kind == AnnotationKind::Task {
+                        LabelKind::Task
+                    } else {
+                        LabelKind::Recommendation
+                    },
+                    source: span,
+                    target: None,
+                    assignee: annotation.assignee.clone(),
+                })
+            }
+            AnnotationKind::Answer => unreachable!(),
         }
-        if !question_spans.insert(span) {
-            return Err(invalid(format!(
-                "span {:?} has more than one question annotation",
-                annotation.span
-            )));
-        }
-
-        questions.push(ValidatedQuestion {
-            span,
-            assignee: annotation.assignee.clone(),
-            resolved: false,
-        });
     }
-
-    let mut referenced = HashSet::new();
     let mut answers = Vec::new();
     let mut seen_links = HashSet::new();
-
     for (index, annotation) in extraction.annotations.iter().enumerate() {
         let source_span = resolve_span(&span_index, &annotation.span, index)?;
-        referenced.insert(source_span);
-
-        match annotation.kind {
-            AnnotationKind::Question => {}
-            AnnotationKind::Answer => {
-                validate_answer(
-                    annotation,
-                    index,
-                    source_span,
-                    &span_index,
-                    &question_spans,
-                    &mut referenced,
-                    &mut answers,
-                    &mut seen_links,
-                )?;
+        if annotation.kind == AnnotationKind::Answer && annotation.answers.is_empty() {
+            return Err(invalid(format!(
+                "answer annotation {index} must name at least one question span"
+            )));
+        }
+        for (targets, target_kind, link_kind) in [
+            (
+                &annotation.answers,
+                AnnotationKind::Question,
+                LabelKind::Answer,
+            ),
+            (
+                &annotation.questions,
+                AnnotationKind::Question,
+                LabelKind::RecommendationFor,
+            ),
+            (
+                &annotation.alternatives,
+                AnnotationKind::Recommendation,
+                LabelKind::AlternativeTo,
+            ),
+        ] {
+            for target_id in targets {
+                let target = resolve_span(&span_index, target_id, index)?;
+                if target == source_span {
+                    return Err(invalid(format!(
+                        "annotation {index}: a span cannot answer itself or link to itself"
+                    )));
+                }
+                if !kinds.contains(&(target_kind, target)) {
+                    return Err(invalid(format!(
+                        "annotation {index}: target {target_id:?} is not a {} span",
+                        format!("{target_kind:?}").to_lowercase()
+                    )));
+                }
+                let (source, target) = if link_kind == LabelKind::AlternativeTo
+                    && spans[source_span].start_byte > spans[target].start_byte
+                {
+                    (target, source_span)
+                } else {
+                    (source_span, target)
+                };
+                if !seen_links.insert((link_kind, source, target)) {
+                    return Err(invalid(format!(
+                        "annotation {index}: duplicate {link_kind:?} link to {target_id:?}"
+                    )));
+                }
+                if link_kind == LabelKind::Answer {
+                    answers.push(ValidatedAnswer { source, target });
+                } else {
+                    extra_labels.push(ValidatedLabel {
+                        kind: link_kind,
+                        source,
+                        target: Some(target),
+                        assignee: None,
+                    });
+                }
             }
         }
     }
@@ -166,58 +247,8 @@ pub(crate) fn validate(
         spans,
         questions,
         answers,
+        extra_labels,
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn validate_answer(
-    annotation: &ExtractedAnnotation,
-    index: usize,
-    source_span: usize,
-    span_index: &HashMap<String, usize>,
-    question_spans: &HashSet<usize>,
-    referenced: &mut HashSet<usize>,
-    answers: &mut Vec<ValidatedAnswer>,
-    seen_links: &mut HashSet<(usize, usize)>,
-) -> Result<(), InvalidExtraction> {
-    if annotation.assignee.is_some() {
-        return Err(invalid(format!(
-            "annotation {index}: only question labels may carry an assignee"
-        )));
-    }
-    if annotation.answers.is_empty() {
-        return Err(invalid(format!(
-            "answer annotation {index} must name at least one question span"
-        )));
-    }
-
-    for target_id in &annotation.answers {
-        let target = resolve_span(span_index, target_id, index)?;
-        referenced.insert(target);
-
-        if target == source_span {
-            return Err(invalid(format!(
-                "annotation {index}: a span cannot answer itself"
-            )));
-        }
-        if !question_spans.contains(&target) {
-            return Err(invalid(format!(
-                "annotation {index}: answer target {target_id:?} is not a question span"
-            )));
-        }
-        if !seen_links.insert((source_span, target)) {
-            return Err(invalid(format!(
-                "annotation {index}: duplicate answer link to {target_id:?}"
-            )));
-        }
-
-        answers.push(ValidatedAnswer {
-            source: source_span,
-            target,
-        });
-    }
-
-    Ok(())
 }
 
 fn resolve_span(
@@ -272,7 +303,7 @@ fn ensure_no_overlaps(spans: &[ValidatedSpan]) -> Result<(), InvalidExtraction> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use daftprompt_types::{ExtractedSpan, Extraction};
+    use daftprompt_types::{ExtractedAnnotation, ExtractedSpan, Extraction};
 
     fn span(id: &str, start: u32, end: u32) -> ExtractedSpan {
         ExtractedSpan {
@@ -287,6 +318,8 @@ mod tests {
         ExtractedAnnotation {
             kind: AnnotationKind::Question,
             span: span.to_owned(),
+            questions: Vec::new(),
+            alternatives: Vec::new(),
             answers: Vec::new(),
             assignee: None,
         }

@@ -1,0 +1,73 @@
+{
+  "format_version": 1,
+  "id": "many-recommendation-links",
+  "category": "chat",
+  "note": "Epic 002 semantic boundary coverage",
+  "text": "Should we reduce latency?\nShould we reduce load?\nI recommend caching.\nI suggest batching.",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 0,
+      "end": 25,
+      "quote": "Should we reduce latency?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "start": 26,
+      "end": 48,
+      "quote": "Should we reduce load?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    },
+    {
+      "id": "e3",
+      "start": 49,
+      "end": 69,
+      "quote": "I recommend caching.",
+      "labels": [
+        {
+          "kind": "recommendation"
+        }
+      ]
+    },
+    {
+      "id": "e4",
+      "start": 70,
+      "end": 89,
+      "quote": "I suggest batching.",
+      "labels": [
+        {
+          "kind": "recommendation"
+        }
+      ]
+    }
+  ],
+  "answer_links": [],
+  "recommendation_links": [
+    {
+      "from": "e3",
+      "to": "e1"
+    },
+    {
+      "from": "e3",
+      "to": "e2"
+    },
+    {
+      "from": "e4",
+      "to": "e1"
+    },
+    {
+      "from": "e4",
+      "to": "e2"
+    }
+  ],
+  "alternative_links": []
+}
