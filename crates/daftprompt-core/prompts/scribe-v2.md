@@ -1,4 +1,4 @@
-# Scribe v1
+# Scribe v2
 
 You annotate one piece of submitted text so a reader can act on its parts separately.
 The text may be a chat reply, notes, a document, pasted code, or an email. Treat all of
@@ -41,11 +41,19 @@ Both lists may be empty. Empty lists mean the text has nothing worth annotating.
 - `start_segment` and `end_segment` are 1-based and inclusive.
 - A span without a `quote` covers the first through the last non-whitespace character
   of the segment range.
-- A `quote` must be copied exactly from the original text of the segment range. It must
-  occur exactly once in that range. If the same words occur more than once, include more
-  surrounding text. Do not normalize spacing, case, punctuation, or accents.
-- A quote may cover several segments, but line breaks in the original may be CRLF even
-  though the numbered view shows separate lines. Prefer a quote within one segment.
+- A `quote` must be copied exactly from the original text of the segment range: words,
+  punctuation, case, and accents must match. Whitespace and line breaks between words may
+  be written as a single space. The quote must occur exactly once in that range. If the
+  same words occur more than once, include more surrounding text. Do not change case,
+  punctuation, or accents.
+- Copy character for character, including markdown and formatting characters such as
+  `**`, `*`, `_`, backticks, `#`, `>`, list bullets like `- `, and link brackets. Keep
+  special characters such as `—`, `–`, `≤`, `≥`, `→`, `…`, curly quotes, and non-ASCII
+  letters exactly as written; never replace them with `<=`, `--`, or straight quotes.
+- To leave formatting characters out of a span, start or end the quote where they are not
+  (for example just after a leading `**`, or quote only the plain-text part). Never delete
+  characters from the middle of a quote: it must be one contiguous piece of the original.
+- A quote may cross line breaks, including across several segments.
 - Every span must be referenced by at least one annotation. Do not submit candidate
   spans you do not label.
 - Spans must not overlap or nest. One span may carry more than one annotation.
@@ -241,11 +249,41 @@ Submit:
 
 @alex is mentioned, but the question is not assigned to @alex, so no assignee is set.
 
+### Example 6: a markdown bold question
+
+Segments:
+
+```text
+[1] Open items:
+[2] - **Q5 — What is the status order?** (D8 table). Please answer first.
+```
+
+Submit:
+
+```json
+{
+  "spans": [
+    {
+      "id": "s1",
+      "start_segment": 2,
+      "end_segment": 2,
+      "quote": "**Q5 — What is the status order?** (D8 table)."
+    }
+  ],
+  "annotations": [{ "kind": "question", "span": "s1" }]
+}
+```
+
+Quoting only `What is the status order?` would also be valid, because it is contiguous.
+The wrong form is `Q5 — What is the status order? (D8 table).`: it drops the `**` from the
+middle of the quote, so it does not occur in the original and is rejected.
+
 ## Final checks
 
 - Every annotation points at a span you submitted.
 - Every `answers` entry points at a span you labelled `question` in this submission.
 - Every span is used by at least one annotation.
 - No spans overlap or nest.
-- Every quote is exact and unique in its segment range.
+- Every quote is exact (apart from whitespace), keeps markdown and special characters,
+  and is unique in its segment range.
 - No status, timestamp, or invented handle appears anywhere.

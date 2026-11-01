@@ -24,7 +24,7 @@ Small models are unreliable at character or line/column offsets, so the model ne
 - Rust splits the input into **segments**: lines split on `\n`, numbered from 1, including empty lines. A trailing `\r` belongs to the line terminator, not the segment text. The prompt presents each segment as `[n] text`.
 - The model refers to a span by an inclusive segment range (`start_segment`, `end_segment`) and an optional verbatim `quote`.
 - Without a quote, the span covers the segment range from the first to the last non-whitespace character.
-- With a quote, Rust searches for it in the original text of the segment range, including the original line terminators between segments. The match must be exact (no normalization) and must occur exactly once. Zero matches or more than one match makes the output invalid. This resolves repeated text without ambiguous anchoring.
+- With a quote, Rust searches for it in the original text of the segment range, including the original line terminators between segments. The match is exact (no case folding, no Unicode normalization) except that whitespace runs, including line terminators, match one or more whitespace characters, so a quote may write a line wrap or CRLF as a single space; a gap never matches zero characters. The span is always the original bytes, and the match must occur exactly once. Zero matches or more than one match makes the output invalid. This resolves repeated text without ambiguous anchoring.
 - Extraction shape (indicative):
 
   ```text

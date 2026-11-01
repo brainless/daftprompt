@@ -3,13 +3,13 @@
 use crate::text::segments;
 
 /// Identifier of the prompt revision recorded on every run.
-pub const PROMPT_VERSION: &str = "scribe-v1";
+pub const PROMPT_VERSION: &str = "scribe-v2";
 
 /// The complete system instructions for Scribe.
 ///
 /// The file is versioned in the repository and included at compile time, so a
 /// build cannot accidentally run with a stale prompt from disk.
-pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/scribe-v1.md");
+pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/scribe-v2.md");
 
 /// Render the text as the numbered `[n] text` segments the model refers to.
 ///
@@ -42,7 +42,7 @@ mod tests {
 
     #[test]
     fn prompt_version_matches_the_file_name() {
-        assert_eq!(PROMPT_VERSION, "scribe-v1");
-        assert!(SYSTEM_PROMPT.contains("Scribe v1"));
+        assert_eq!(PROMPT_VERSION, "scribe-v2");
+        assert!(SYSTEM_PROMPT.contains("Scribe v2"));
     }
 }

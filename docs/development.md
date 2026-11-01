@@ -86,8 +86,8 @@ Scribe parser over HTTP.
 ## Scribe
 
 Scribe lives in `daftprompt-core::scribe`. Its system prompt is versioned in
-`crates/daftprompt-core/prompts/scribe-v1.md`, included at compile time, and recorded on
-every run as `scribe-v1`.
+`crates/daftprompt-core/prompts/scribe-v2.md`, included at compile time, and recorded on
+every run as `scribe-v2`.
 
 - `Scribe::parse(ParseRequest)` is the transport-independent entry point. The API can
   also hold an `Arc<dyn scribe::Parser>`.

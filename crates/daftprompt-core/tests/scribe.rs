@@ -215,7 +215,7 @@ async fn empty_extraction_builds_payload_root_and_run_metadata() {
     assert_eq!(result.run.agent, "scribe");
     assert_eq!(result.run.provider.as_deref(), Some("test-provider"));
     assert_eq!(result.run.model.as_deref(), Some("stub-model"));
-    assert_eq!(result.run.prompt_version.as_deref(), Some("scribe-v1"));
+    assert_eq!(result.run.prompt_version.as_deref(), Some("scribe-v2"));
     assert_eq!(result.run.status, RunStatus::Done);
     assert_eq!(result.run.attempts, 1);
     assert!(result.run.ended_at.is_some());
