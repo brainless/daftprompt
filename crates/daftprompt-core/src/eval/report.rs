@@ -124,6 +124,8 @@ impl FixtureSummary {
 pub struct Report {
     pub metadata: RunMetadata,
     pub summary: FixtureSummary,
+    /// Original fixture formats and expected detection outcomes.
+    pub fixtures: Vec<Fixture>,
     pub runs: Vec<FixtureRun>,
     /// `Some(reason)` when this report records that no live run happened.
     pub not_run: Option<String>,
@@ -135,6 +137,7 @@ impl Report {
         Self {
             metadata,
             summary: FixtureSummary::from_fixtures(fixtures),
+            fixtures: fixtures.to_vec(),
             runs: Vec::new(),
             not_run: None,
         }
@@ -189,9 +192,14 @@ impl Report {
         let _ = writeln!(output, "```sh");
         let _ = writeln!(
             output,
-            "DAFTPROMPT_EVAL_LIVE=1 DAFTPROMPT_EVAL_PROVIDER={} DAFTPROMPT_EVAL_MODEL={} \\",
+            "DAFTPROMPT_EVAL_LIVE=1 DAFTPROMPT_EVAL_PROVIDER={} DAFTPROMPT_EVAL_MODEL={} DAFTPROMPT_EVAL_PROMPT_VERSION={} \\",
             self.metadata.provider.as_deref().unwrap_or("openai"),
-            self.metadata.model.as_deref().unwrap_or("gpt-4o-mini")
+            self.metadata.model.as_deref().unwrap_or("gpt-4o-mini"),
+            if self.metadata.prompt_version == "scribe-v3" {
+                "scribe-v3"
+            } else {
+                "scribe-v4"
+            }
         );
         let _ = writeln!(
             output,
@@ -227,74 +235,8 @@ impl Report {
         let _ = writeln!(output);
 
         let _ = writeln!(output, "## Aggregate");
-        let _ = writeln!(output);
-        let _ = writeln!(
-            output,
-            "| metric | expected | predicted | matched | precision | recall |"
-        );
-        let _ = writeln!(output, "| --- | ---: | ---: | ---: | ---: | ---: |");
-        for (name, counts) in [
-            ("recommendation, exact", aggregate.recommendation_exact),
-            ("recommendation, lenient", aggregate.recommendation_lenient),
-            ("task, exact", aggregate.task_exact),
-            ("task, lenient", aggregate.task_lenient),
-            (
-                "recommendation link, exact",
-                aggregate.recommendation_link_exact,
-            ),
-            (
-                "recommendation link, lenient",
-                aggregate.recommendation_link_lenient,
-            ),
-            ("alternative, exact", aggregate.alternative_exact),
-            ("alternative, lenient", aggregate.alternative_lenient),
-            ("spans, exact", aggregate.span_exact),
-            ("spans, lenient", aggregate.span_lenient),
-            ("labels, exact", aggregate.label_exact),
-            ("labels, lenient", aggregate.label_lenient),
-            ("answer links, exact", aggregate.answer_exact),
-            ("answer links, lenient", aggregate.answer_lenient),
-            ("assignees, exact", aggregate.assignee_exact),
-            ("assignees, lenient", aggregate.assignee_lenient),
-        ] {
-            let _ = writeln!(
-                output,
-                "| {name} | {} | {} | {} | {} | {} |",
-                counts.expected,
-                counts.predicted,
-                counts.matched,
-                percent(counts.precision()),
-                percent(counts.recall())
-            );
-        }
-        let _ = writeln!(output);
-        let _ = writeln!(
-            output,
-            "- Invalid output: {} of {} fixture(s) ({})",
-            aggregate.invalid_output,
-            total,
-            percent(ratio(aggregate.invalid_output, total))
-        );
-        let _ = writeln!(
-            output,
-            "- Other parse failures: {} of {} fixture(s)",
-            aggregate.failed - aggregate.invalid_output,
-            total
-        );
-        let _ = writeln!(
-            output,
-            "- Attempts per parse: {}",
-            attempts_summary(&aggregate.attempts, total)
-        );
-        let _ = writeln!(
-            output,
-            "- Latency (ms): mean {}, median {}, p95 {}, max {}",
-            milliseconds(mean(&aggregate.latencies)),
-            milliseconds(percentile(&aggregate.latencies, 50.0)),
-            milliseconds(percentile(&aggregate.latencies, 95.0)),
-            milliseconds(aggregate.latencies.iter().copied().reduce(f64::max))
-        );
-        let _ = writeln!(output);
+        Self::render_aggregate(output, &aggregate, total);
+        self.render_formats(output);
 
         let _ = writeln!(output, "## Per fixture");
         let _ = writeln!(output);
@@ -414,9 +356,14 @@ impl Report {
         let _ = writeln!(output, "```sh");
         let _ = writeln!(
             output,
-            "DAFTPROMPT_EVAL_LIVE=1 DAFTPROMPT_EVAL_PROVIDER={} DAFTPROMPT_EVAL_MODEL={} \\",
+            "DAFTPROMPT_EVAL_LIVE=1 DAFTPROMPT_EVAL_PROVIDER={} DAFTPROMPT_EVAL_MODEL={} DAFTPROMPT_EVAL_PROMPT_VERSION={} \\",
             self.metadata.provider.as_deref().unwrap_or("openai"),
-            self.metadata.model.as_deref().unwrap_or("gpt-4o-mini")
+            self.metadata.model.as_deref().unwrap_or("gpt-4o-mini"),
+            if self.metadata.prompt_version == "scribe-v3" {
+                "scribe-v3"
+            } else {
+                "scribe-v4"
+            }
         );
         let _ = writeln!(
             output,
@@ -512,6 +459,136 @@ impl Report {
             output,
             "- Matches are one-to-one and greedy, preferring exact pairs and then higher overlap."
         );
+    }
+
+    fn render_aggregate(output: &mut String, aggregate: &Aggregate, total: usize) {
+        let _ = writeln!(output);
+        let _ = writeln!(
+            output,
+            "| metric | expected | predicted | matched | precision | recall |"
+        );
+        let _ = writeln!(output, "| --- | ---: | ---: | ---: | ---: | ---: |");
+        for (name, counts) in [
+            ("recommendation, exact", aggregate.recommendation_exact),
+            ("recommendation, lenient", aggregate.recommendation_lenient),
+            ("task, exact", aggregate.task_exact),
+            ("task, lenient", aggregate.task_lenient),
+            (
+                "recommendation link, exact",
+                aggregate.recommendation_link_exact,
+            ),
+            (
+                "recommendation link, lenient",
+                aggregate.recommendation_link_lenient,
+            ),
+            ("alternative, exact", aggregate.alternative_exact),
+            ("alternative, lenient", aggregate.alternative_lenient),
+            ("spans, exact", aggregate.span_exact),
+            ("spans, lenient", aggregate.span_lenient),
+            ("labels, exact", aggregate.label_exact),
+            ("labels, lenient", aggregate.label_lenient),
+            ("answer links, exact", aggregate.answer_exact),
+            ("answer links, lenient", aggregate.answer_lenient),
+            ("assignees, exact", aggregate.assignee_exact),
+            ("assignees, lenient", aggregate.assignee_lenient),
+        ] {
+            let _ = writeln!(
+                output,
+                "| {name} | {} | {} | {} | {} | {} |",
+                counts.expected,
+                counts.predicted,
+                counts.matched,
+                percent(counts.precision()),
+                percent(counts.recall())
+            );
+        }
+        let _ = writeln!(output);
+        let _ = writeln!(
+            output,
+            "- Invalid output: {} of {} fixture(s) ({})",
+            aggregate.invalid_output,
+            total,
+            percent(ratio(aggregate.invalid_output, total))
+        );
+        let _ = writeln!(
+            output,
+            "- Other parse failures: {} of {} fixture(s)",
+            aggregate.failed - aggregate.invalid_output,
+            total
+        );
+        let _ = writeln!(
+            output,
+            "- Attempts per parse: {}",
+            attempts_summary(&aggregate.attempts, total)
+        );
+        let _ = writeln!(
+            output,
+            "- Latency (ms): mean {}, median {}, p95 {}, max {}",
+            milliseconds(mean(&aggregate.latencies)),
+            milliseconds(percentile(&aggregate.latencies, 50.0)),
+            milliseconds(percentile(&aggregate.latencies, 95.0)),
+            milliseconds(aggregate.latencies.iter().copied().reduce(f64::max))
+        );
+        let _ = writeln!(output);
+    }
+
+    fn render_formats(&self, output: &mut String) {
+        let _ = writeln!(output, "## Per content type\n");
+        for content_type in [
+            daftprompt_types::ContentType::Plain,
+            daftprompt_types::ContentType::Markdown,
+        ] {
+            let fixtures: Vec<_> = self
+                .fixtures
+                .iter()
+                .filter(|fixture| fixture.content_type == content_type)
+                .cloned()
+                .collect();
+            if fixtures.is_empty() {
+                continue;
+            }
+            let runs: Vec<_> = self
+                .runs
+                .iter()
+                .filter(|run| fixtures.iter().any(|fixture| fixture.id == run.fixture_id))
+                .cloned()
+                .collect();
+            let correct = fixtures
+                .iter()
+                .filter(|fixture| {
+                    crate::text::structure::detect_content_type(&fixture.text)
+                        == fixture.expected_detection
+                })
+                .count();
+            let name = match content_type {
+                daftprompt_types::ContentType::Plain => "plain",
+                daftprompt_types::ContentType::Markdown => "markdown",
+            };
+            let _ = writeln!(
+                output,
+                "### {name}\n\nDetection accuracy: {correct}/{} ({})\n",
+                fixtures.len(),
+                percent(ratio(correct, fixtures.len()))
+            );
+            for fixture in &fixtures {
+                let detected = crate::text::structure::detect_content_type(&fixture.text);
+                if detected != fixture.expected_detection {
+                    let _ = writeln!(
+                        output,
+                        "- Detection mismatch `{}`: expected {:?}, detected {:?}",
+                        fixture.id, fixture.expected_detection, detected
+                    );
+                }
+            }
+            let group = Self {
+                metadata: self.metadata.clone(),
+                summary: FixtureSummary::from_fixtures(&fixtures),
+                fixtures,
+                runs,
+                not_run: None,
+            };
+            Self::render_aggregate(output, &group.aggregate(), group.runs.len());
+        }
     }
 
     fn aggregate(&self) -> Aggregate {
@@ -674,6 +751,8 @@ mod tests {
 
     fn fixture() -> Fixture {
         Fixture {
+            content_type: daftprompt_types::ContentType::Plain,
+            expected_detection: daftprompt_types::ContentType::Plain,
             format_version: 1,
             id: "one".to_owned(),
             category: FixtureCategory::Chat,
@@ -706,6 +785,35 @@ mod tests {
             fixtures_path: PathBuf::from("fixtures/scribe"),
             generated_at: "2026-10-31T12:00:00Z".to_owned(),
         }
+    }
+
+    #[test]
+    fn format_groups_keep_detection_separate_from_extraction_failures() {
+        let mut plain = fixture();
+        plain.id = "plain".into();
+        let mut markdown = fixture();
+        markdown.id = "markdown".into();
+        markdown.content_type = daftprompt_types::ContentType::Markdown;
+        markdown.expected_detection = daftprompt_types::ContentType::Markdown;
+        markdown.text = "# Plan".into();
+        let mut report = Report::new(metadata(), &[plain, markdown]);
+        report.push(FixtureRun {
+            fixture_id: "markdown".into(),
+            category: FixtureCategory::Document,
+            attempts: Some(3),
+            latency_ms: 42.0,
+            status: FixtureStatus::Failed {
+                kind: "invalid_output".into(),
+                detail: "invalid span".into(),
+                attempts: Some(3),
+            },
+        });
+        let output = report.render();
+        assert!(output.contains("### plain"));
+        let markdown = output.split("### markdown").nth(1).unwrap();
+        assert!(markdown.contains("Detection accuracy: 1/1 (100.0%)"));
+        assert!(markdown.contains("Invalid output: 1 of 1 fixture(s)"));
+        assert!(markdown.contains("Latency (ms): mean 42.0"));
     }
 
     #[test]

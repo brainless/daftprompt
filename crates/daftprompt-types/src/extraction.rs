@@ -1,8 +1,8 @@
 //! The model-facing extraction contract.
 //!
 //! This is the schema handed to Rig's schema-defined `submit` output tool.
-//! The model proposes spans by segment reference plus an optional verbatim
-//! quote, and annotations by referencing span IDs. It never produces byte
+//! The model proposes spans by block ID or segment reference plus an optional
+//! verbatim quote, and annotations by referencing span IDs. It never produces byte
 //! offsets, IDs of graph records, statuses, or timestamps.
 //!
 //! `schemars` derives the tool schema; `serde` deserializes the submitted
@@ -27,21 +27,40 @@ pub struct Extraction {
 
 /// A source span proposed by the model.
 ///
-/// `start_segment` and `end_segment` are 1-based inclusive segment numbers as
-/// presented in the prompt. IDs are local to this extraction; Rust maps them
-/// to generated node IDs.
+/// Select either a Rust-built block or 1-based inclusive segment numbers with
+/// an optional quote. Mixed reference forms are rejected during deserialization.
+/// IDs are local to this extraction; Rust maps them to generated node IDs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ExtractedSpan {
-    /// Local identifier referenced by annotations, for example `s1`.
-    pub id: String,
-    /// First segment of the span, 1-based and inclusive.
-    pub start_segment: u32,
-    /// Last segment of the span, 1-based and inclusive.
-    pub end_segment: u32,
-    /// Optional verbatim excerpt from the segment range. When present it must
-    /// match the original text exactly and occur exactly once.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quote: Option<String>,
+#[serde(untagged, deny_unknown_fields)]
+pub enum ExtractedSpan {
+    /// Select one complete Rust-built block. No quote or segment range is allowed.
+    Block {
+        /// Extraction-local identifier referenced by annotations.
+        id: String,
+        /// Local block identifier, for example `b8`.
+        block: String,
+    },
+    /// Select an inclusive segment range, optionally narrowed by a quote.
+    Segments {
+        /// Extraction-local identifier referenced by annotations.
+        id: String,
+        /// First segment, 1-based and inclusive.
+        start_segment: u32,
+        /// Last segment, 1-based and inclusive.
+        end_segment: u32,
+        /// Optional verbatim excerpt occurring exactly once in the range.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quote: Option<String>,
+    },
+}
+
+impl ExtractedSpan {
+    /// The extraction-local identifier shared by both reference forms.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Block { id, .. } | Self::Segments { id, .. } => id,
+        }
+    }
 }
 
 /// A label attached to one span.

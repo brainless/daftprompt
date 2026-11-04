@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use daftprompt_types::{AnnotationKind, Extraction, LabelKind, SourceRange};
 use thiserror::Error;
 
-use crate::text::{anchor_span, byte_range_to_source_range};
+use crate::text::byte_range_to_source_range;
 
 /// A span that anchored to a half-open byte range and graph coordinates.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,29 +72,30 @@ fn invalid(detail: impl Into<String>) -> InvalidExtraction {
 pub(crate) fn validate(
     source: &str,
     extraction: &Extraction,
+    tree: &crate::text::structure::Structure,
 ) -> Result<ValidatedExtraction, InvalidExtraction> {
     let mut span_index = HashMap::new();
     let mut spans = Vec::with_capacity(extraction.spans.len());
 
     for span in &extraction.spans {
-        if span.id.trim().is_empty() {
+        if span.id().trim().is_empty() {
             return Err(invalid("every span needs a non-empty id"));
         }
-        if span_index.contains_key(&span.id) {
+        if span_index.contains_key(span.id()) {
             return Err(invalid(format!(
                 "span id {:?} is used more than once",
-                span.id
+                span.id()
             )));
         }
 
-        let anchored = anchor_span(source, span)
-            .map_err(|error| invalid(format!("span {:?}: {error}", span.id)))?;
+        let anchored = crate::text::anchor_span_in_structure(source, span, tree)
+            .map_err(|error| invalid(format!("span {:?}: {error}", span.id())))?;
         let range = byte_range_to_source_range(source, anchored.start_byte, anchored.end_byte)
-            .map_err(|error| invalid(format!("span {:?}: {error}", span.id)))?;
+            .map_err(|error| invalid(format!("span {:?}: {error}", span.id())))?;
 
-        span_index.insert(span.id.clone(), spans.len());
+        span_index.insert(span.id().to_owned(), spans.len());
         spans.push(ValidatedSpan {
-            local_id: span.id.clone(),
+            local_id: span.id().to_owned(),
             start_byte: anchored.start_byte,
             end_byte: anchored.end_byte,
             range,
@@ -306,7 +307,7 @@ mod tests {
     use daftprompt_types::{ExtractedAnnotation, ExtractedSpan, Extraction};
 
     fn span(id: &str, start: u32, end: u32) -> ExtractedSpan {
-        ExtractedSpan {
+        ExtractedSpan::Segments {
             id: id.to_owned(),
             start_segment: start,
             end_segment: end,
@@ -329,7 +330,11 @@ mod tests {
         source: &str,
         extraction: &Extraction,
     ) -> Result<ValidatedExtraction, InvalidExtraction> {
-        validate(source, extraction)
+        validate(
+            source,
+            extraction,
+            &crate::text::structure::structure(source, daftprompt_types::ContentType::Plain),
+        )
     }
 
     #[test]

@@ -986,6 +986,8 @@ mod tests {
 
     fn fixture(text: &str, spans: Vec<ExpectedSpan>, links: Vec<ExpectedAnswerLink>) -> Fixture {
         Fixture {
+            content_type: daftprompt_types::ContentType::Plain,
+            expected_detection: daftprompt_types::ContentType::Plain,
             format_version: FIXTURE_FORMAT_VERSION,
             id: "test".to_owned(),
             category: FixtureCategory::Chat,

@@ -67,6 +67,8 @@ CREATE TABLE run (
   agent          TEXT NOT NULL,              -- which agent / mode
   provider       TEXT,                       -- provider id, e.g. openai
   model          TEXT,                       -- model id, e.g. gpt-4o-mini
+  content_type   TEXT,                       -- parsing format: plain | markdown; NULL for other agents
+  content_type_source TEXT,                  -- declared | detected; NULL for other agents
   prompt_version TEXT,                       -- prompt revision, e.g. scribe-v1
   started_at     TEXT NOT NULL,
   ended_at       TEXT,
@@ -192,3 +194,25 @@ In Epic 004 these records are in memory and stateless; nothing is persisted. Cli
 | 9 | `middleware.ts` changes | N7's file ctx hash ≠ h1 → `stale(N7)` open |
 
 At step 9 the tree is not done: one open `conflict` and one open `stale`.
+
+## Epic 005 extension: structure-aware parsing
+
+Content type describes how a Scribe run interpreted text, independently of source
+kind (chat, file, clipboard, email). It belongs to the run, never to the immutable,
+content-addressed payload: the same bytes can be parsed as plain text or Markdown
+in different runs without changing their payload hash. The parse result exposes
+`content_type` (`plain` or `markdown`) and `content_type_source` (`declared` or
+`detected`) as run metadata. Other agents need not have a parsing content type.
+
+The shared `ParseRequest` accepts optional `content_type`; unknown formats are
+rejected during deserialization. An extracted span selects exactly one local
+`block` ID or an inclusive `start_segment`/`end_segment` range with an optional
+`quote`. Block references cannot include quotes or segment ranges. Rust owns
+block ranges and resolves references before graph construction; graph records,
+text preservation, and disjoint-span guarantees remain unchanged.
+
+The shared contracts, deterministic detection, structurers and Scribe v4 block
+resolution are implemented. Scribe uses the shared core prompt plus exactly one
+format section, recording `scribe-v4+plain-v1` or `scribe-v4+markdown-v1`. The GUI
+displays the returned format and its source; fixture evaluation reports detection
+and extraction quality separately per format.

@@ -24,14 +24,17 @@ fn extraction_deserializes_the_documented_shape() {
     assert_eq!(extraction.spans.len(), 2);
     assert_eq!(
         extraction.spans[0],
-        ExtractedSpan {
+        ExtractedSpan::Segments {
             id: "s1".to_owned(),
             start_segment: 3,
             end_segment: 3,
             quote: Some("Should we cache tokens?".to_owned()),
         }
     );
-    assert_eq!(extraction.spans[1].quote, None);
+    assert!(matches!(
+        extraction.spans[1],
+        ExtractedSpan::Segments { quote: None, .. }
+    ));
     assert_eq!(extraction.annotations[0].kind, AnnotationKind::Question);
     assert_eq!(extraction.annotations[0].answers, Vec::<String>::new());
     assert_eq!(
@@ -56,15 +59,18 @@ fn extraction_generates_a_tool_schema() {
     assert!(properties.contains_key("annotations"));
 
     let span_schema = serde_json::to_value(schemars::schema_for!(ExtractedSpan)).expect("schema");
-    let required = span_schema["required"].as_array().expect("required list");
-    for field in ["id", "start_segment", "end_segment"] {
-        assert!(
-            required.iter().any(|item| item == field),
-            "{field} must be required"
-        );
+    let variants = span_schema["anyOf"]
+        .as_array()
+        .expect("reference alternatives");
+    assert_eq!(variants.len(), 2);
+    assert_eq!(variants[0]["required"], serde_json::json!(["id", "block"]));
+    assert_eq!(
+        variants[1]["required"],
+        serde_json::json!(["id", "start_segment", "end_segment"])
+    );
+    for variant in variants {
+        assert_eq!(variant["additionalProperties"], false);
     }
-    // The quote is optional, so the model can omit it.
-    assert!(!required.iter().any(|item| item == "quote"));
 }
 
 #[test]
@@ -119,6 +125,8 @@ fn root_author_falls_back_to_unknown() {
 #[test]
 fn graph_records_round_trip_as_json() {
     let result = ParseResult {
+        content_type: daftprompt_types::ContentType::Plain,
+        content_type_source: daftprompt_types::ContentTypeSource::Detected,
         payload: Payload {
             hash: "abc".to_owned(),
             content: "hello".to_owned(),
@@ -467,4 +475,50 @@ fn clarify_result_round_trips_as_json() {
         serde_json::to_value(Grounding::TextOnly).expect("serialize"),
         "text_only"
     );
+}
+
+#[test]
+fn content_type_contracts() {
+    use daftprompt_types::{ContentType, ContentTypeSource};
+    let request: ParseRequest =
+        serde_json::from_value(serde_json::json!({"text":"# Plan", "content_type":"markdown"}))
+            .unwrap();
+    assert_eq!(request.content_type, Some(ContentType::Markdown));
+    assert_eq!(ParseRequest::new("text").content_type, None);
+    assert!(
+        serde_json::from_value::<ParseRequest>(
+            serde_json::json!({"text":"text", "content_type":"html"})
+        )
+        .is_err()
+    );
+    assert_eq!(serde_json::to_value(ContentType::Plain).unwrap(), "plain");
+    assert_eq!(
+        serde_json::to_value(ContentTypeSource::Declared).unwrap(),
+        "declared"
+    );
+    assert_eq!(
+        serde_json::to_value(ContentTypeSource::Detected).unwrap(),
+        "detected"
+    );
+}
+
+#[test]
+fn block_span_contract_rejects_mixed_or_incomplete_references() {
+    let block = serde_json::json!({"id":"s1", "block":"b8"});
+    let span: ExtractedSpan = serde_json::from_value(block.clone()).unwrap();
+    assert_eq!(span.id(), "s1");
+    assert_eq!(serde_json::to_value(span).unwrap(), block);
+    for invalid in [
+        serde_json::json!({"id":"s1"}),
+        serde_json::json!({"id":"s1", "start_segment":1}),
+        serde_json::json!({"id":"s1", "end_segment":1}),
+        serde_json::json!({"id":"s1", "block":"b1", "quote":"text"}),
+        serde_json::json!({"id":"s1", "block":"b1", "quote":null}),
+        serde_json::json!({"id":"s1", "block":"b1", "start_segment":1, "end_segment":1}),
+    ] {
+        assert!(
+            serde_json::from_value::<ExtractedSpan>(invalid.clone()).is_err(),
+            "{invalid}"
+        );
+    }
 }

@@ -1,0 +1,45 @@
+{
+  "format_version": 1,
+  "id": "markdown-nested-list",
+  "category": "prose",
+  "note": "Grouping parent stays unlabelled; independent nested steps select child items.",
+  "text": "Suggested plan:\n\n- Prepare the rollout:\n  - Measure current latency. Record p95 before changes.\n  - Add a bounded cache. Limit it to five minutes.\n- Monitor hit rates after rollout.\n",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 42,
+      "end": 95,
+      "quote": "- Measure current latency. Record p95 before changes.",
+      "labels": [
+        {
+          "kind": "recommendation"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "start": 98,
+      "end": 146,
+      "quote": "- Add a bounded cache. Limit it to five minutes.",
+      "labels": [
+        {
+          "kind": "recommendation"
+        }
+      ]
+    },
+    {
+      "id": "e3",
+      "start": 147,
+      "end": 181,
+      "quote": "- Monitor hit rates after rollout.",
+      "labels": [
+        {
+          "kind": "recommendation"
+        }
+      ]
+    }
+  ],
+  "answer_links": [],
+  "content_type": "markdown",
+  "expected_detection": "markdown"
+}

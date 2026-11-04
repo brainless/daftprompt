@@ -73,6 +73,24 @@ The JSON request envelope is capped at six times the text limit plus 16 KiB, so
 JSON escaping and optional source metadata have room without hiding an
 oversized submission from the parser.
 
+## Text format
+
+`ParseRequest.content_type` is optional: `plain` or `markdown`. Omit it (or use
+`null`) for deterministic detection in core; unknown values return HTTP 400 before
+calling Scribe. Source provenance is independent: a file or email can use either
+format. A `.md` source reference alone does not establish Markdown.
+
+Every successful result includes top-level `content_type` (the format used) and
+`content_type_source` (`declared` or `detected`). These describe this parsing run,
+not the immutable payload. For example, `{"text":"# Plan","content_type":"plain"}`
+returns `"content_type":"plain","content_type_source":"declared"`; omitting the
+declaration returns `"content_type":"markdown","content_type_source":"detected"`.
+Scribe records `scribe-v4+plain-v1` or `scribe-v4+markdown-v1` in
+`run.prompt_version`. Rust computes paragraph or Markdown block boundaries; the
+model selects whole blocks or narrower segment ranges, and the result retains
+original byte ranges. The GUI displays the returned format and its source and
+offers no content-type override.
+
 ## Sample request
 
 ```sh
@@ -119,6 +137,8 @@ Abbreviated example (IDs, hashes, and timestamps vary):
 
 ```json
 {
+  "content_type": "plain",
+  "content_type_source": "detected",
   "payload": {
     "hash": "6b6f…",
     "content": "Plan\nShould we cache tokens? @infra-team\nYes, cache them.\n",
@@ -143,7 +163,7 @@ Abbreviated example (IDs, hashes, and timestamps vary):
     { "node_id": "node-s1", "display_id": 1, "start_byte": 5, "end_byte": 28 },
     { "node_id": "node-s2", "display_id": 2, "start_byte": 42, "end_byte": 58 }
   ],
-  "run": { "id": "run-1", "agent": "scribe", "provider": "openai", "model": "gpt-4o-mini", "prompt_version": "scribe-v3", "started_at": "…", "ended_at": "…", "status": "done", "attempts": 1 },
+  "run": { "id": "run-1", "agent": "scribe", "provider": "openai", "model": "gpt-4o-mini", "prompt_version": "scribe-v4+plain-v1", "started_at": "…", "ended_at": "…", "status": "done", "attempts": 1 },
   "run_inputs": [{ "run_id": "run-1", "node_id": "node-root" }],
   "tool_calls": [{ "id": "tool-1", "run_id": "run-1", "seq": 0, "tool": "submit", "input": "{...}", "output_hash": null, "created_at": "…" }]
 }

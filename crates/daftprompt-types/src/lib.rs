@@ -32,6 +32,6 @@ pub use graph::{
     SourceWindow, SpanInfo, ToolCall,
 };
 pub use request::{
-    ClarifyRequest, ClarifySource, ClarifyTarget, ClarifyTurn, ParseRequest, SourceKind,
-    SourceMetadata,
+    ClarifyRequest, ClarifySource, ClarifyTarget, ClarifyTurn, ContentType, ContentTypeSource,
+    ParseRequest, SourceKind, SourceMetadata,
 };

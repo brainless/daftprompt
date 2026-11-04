@@ -33,14 +33,45 @@ impl AnchoredSpan {
     }
 }
 
-/// Anchor one model-proposed span.
+/// Anchor a segment reference. Block references require [`anchor_span_in_structure`].
 pub fn anchor_span(source: &str, span: &ExtractedSpan) -> Result<AnchoredSpan, SpanError> {
-    anchor_reference(
-        source,
-        span.start_segment,
-        span.end_segment,
-        span.quote.as_deref(),
-    )
+    match span {
+        ExtractedSpan::Segments {
+            start_segment,
+            end_segment,
+            quote,
+            ..
+        } => anchor_reference(source, *start_segment, *end_segment, quote.as_deref()),
+        // A segment-only caller has no block tree to resolve this reference.
+        ExtractedSpan::Block { block, .. } => Err(SpanError::UnknownBlock {
+            block: block.clone(),
+        }),
+    }
+}
+
+/// Resolve a block reference against the Rust-built tree, or anchor segments.
+pub fn anchor_span_in_structure(
+    source: &str,
+    span: &ExtractedSpan,
+    tree: &super::structure::Structure,
+) -> Result<AnchoredSpan, SpanError> {
+    match span {
+        ExtractedSpan::Block { block, .. } => {
+            let selected = tree
+                .blocks
+                .iter()
+                .find(|candidate| candidate.id == *block)
+                .ok_or_else(|| SpanError::UnknownBlock {
+                    block: block.clone(),
+                })?;
+            Ok(AnchoredSpan {
+                segments: selected.segments,
+                start_byte: selected.start_byte,
+                end_byte: selected.end_byte,
+            })
+        }
+        _ => anchor_span(source, span),
+    }
 }
 
 /// Anchor a span described by a segment range and an optional quote.

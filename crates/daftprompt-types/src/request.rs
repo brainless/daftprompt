@@ -11,6 +11,9 @@ pub struct ParseRequest {
     /// The complete original text. It is preserved unchanged in the result
     /// payload.
     pub text: String,
+    /// Optional declared format; absent means core detects the format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<ContentType>,
     /// Optional provenance. Absent when the caller does not know or does not
     /// supply it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -22,6 +25,7 @@ impl ParseRequest {
     pub fn new(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
+            content_type: None,
             source: None,
         }
     }
@@ -30,6 +34,7 @@ impl ParseRequest {
     pub fn with_source(text: impl Into<String>, source: SourceMetadata) -> Self {
         Self {
             text: text.into(),
+            content_type: None,
             source: Some(source),
         }
     }
@@ -148,4 +153,20 @@ pub struct ClarifyTurn {
     pub question: String,
     pub explanation_node_id: String,
     pub explanation: String,
+}
+
+/// How a parsing run interprets text, independently of source provenance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentType {
+    Plain,
+    Markdown,
+}
+
+/// Whether the format was supplied by the client or detected by core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentTypeSource {
+    Declared,
+    Detected,
 }

@@ -42,7 +42,7 @@ fn expected_extraction(fixture: &daftprompt_core::eval::Fixture) -> Extraction {
         .spans
         .iter()
         .zip(&local_ids)
-        .map(|(span, id)| ExtractedSpan {
+        .map(|(span, id)| ExtractedSpan::Segments {
             id: id.clone(),
             start_segment: segment_at(span.start),
             end_segment: if span.end > span.start {
@@ -107,9 +107,23 @@ fn expected_extraction(fixture: &daftprompt_core::eval::Fixture) -> Extraction {
 }
 
 fn request(fixture: &daftprompt_core::eval::Fixture) -> ParseRequest {
-    match &fixture.source {
+    let mut request = match &fixture.source {
         Some(source) => ParseRequest::with_source(fixture.text.clone(), source.clone()),
         None => ParseRequest::new(fixture.text.clone()),
+    };
+    request.content_type = Some(fixture.content_type);
+    request
+}
+
+#[test]
+fn every_fixture_has_the_expected_detection() {
+    for fixture in load_fixtures(default_fixture_dir()).unwrap() {
+        assert_eq!(
+            daftprompt_core::text::structure::detect_content_type(&fixture.text),
+            fixture.expected_detection,
+            "{}",
+            fixture.id
+        );
     }
 }
 
@@ -288,4 +302,50 @@ fn recommendation_links_alternatives_and_task_assignments_score_separately() {
             .iter()
             .any(|i| i.kind == IssueKind::MissedRecommendationLink)
     );
+}
+
+#[tokio::test]
+async fn structure_fixtures_match_whole_blocks_and_score_perfectly() {
+    use daftprompt_core::text::structure::structure;
+    let fixtures = load_fixtures(default_fixture_dir()).unwrap();
+    for fixture in fixtures.iter().filter(|fixture| {
+        fixture.id.starts_with("markdown-") || fixture.id == "plain-paragraph-proposal"
+    }) {
+        let tree = structure(&fixture.text, fixture.content_type);
+        let mut extraction = expected_extraction(fixture);
+        for (span, expected) in extraction.spans.iter_mut().zip(&fixture.spans) {
+            let block = tree
+                .blocks
+                .iter()
+                .find(|block| block.start_byte == expected.start && block.end_byte == expected.end)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{}: no whole block matches {:?}",
+                        fixture.id, expected.quote
+                    )
+                });
+            let id = span.id().to_owned();
+            *span = ExtractedSpan::Block {
+                id,
+                block: block.id.clone(),
+            };
+        }
+        let result = Scribe::new(ScribeConfig::default(), StubModel { extraction })
+            .parse(request(fixture))
+            .await
+            .unwrap();
+        let evaluation = evaluate(fixture, &Prediction::from_parse_result(&result));
+        assert_eq!(
+            evaluation.span_exact.matched,
+            fixture.spans.len(),
+            "{}",
+            fixture.id
+        );
+        assert!(
+            evaluation.issues.is_empty(),
+            "{}: {:?}",
+            fixture.id,
+            evaluation.issues
+        );
+    }
 }

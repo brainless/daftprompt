@@ -533,6 +533,8 @@ mod tests {
 
     fn parse_result() -> ParseResult {
         ParseResult {
+            content_type: daftprompt_types::ContentType::Plain,
+            content_type_source: daftprompt_types::ContentTypeSource::Detected,
             payload: Payload {
                 hash: "parse-hash".to_owned(),
                 ..payload(TEXT)

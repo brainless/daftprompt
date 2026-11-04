@@ -17,5 +17,7 @@
       ]
     }
   ],
-  "answer_links": []
+  "answer_links": [],
+  "content_type": "plain",
+  "expected_detection": "plain"
 }

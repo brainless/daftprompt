@@ -25,7 +25,10 @@ pub use config::{
 pub use model::{BoxFuture, ExtractionModel, ModelError, ModelInput, RigExtractor};
 pub use prompt::{PROMPT_VERSION, SYSTEM_PROMPT, render_segments};
 
-use crate::text::segments;
+use crate::text::{
+    segments,
+    structure::{resolve_content_type, structure},
+};
 
 /// An object-safe parsing interface for clients that want to erase the model.
 ///
@@ -96,8 +99,15 @@ impl<M: ExtractionModel> Scribe<M> {
 
         let started_at = support::now();
         let run_id = support::new_id("run");
+        let (content_type, _) = resolve_content_type(&request);
+        let tree = structure(text, content_type);
         let input = ModelInput {
-            segments: render_segments(text),
+            segments: if self.config.legacy_v3 {
+                render_segments(text)
+            } else {
+                prompt::render_structure(text, &tree)
+            },
+            content_type,
         };
         let max_attempts = self.config.effective_max_attempts();
         let mut last_invalid = "no attempt ran".to_owned();
@@ -124,7 +134,7 @@ impl<M: ExtractionModel> Scribe<M> {
                 Ok(Err(ModelError::Internal(detail))) => {
                     return Err(ParseError::Internal { detail });
                 }
-                Ok(Ok(extraction)) => match validate::validate(text, &extraction) {
+                Ok(Ok(extraction)) => match validate::validate(text, &extraction, &tree) {
                     Ok(validated) => {
                         return graph::build(
                             &request,

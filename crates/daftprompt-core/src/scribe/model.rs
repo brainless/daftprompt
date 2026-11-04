@@ -21,6 +21,8 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub struct ModelInput {
     /// The submitted text as numbered `[n] text` segments.
     pub segments: String,
+    /// Format used for structure and prompt selection.
+    pub content_type: daftprompt_types::ContentType,
 }
 
 /// Why one extraction attempt produced no usable value.
@@ -54,7 +56,8 @@ pub trait ExtractionModel: Send + Sync {
 /// `from_env` constructor) and passes the resulting model in, so no credential
 /// is read from or stored in this crate.
 pub struct RigExtractor {
-    extractor: rig::extractor::Extractor<Extraction>,
+    plain: rig::extractor::Extractor<Extraction>,
+    markdown: rig::extractor::Extractor<Extraction>,
 }
 
 impl RigExtractor {
@@ -68,18 +71,28 @@ impl RigExtractor {
     where
         M: Into<rig::DynModel<rig::operation::Completion>>,
     {
-        let extractor = rig::extractor::ExtractorBuilder::<Extraction>::new(model)
-            .append_preamble(prompt::SYSTEM_PROMPT)
-            .retries(0)
-            .build();
-        Self { extractor }
+        let model = model.into();
+        let build = |content_type| {
+            rig::extractor::ExtractorBuilder::<Extraction>::new(model.clone())
+                .append_preamble(&prompt::system_prompt(content_type))
+                .retries(0)
+                .build()
+        };
+        Self {
+            plain: build(daftprompt_types::ContentType::Plain),
+            markdown: build(daftprompt_types::ContentType::Markdown),
+        }
     }
 }
 
 impl ExtractionModel for RigExtractor {
     fn extract(&self, input: ModelInput) -> BoxFuture<'_, Result<Extraction, ModelError>> {
         Box::pin(async move {
-            match self.extractor.extract(input.segments).await {
+            let extractor = match input.content_type {
+                daftprompt_types::ContentType::Plain => &self.plain,
+                daftprompt_types::ContentType::Markdown => &self.markdown,
+            };
+            match extractor.extract(input.segments).await {
                 Ok(response) => Ok(response.output),
                 Err(error) => Err(model_error(error)),
             }

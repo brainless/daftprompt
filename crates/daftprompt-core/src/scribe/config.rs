@@ -22,6 +22,9 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 /// model call; oversized input is rejected, never truncated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScribeConfig {
+    /// Evaluation compatibility: render segment-only v3 input and record v3.
+    /// Use with an extractor built with the original v3 prompt/schema.
+    pub legacy_v3: bool,
     /// Provider identifier recorded on the run, for example `openai`.
     pub provider: Option<String>,
     /// Model identifier recorded on the run, for example `gpt-4o-mini`.
@@ -40,6 +43,7 @@ pub struct ScribeConfig {
 impl Default for ScribeConfig {
     fn default() -> Self {
         Self {
+            legacy_v3: false,
             provider: None,
             model: None,
             max_input_bytes: DEFAULT_MAX_INPUT_BYTES,

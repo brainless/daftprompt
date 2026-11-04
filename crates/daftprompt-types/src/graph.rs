@@ -244,6 +244,10 @@ pub struct SpanInfo {
 /// persistence and no conversation history.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParseResult {
+    /// Format used for this run, never a property of the immutable payload.
+    pub content_type: crate::ContentType,
+    /// How the run selected its format.
+    pub content_type_source: crate::ContentTypeSource,
     /// The immutable payload holding the complete original text.
     pub payload: Payload,
     /// Provenance supplied with the request, preserved unchanged. `None` when

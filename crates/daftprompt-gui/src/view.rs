@@ -327,6 +327,16 @@ pub fn result_summary(result: &ParseResult) -> String {
     let attempts = result.run.attempts;
     let mut parts = vec![
         result.run.agent.clone(),
+        match result.content_type {
+            daftprompt_types::ContentType::Plain => "Plain text",
+            daftprompt_types::ContentType::Markdown => "Markdown",
+        }
+        .to_owned(),
+        match result.content_type_source {
+            daftprompt_types::ContentTypeSource::Declared => "declared",
+            daftprompt_types::ContentTypeSource::Detected => "detected",
+        }
+        .to_owned(),
         format!("{provider}/{model}"),
         format!(
             "{} span(s), {} label(s)",
@@ -414,6 +424,8 @@ mod tests {
         ];
 
         ParseResult {
+            content_type: daftprompt_types::ContentType::Plain,
+            content_type_source: daftprompt_types::ContentTypeSource::Detected,
             payload,
             source: None,
             nodes: vec![
@@ -799,7 +811,26 @@ mod tests {
         });
         assert_eq!(
             result_summary(&result),
-            "scribe · openai/gpt-4o-mini · 2 span(s), 2 label(s) · 1 attempt(s) · chat (thread-1)"
+            "scribe · Plain text · detected · openai/gpt-4o-mini · 2 span(s), 2 label(s) · 1 attempt(s) · chat (thread-1)"
         );
+    }
+}
+
+#[cfg(test)]
+mod content_type_tests {
+    use super::*;
+    #[test]
+    fn summary_displays_server_format_and_selection_source() {
+        let mut result: ParseResult = serde_json::from_value(serde_json::json!({
+            "content_type":"markdown", "content_type_source":"detected",
+            "payload":{"hash":"h","content":"text","created_at":"now"},
+            "source":null,"nodes":[],"node_contexts":[],"labels":[],"spans":[],
+            "run":{"id":"r","agent":"scribe","provider":null,"model":null,"prompt_version":null,"started_at":"now","ended_at":null,"status":"done","attempts":1},
+            "run_inputs":[],"tool_calls":[]
+        })).unwrap();
+        assert!(result_summary(&result).contains("Markdown · detected"));
+        result.content_type = daftprompt_types::ContentType::Plain;
+        result.content_type_source = daftprompt_types::ContentTypeSource::Declared;
+        assert!(result_summary(&result).contains("Plain text · declared"));
     }
 }

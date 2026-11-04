@@ -8,6 +8,9 @@ use super::segment::SegmentRange;
 /// A text span could not be turned into a byte range or coordinates.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SpanError {
+    #[error("block {block:?} is unavailable in this parsing context")]
+    UnknownBlock { block: String },
+
     #[error("segment {segment} does not exist; the input has {segment_count} segment(s)")]
     SegmentOutOfRange { segment: u32, segment_count: usize },
 

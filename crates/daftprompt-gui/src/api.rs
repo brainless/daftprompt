@@ -252,6 +252,8 @@ mod tests {
 
     fn canned_result_json() -> String {
         serde_json::json!({
+            "content_type": "plain",
+            "content_type_source": "detected",
             "payload": {
                 "hash": "hash",
                 "content": "Plan\nQ?\nA\n",

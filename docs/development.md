@@ -52,6 +52,7 @@ Rig is declared with `default-features = false` plus the `agent` feature: the pa
 Crates.io dependencies are declared once in the workspace `Cargo.toml`. Resolved versions from `Cargo.lock` (2026-10-31):
 
 - `serde` 1.0.229 (derive), `serde_json` 1.0.154 — used by `daftprompt-types` and by `daftprompt-core` for fixtures and reports; `schemars` 1.2.3 — used by `daftprompt-types`.
+- `pulldown-cmark` 0.13.6 (default features disabled; Rust floor 1.71.1) — core Markdown structure via `Parser::new_ext` with tables and `into_offset_iter`; manifest, `Tag`/`Event`, and offset iterator source inspected before integration. Fetch reproducibly with `cargo fetch --locked`; no HTML renderer is enabled.
 - `thiserror` 2.0.21 — shared library errors.
 - `sha2` 0.10.9 — SHA-256 payload hashes.
 - `axum` 0.8.9, `tokio` 1.54.1 — HTTP service. Core uses only Tokio's timer for per-attempt timeouts. The API binary enables Tokio's `net` and `signal` features for the listener and Ctrl+C shutdown, and `http-body-util` 0.1.5 to distinguish an oversized request body; `tower` 0.5.3 (`util`) is a test-only dependency for driving the router.
@@ -87,8 +88,11 @@ Scribe parser over HTTP.
 ## Scribe
 
 Scribe lives in `daftprompt-core::scribe`. Its system prompt is versioned in
-`crates/daftprompt-core/prompts/scribe-v3.md`, included at compile time, and recorded on
-every run as `scribe-v3`.
+`crates/daftprompt-core/prompts/scribe-v4.md` plus exactly one compile-time format
+section (`scribe-format-plain-v1.md` or `scribe-format-markdown-v1.md`). Each run
+records `scribe-v4+plain-v1` or `scribe-v4+markdown-v1`. Rust detects the format
+when undeclared and builds source-offset blocks; Scribe sees inline unnumbered
+markers and may select whole blocks or smaller segment ranges.
 
 - `Scribe::parse(ParseRequest)` is the transport-independent entry point. The API can
   also hold an `Arc<dyn scribe::Parser>`.
@@ -123,7 +127,8 @@ fixture set covers chat, prose, pasted code, a pasted document, email quotations
 text, and text with no actionable content. It includes locally answered and unanswered
 questions plus explicit and incidental `@` mentions. Each file records:
 
-- the complete text and optional source metadata;
+- the complete text, optional source metadata, declared `content_type`, and an
+  independently annotated `expected_detection` (`plain` or `markdown`);
 - expected spans as half-open byte ranges plus a verbatim `quote` and unary `question`,
   `recommendation`, and `task` labels (questions/tasks may carry an explicit `assignee`);
 - expected `answer`, `recommendation_links`, and symmetric `alternative_links` between spans by local span id.
@@ -162,7 +167,7 @@ OPENAI_API_KEY=... DAFTPROMPT_EVAL_LIVE=1 \
 | `DAFTPROMPT_EVAL_LIVE` | unset | `1`, `true`, or `yes` enables model calls |
 | `DAFTPROMPT_EVAL_PROVIDER` | `openai` | `openai` (`OPENAI_BASE_URL` selects a compatible endpoint) or `neuralwatt` |
 | `DAFTPROMPT_EVAL_MODEL` | `gpt-4o-mini` (`qwen3.6-35b-fast` for `neuralwatt`) | Model identifier recorded on every run |
-| `DAFTPROMPT_EVAL_PROMPT_VERSION` | compiled version | Optional guard; must equal the compiled prompt version |
+| `DAFTPROMPT_EVAL_PROMPT_VERSION` | `scribe-v4` | `scribe-v4` or original `scribe-v3` prompt, rendering and schema for paired comparisons |
 | `DAFTPROMPT_EVAL_MAX_ATTEMPTS` | `3` | Total attempt budget |
 | `DAFTPROMPT_EVAL_TIMEOUT_SECS` | `60` | Per-attempt timeout |
 | `OPENAI_API_KEY` | required for live `openai` runs | Read by `OpenAI::from_env()` |
@@ -299,3 +304,83 @@ justified by the expanded contract. Eight new fixtures exercise advice/decision 
 standalone alternatives, complementary plans, requests and commitments, completed work,
 incidental mentions, and many-to-many recommendations. Historical baseline reports have
 no live v2 scores, so no quantitative v2/v3 model comparison is claimed.
+
+## Structure-aware parsing and paired evaluation (Epic 005)
+
+The suite has 23 fixtures: the original 19 plus the complete Epic 003 text, an
+LLM-style Markdown plan with a question list, a nested-list plan, and a plain
+multi-paragraph proposal. The Epic 003 golden annotations select each refinement
+section and each Good to have bullet, leaving grouping headings unlabelled.
+Ordinary tests check every expected detection, verify all four new fixtures'
+golden spans match whole Rust blocks, and score stub extractions without model
+credentials. Reports separate detection accuracy from extraction quality and
+report all existing exact/lenient metrics, invalid-output rates, attempts, and
+latency for each declared content type.
+
+To compare the same fixtures and model, run these commands sequentially. The
+binary loads credentials from `.env`; no keys belong in reports. The v3 mode
+uses the original v3 prompt, segment-only input and original segment-only schema;
+`ScribeConfig.legacy_v3` is an evaluation compatibility setting used with that
+extractor. Production parsing defaults to v4.
+
+```sh
+DAFTPROMPT_EVAL_LIVE=1 DAFTPROMPT_EVAL_PROVIDER=neuralwatt \
+DAFTPROMPT_EVAL_MODEL=qwen3.6-35b-fast DAFTPROMPT_EVAL_PROMPT_VERSION=scribe-v3 \
+  cargo run -p daftprompt-core --features live-eval --bin evaluate-scribe -- \
+  --output docs/evaluations/structure-scribe-v3-neuralwatt.md
+
+DAFTPROMPT_EVAL_LIVE=1 DAFTPROMPT_EVAL_PROVIDER=neuralwatt \
+DAFTPROMPT_EVAL_MODEL=qwen3.6-35b-fast DAFTPROMPT_EVAL_PROMPT_VERSION=scribe-v4 \
+  cargo run -p daftprompt-core --features live-eval --bin evaluate-scribe -- \
+  --output docs/evaluations/structure-scribe-v4-neuralwatt.md
+```
+
+Default settings for both are three attempts and a 60-second timeout per attempt.
+Keep provider, model, fixture directory, and limits identical when comparing.
+
+### Recorded structure-aware results (2026-11-04)
+
+The [v3 baseline](evaluations/structure-scribe-v3-neuralwatt.md) and
+[retained v4 result](evaluations/structure-scribe-v4-neuralwatt.md) use the same
+23 fixtures, Neuralwatt `qwen3.6-35b-fast`, three-attempt budget and 60-second
+per-attempt timeout. Detection is correct on all 23 fixtures in both reports.
+
+| metric | v3 baseline | retained v4 |
+| --- | --- | --- |
+| Plain exact span precision / recall | 80.0% / 84.2% | 87.2% / 89.5% |
+| Plain lenient span precision / recall | 95.0% / 100.0% | 97.4% / 100.0% |
+| Plain exact answer-link precision / recall | 66.7% / 66.7% | 66.7% / 66.7% |
+| Plain lenient answer-link precision / recall | 100.0% / 100.0% | 100.0% / 100.0% |
+| Epic 003 exact recommendation units | invalid output after 3 attempts | 8 / 11 |
+| Nested-list plan exact spans | 0 / 3 | 3 / 3 |
+| Markdown plan + questions exact spans | 2 / 4 | 4 / 4 |
+
+The quality acceptance is **partial**. The retained prompt preserves/improves
+aggregate plain-text span metrics, resolves the section/list boundaries it selects,
+and passes deterministic checks, but it still omits three optional enhancement
+bullets at the end of Epic 003. It also retains a rhetorical false positive,
+question-versus-task/assignee errors in quoted email, and framing differences in
+JSON question/answer spans. These are model quality limitations, not schema or
+block-resolution successes disguised as complete extraction.
+
+Prompt development showed sensitivity and model variability. The
+[initial v4 run](evaluations/structure-scribe-v4-initial-neuralwatt.md) coalesced
+mixed plain-text paragraphs and omitted section recommendations. A
+[run before semantic gates](evaluations/structure-scribe-v4-before-semantic-gates-neuralwatt.md)
+reached 11/11 exact Epic 003 units but regressed plain-text precision. A final
+[coverage experiment](evaluations/structure-scribe-v4-coverage-experiment-neuralwatt.md)
+regressed several fixtures and was reverted. The retained source matches the
+retained v4 report; historical experiment commands require their earlier development
+prompt snapshots and do not reproduce those prompts from the current source.
+These single runs do not establish repeat-run stability or prove the complete
+Epic 005 quality acceptance. Further evaluation should measure repeated runs and
+improve optional-item recall without sacrificing the shared label semantics.
+
+The v3 Markdown aggregate excludes the failed Epic 003 fixture from scored span
+counts; its Markdown denominator is therefore smaller than v4's. Compare the
+per-fixture results and failure rates alongside aggregate scores.
+
+Verification: formatting, workspace checks for all targets/features, Clippy with
+warnings denied, types/core/API tests with all features, all 61 GUI tests, all 23
+expected detections, and whole-block stub scoring of the four new fixtures pass
+without LLM credentials. Live Explainer tests remain explicitly opt-in.
