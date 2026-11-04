@@ -14,8 +14,10 @@
 mod api;
 mod clarify;
 mod clipboard;
+mod fonts;
 mod render;
 mod spawn;
+mod theme;
 mod view;
 
 use std::sync::Arc;
@@ -24,8 +26,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use akar_components::{
-    AKAR_THEME_DARK, AkarTheme, ButtonStyle, ButtonVariant, HeadingLevel, TextEditState, TextStyle,
-    akar_button_styled, akar_container, akar_heading, akar_paragraph, akar_textarea,
+    AkarTheme, ButtonStyle, ButtonVariant, FontWeight, HeadingLevel, TextEditState, TextStyle,
+    akar_button_styled, akar_container, akar_heading, akar_paragraph, akar_textarea_styled,
 };
 use akar_core::AkarCore;
 use akar_layout::{
@@ -39,6 +41,7 @@ use daftprompt_types::{ClarifyRequest, ClarifyResult, ParseResult};
 use render::{
     ContentLayout, PanelLayout, build_panel, draw_content, draw_notice, draw_panel_content,
 };
+use theme::DAFTPROMPT_THEME;
 use view::{Block, ParseView, Phase, build_blocks, result_summary};
 use wgpu::{
     CompositeAlphaMode, CurrentSurfaceTexture, InstanceDescriptor, PresentMode, TextureUsages,
@@ -226,12 +229,13 @@ impl ApplicationHandler for App {
         let surface_format = surface_config.format;
         surface.configure(&device, &surface_config);
 
-        let core = AkarCore::new(
+        let mut core = AkarCore::new(
             &device,
             &queue,
             surface_format,
             akar_core::TextPipelineConfig::default(),
         );
+        fonts::Fonts::load(&mut core.text_pipeline).install();
 
         let (layout, page, nodes) = build_layout();
         let (tx, rx) = mpsc::channel();
@@ -426,7 +430,7 @@ fn render(state: &mut GuiState) {
         }
     };
 
-    let theme = &AKAR_THEME_DARK;
+    let theme = &DAFTPROMPT_THEME;
     let now = Instant::now();
     state.core.begin_frame(size.width, size.height, scale);
 
@@ -810,6 +814,16 @@ fn draw_shell(state: &mut GuiState, theme: &AkarTheme) {
     }
 }
 
+/// UI-font text style (Inter) at the given weight.
+fn ui_style(weight: FontWeight) -> TextStyle {
+    fonts::current().style(fonts::Role::Ui, weight)
+}
+
+/// Text-font style (Source Serif 4) for the textareas.
+fn text_style() -> TextStyle {
+    fonts::current().style(fonts::Role::Text, FontWeight::Normal)
+}
+
 fn draw_sidebar(state: &mut GuiState, theme: &AkarTheme, now: Instant) {
     akar_heading(
         &mut state.core,
@@ -817,7 +831,7 @@ fn draw_sidebar(state: &mut GuiState, theme: &AkarTheme, now: Instant) {
         state.left_title,
         "daftprompt",
         HeadingLevel::H3,
-        None,
+        Some(ui_style(FontWeight::Semibold)),
         theme,
     );
 
@@ -825,7 +839,7 @@ fn draw_sidebar(state: &mut GuiState, theme: &AkarTheme, now: Instant) {
         color: Some(theme.muted_content),
         font_size: Some(theme.font_size_sm),
         line_height: Some(theme.font_size_sm * 1.5),
-        ..TextStyle::empty()
+        ..ui_style(FontWeight::Normal)
     };
     akar_paragraph(
         &mut state.core,
@@ -842,7 +856,7 @@ fn draw_sidebar(state: &mut GuiState, theme: &AkarTheme, now: Instant) {
     let focused = state.core.input.focused_id == Some(input_id);
     let elapsed_ms = now.duration_since(state.started).as_millis();
     let cursor_visible = !focused || (elapsed_ms / CURSOR_BLINK.as_millis()).is_multiple_of(2);
-    let response = akar_textarea(
+    let response = akar_textarea_styled(
         &mut state.core,
         &state.layout,
         state.input_node,
@@ -851,6 +865,7 @@ fn draw_sidebar(state: &mut GuiState, theme: &AkarTheme, now: Instant) {
         &mut state.input_scroll,
         "Paste or type text here…",
         cursor_visible,
+        Some(&text_style()),
         theme,
     );
     let request = ClipboardRequest::from_response(&response);
@@ -860,6 +875,7 @@ fn draw_sidebar(state: &mut GuiState, theme: &AkarTheme, now: Instant) {
     }
 
     let mut button_style = ButtonStyle::empty();
+    button_style.text_style = Some(ui_style(FontWeight::Medium));
     let busy = state.parse_view.is_loading();
     if busy {
         button_style.fill = Some(theme.base_300);
@@ -882,7 +898,7 @@ fn draw_sidebar(state: &mut GuiState, theme: &AkarTheme, now: Instant) {
         color: Some(theme.muted_content),
         font_size: Some(12.0),
         line_height: Some(16.0),
-        ..TextStyle::empty()
+        ..ui_style(FontWeight::Normal)
     };
     let mut footer = format!(
         "POST {}\nEach Parse replaces the previous blocks.",
@@ -989,7 +1005,7 @@ fn draw_main(state: &mut GuiState, theme: &AkarTheme) {
         state.main_title,
         title,
         HeadingLevel::H4,
-        None,
+        Some(ui_style(FontWeight::Semibold)),
         theme,
     );
 
@@ -997,7 +1013,7 @@ fn draw_main(state: &mut GuiState, theme: &AkarTheme) {
         color: Some(theme.muted_content),
         font_size: Some(theme.font_size_sm),
         line_height: Some(theme.font_size_sm * 1.5),
-        ..TextStyle::empty()
+        ..ui_style(FontWeight::Normal)
     };
     akar_paragraph(
         &mut state.core,
@@ -1107,7 +1123,7 @@ fn draw_clarify_panel(state: &mut GuiState, theme: &AkarTheme) {
         state.panel_title,
         &format!("Clarify #{display_id}"),
         HeadingLevel::H4,
-        None,
+        Some(ui_style(FontWeight::Semibold)),
         theme,
     );
     let close = akar_button_styled(
@@ -1116,7 +1132,10 @@ fn draw_clarify_panel(state: &mut GuiState, theme: &AkarTheme) {
         state.panel_close,
         "Close",
         ButtonVariant::Outline,
-        &ButtonStyle::empty(),
+        &ButtonStyle {
+            text_style: Some(ui_style(FontWeight::Medium)),
+            ..ButtonStyle::empty()
+        },
         theme,
     );
     if close.clicked {
@@ -1148,7 +1167,7 @@ fn draw_clarify_panel(state: &mut GuiState, theme: &AkarTheme) {
     let focused = state.core.input.focused_id == Some(input_id);
     let elapsed_ms = Instant::now().duration_since(state.started).as_millis();
     let cursor_visible = !focused || (elapsed_ms / CURSOR_BLINK.as_millis()).is_multiple_of(2);
-    let response = akar_textarea(
+    let response = akar_textarea_styled(
         &mut state.core,
         &state.layout,
         state.panel_input,
@@ -1161,6 +1180,7 @@ fn draw_clarify_panel(state: &mut GuiState, theme: &AkarTheme) {
             "Ask about this span…"
         },
         cursor_visible,
+        Some(&text_style()),
         theme,
     );
     let request = ClipboardRequest::from_response(&response);
@@ -1170,6 +1190,7 @@ fn draw_clarify_panel(state: &mut GuiState, theme: &AkarTheme) {
     }
 
     let mut button_style = ButtonStyle::empty();
+    button_style.text_style = Some(ui_style(FontWeight::Medium));
     if pending {
         button_style.fill = Some(theme.base_300);
         button_style.hover_fill = Some(theme.base_300);
@@ -1269,7 +1290,7 @@ fn ensure_content(state: &mut GuiState) {
         return;
     }
     if state.content.is_none() || (state.content_width - width).abs() > 0.5 {
-        state.content = render::build_content(&state.blocks, width, &AKAR_THEME_DARK);
+        state.content = render::build_content(&state.blocks, width, &DAFTPROMPT_THEME);
         state.content_width = width;
     }
 }

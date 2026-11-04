@@ -45,7 +45,7 @@ Dependencies not published on crates.io (Rig, akar) are referenced by their upst
 | dependency | source | pinned revision | date |
 | --- | --- | --- | --- |
 | Rig (`rig` 0.43.0 facade, `rig-agent`) | <https://github.com/0xPlaygrounds/rig.git> | `7dfd8a4229a9d89af159489687cb14b404b2871d` | 2026-10-06 |
-| akar (`akar-core`, `akar-layout`, `akar-components`, `akar-winit` 0.1.0) | <https://github.com/brainless/akar.git> | `969079c2e3d14d1843c5e7ba2dccfb4c93c06459` | 2026-10-28 |
+| akar (`akar-core`, `akar-layout`, `akar-components`, `akar-winit` 0.1.0) | <https://github.com/brainless/akar.git> | `1d61c6f10d952bd3cdb395f25cf22b7246e921d0` | 2026-11-04 |
 
 Rig is declared with `default-features = false` plus the `agent` feature: the parser uses the typed `submit`-tool extractor (`rig::extractor`). The optional `live-eval` feature in core adds `reqwest` and `rustls` for the evaluation binary, and `daftprompt-api` enables the same transport in its own dependency so it can build the provider client from environment credentials. Core's own manifest and the GUI never enable a provider transport. Scribe takes any Rig completion model, so the provider client and its transport are chosen where the model is built (the API or the opt-in live evaluation).
 
@@ -63,6 +63,19 @@ Crates.io dependencies are declared once in the workspace `Cargo.toml`. Resolved
 - `wgpu` 29.0.4, `winit` 0.30.13, `pollster` 0.4.0 — GUI host integration. These are the versions akar builds against; akar does not re-export its surface or event-loop types, so the app declares them directly. They stay out of core, types, and the API.
 - `glyphon` 0.11.0 — same text shaping version as akar's pipeline. The GUI uses it only to give the scrollable block text an explicit viewport clip; app chrome still uses akar components.
 - `arboard` 3.7.0 (default features off: text only, no image stack) — GUI system clipboard for textarea copy and paste. Also pulls `clipboard-win` 5.4.3 and `error-code` 3.4.0 on Windows, and `objc2-core-graphics`/`objc2-io-surface` 0.3.2 on macOS. Used only by `daftprompt-gui`.
+
+### Bundled GUI fonts
+
+The GUI bundles static TTFs (SIL OFL 1.1) in `crates/daftprompt-gui/assets/fonts/` and loads them with `include_bytes!` and `TextPipeline::load_font_bytes`. License texts sit beside them (`Inter-OFL.txt`, `SourceSerif4-OFL.md`). Only the weights the GUI draws are included. They were downloaded from the upstream release archives and extracted without running anything from them.
+
+| file | font and version | source | bytes | SHA-256 |
+| --- | --- | --- | --- | --- |
+| `Inter-Regular.ttf` | Inter 4.1 | <https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip> (`extras/ttf/`) | 411640 | `40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82` |
+| `Inter-Medium.ttf` | Inter 4.1 | same archive | 417300 | `97ad806f526e41546d46365bb3a393145f75b7b1568913db74549ad8b8dba872` |
+| `Inter-SemiBold.ttf` | Inter 4.1 | same archive | 419744 | `78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3` |
+| `SourceSerif4-Regular.ttf` | Source Serif 4.005 | <https://github.com/adobe-fonts/source-serif/releases/download/4.005R/source-serif-4.005_Desktop.zip> (`TTF/`) | 261868 | `e5a4ee6a3d87bb9024796be390c6771e2a0eb1883dae25effaf57ca01668e24b` |
+
+Archive SHA-256: `Inter-4.1.zip` `9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e`; `source-serif-4.005_Desktop.zip` `549fdb8f9a682bd06944298621404969f6de77c2e422ff3b8244a1dcd6a0c425`.
 
 Local checkouts used for source and example reference only:
 

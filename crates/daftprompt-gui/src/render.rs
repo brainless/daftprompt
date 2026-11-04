@@ -9,7 +9,8 @@
 //! over the app chrome.
 
 use akar_components::{
-    AkarTheme, BadgeVariant, TextStyle, akar_paragraph, scroll_area_begin, scroll_area_end,
+    AkarTheme, BadgeVariant, FontWeight, TextStyle, akar_paragraph, scroll_area_begin,
+    scroll_area_end,
 };
 use akar_core::{AkarCore, QuadCall, TextCall, Z_BASE};
 use akar_layout::{
@@ -19,10 +20,24 @@ use akar_layout::{
 use std::collections::BTreeMap;
 
 use crate::clarify::{BlockKind, BranchMark, PanelBlock};
+use crate::fonts::{self, Role};
 use crate::view::{Block, LabelView, SpanView};
 
+/// Source Serif 4 reads small next to Inter at the same size, so source text is
+/// drawn slightly larger. Every height estimate uses the same size.
+const TEXT_FONT_SCALE: f32 = 1.06;
+/// Font size and line height of source text (quotes and unlabelled text).
+fn source_text_metrics(theme: &AkarTheme) -> (f32, f32) {
+    let size = theme.font_size_base * TEXT_FONT_SCALE;
+    (size, size * 1.5)
+}
+
 const BLOCK_PADDING: f32 = 12.0;
-const BLOCK_GAP: f32 = 10.0;
+const BLOCK_GAP: f32 = 4.0;
+/// Vertical padding inside a span block (horizontal stays `BLOCK_PADDING`).
+const BLOCK_PADDING_Y: f32 = 6.0;
+/// Gap between the badge row, quote, relationship lines, and button.
+const BLOCK_INNER_GAP: f32 = 4.0;
 const BADGE_HEIGHT: f32 = 22.0;
 const BADGE_GAP: f32 = 6.0;
 const ANSWER_LINE_HEIGHT: f32 = 20.0;
@@ -91,12 +106,8 @@ pub fn build_content(blocks: &[Block], width: f32, theme: &AkarTheme) -> Option<
     for block in blocks {
         match block {
             Block::Text { text } => {
-                let height = estimated_text_height(
-                    text,
-                    width,
-                    theme.font_size_base,
-                    theme.font_size_base * 1.5,
-                );
+                let (size, line) = source_text_metrics(theme);
+                let height = estimated_text_height(text, width, size, line);
                 let node = layout.new_leaf(Style {
                     size: Size {
                         width: Dimension::percent(1.0),
@@ -192,7 +203,7 @@ fn build_span(
                 },
                 gap: Size {
                     width: length(BADGE_GAP),
-                    height: length(BADGE_GAP),
+                    height: length(BLOCK_INNER_GAP),
                 },
                 ..Default::default()
             },
@@ -201,12 +212,8 @@ fn build_span(
         children.push(badge_row);
     }
 
-    let quote_height = estimated_text_height(
-        &span.text,
-        inner_width,
-        theme.font_size_base,
-        theme.font_size_base * 1.5,
-    );
+    let (quote_size, quote_line) = source_text_metrics(theme);
+    let quote_height = estimated_text_height(&span.text, inner_width, quote_size, quote_line);
     let quote = layout.new_leaf(Style {
         size: Size {
             width: Dimension::percent(1.0),
@@ -250,14 +257,14 @@ fn build_span(
                 height: Dimension::auto(),
             },
             padding: Rect {
-                top: length(BLOCK_PADDING),
+                top: length(BLOCK_PADDING_Y),
                 right: length(BLOCK_PADDING),
-                bottom: length(BLOCK_PADDING),
+                bottom: length(BLOCK_PADDING_Y),
                 left: length(BLOCK_PADDING),
             },
             gap: Size {
                 width: length(0.0_f32),
-                height: length(8.0_f32),
+                height: length(BLOCK_INNER_GAP),
             },
             ..Default::default()
         },
@@ -365,7 +372,7 @@ fn badges_for(labels: &[LabelView]) -> Vec<(String, BadgeVariant)> {
 
 fn badge_width(text: &str, theme: &AkarTheme) -> f32 {
     let characters = text.chars().count() as f32;
-    (characters * theme.font_size_sm * 0.56 + 22.0).clamp(48.0, 240.0)
+    (characters * theme.font_size_sm * 0.6 + 22.0).clamp(48.0, 240.0)
 }
 
 /// Conservative paragraph height: assume a wider-than-average glyph so the
@@ -418,13 +425,15 @@ pub fn draw_content(
     for entry in &content.entries {
         match &entry.kind {
             EntryKind::Unlabelled { text } => {
+                let (size, line) = source_text_metrics(theme);
                 draw_wrapped_text(
                     core,
                     &content.layout,
                     entry.node,
                     text,
-                    theme.font_size_base,
-                    theme.font_size_base * 1.5,
+                    Role::Text,
+                    size,
+                    line,
                     theme.muted_content,
                     rect,
                 );
@@ -437,7 +446,14 @@ pub fn draw_content(
                 clarify,
                 display_id,
             } => {
-                draw_panel(core, &content.layout, entry.node, rect, theme);
+                // The fill, border, and rounded corners show only while the
+                // pointer is over the (viewport-clipped) block; otherwise the
+                // span reads as plain flowing text. Every window event requests
+                // a redraw, so this updates as the mouse moves.
+                let block = intersect(content.layout.rect(entry.node), rect);
+                if block[2] > 0.0 && block[3] > 0.0 && core.input.is_hovering(block) {
+                    draw_panel(core, &content.layout, entry.node, rect, theme);
+                }
                 let mark = marks.get(display_id);
                 if mark.is_some() {
                     draw_branch_marker(core, &content.layout, entry.node, rect, theme);
@@ -453,13 +469,15 @@ pub fn draw_content(
                         theme,
                     );
                 }
+                let (size, line) = source_text_metrics(theme);
                 draw_wrapped_text(
                     core,
                     &content.layout,
                     *quote,
                     quote_text,
-                    theme.font_size_base,
-                    theme.font_size_base * 1.5,
+                    Role::Text,
+                    size,
+                    line,
                     theme.base_content,
                     rect,
                 );
@@ -469,6 +487,7 @@ pub fn draw_content(
                         &content.layout,
                         *node,
                         text,
+                        Role::Ui,
                         theme.font_size_sm,
                         ANSWER_LINE_HEIGHT,
                         theme.info,
@@ -583,7 +602,7 @@ fn draw_clarify_button(
         glyphon::Metrics::new(font_size, font_size * 1.2),
         None,
         None,
-        None,
+        Some(fonts::current().attrs(Role::Ui, 500)),
     );
     core.draw_list.push_text(TextCall {
         buffer_id: buffer,
@@ -606,6 +625,7 @@ fn draw_wrapped_text(
     layout: &Layout,
     node: NodeId,
     text: &str,
+    role: Role,
     font_size: f32,
     line_height: f32,
     color: u32,
@@ -616,6 +636,7 @@ fn draw_wrapped_text(
         layout.widget_id(node),
         layout.rect(node),
         text,
+        role,
         font_size,
         line_height,
         color,
@@ -629,6 +650,7 @@ fn draw_text_at(
     widget_id: u64,
     rect: [f32; 4],
     text: &str,
+    role: Role,
     font_size: f32,
     line_height: f32,
     color: u32,
@@ -644,7 +666,7 @@ fn draw_text_at(
         glyphon::Metrics::new(font_size, line_height),
         Some(rect[2]),
         None,
-        None,
+        Some(fonts::current().attrs(role, 400)),
     );
     core.draw_list.push_text(TextCall {
         buffer_id: buffer,
@@ -722,7 +744,7 @@ fn draw_badge(
         glyphon::Metrics::new(font_size, font_size * 1.2),
         None,
         None,
-        None,
+        Some(fonts::current().attrs(Role::Ui, 500)),
     );
     core.draw_list.push_text(TextCall {
         buffer_id: buffer,
@@ -776,8 +798,26 @@ impl PanelLayout {
     }
 }
 
+/// Source, question, and answer text use the text font; citations, metadata,
+/// notices, and errors are interface text.
+fn panel_role(kind: BlockKind) -> Role {
+    match kind {
+        BlockKind::Target | BlockKind::Question | BlockKind::Explanation => Role::Text,
+        BlockKind::Citation | BlockKind::Meta | BlockKind::Notice | BlockKind::Error => Role::Ui,
+    }
+}
+
 /// Font size, line height, color, and whether the block sits on a card.
 fn panel_block_style(kind: BlockKind, theme: &AkarTheme) -> (f32, f32, u32, bool) {
+    let (size, line, color, card) = panel_base_style(kind, theme);
+    if panel_role(kind) == Role::Text {
+        (size * TEXT_FONT_SCALE, line * TEXT_FONT_SCALE, color, card)
+    } else {
+        (size, line, color, card)
+    }
+}
+
+fn panel_base_style(kind: BlockKind, theme: &AkarTheme) -> (f32, f32, u32, bool) {
     let base = theme.font_size_base;
     let small = theme.font_size_sm;
     match kind {
@@ -887,6 +927,7 @@ pub fn draw_panel_content(
             panel.layout.widget_id(entry.node),
             text_rect,
             &entry.text,
+            panel_role(entry.kind),
             font_size,
             line_height,
             color,
@@ -910,7 +951,7 @@ pub fn draw_notice(
         color: Some(color),
         font_size: Some(theme.font_size_base),
         line_height: Some(theme.font_size_base * 1.5),
-        ..TextStyle::empty()
+        ..fonts::current().style(Role::Ui, FontWeight::Normal)
     };
     akar_paragraph(core, layout, node, text, Some(style), theme);
 }
@@ -967,8 +1008,8 @@ fn color_to_f32(color: u32) -> [f32; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::DAFTPROMPT_THEME;
     use crate::view::{LabelView, SpanView};
-    use akar_components::AKAR_THEME_DARK;
     use akar_core::DrawCall;
     use daftprompt_types::{LabelKind, LabelStatus};
 
@@ -1054,7 +1095,7 @@ mod tests {
                 "alternative to: #4 · Other option"
             ]
         );
-        let content = build_content(&[Block::Span(span)], 500.0, &AKAR_THEME_DARK).unwrap();
+        let content = build_content(&[Block::Span(span)], 500.0, &DAFTPROMPT_THEME).unwrap();
         let EntryKind::Span { badges, .. } = &content.entries[0].kind else {
             unreachable!()
         };
@@ -1069,7 +1110,7 @@ mod tests {
             },
             span("Should we cache tokens?"),
         ];
-        let content = build_content(&blocks, 500.0, &AKAR_THEME_DARK)
+        let content = build_content(&blocks, 500.0, &DAFTPROMPT_THEME)
             .expect("content should build for a normal width");
         assert!(content.total_height() > 100.0);
         assert_eq!(content.entries.len(), 2);
@@ -1110,7 +1151,7 @@ mod tests {
             },
             span("Should we cache tokens?"),
         ];
-        let mut content = build_content(&blocks, 500.0, &AKAR_THEME_DARK)
+        let mut content = build_content(&blocks, 500.0, &DAFTPROMPT_THEME)
             .expect("content should build for a normal width");
         let mut core = AkarCore::mock();
         core.begin_frame(800, 600, 1.0);
@@ -1121,7 +1162,7 @@ mod tests {
             &mut content,
             viewport,
             &mut scroll,
-            &AKAR_THEME_DARK,
+            &DAFTPROMPT_THEME,
             &BTreeMap::new(),
             None,
         );
@@ -1153,7 +1194,7 @@ mod tests {
 
     #[test]
     fn span_cards_get_a_clarify_action_inside_the_card() {
-        let content = build_content(&[span("Should we cache tokens?")], 500.0, &AKAR_THEME_DARK)
+        let content = build_content(&[span("Should we cache tokens?")], 500.0, &DAFTPROMPT_THEME)
             .expect("content");
         let EntryKind::Span {
             clarify,
@@ -1210,7 +1251,7 @@ mod tests {
                 text: "[1] src/cache.rs:L1–L9".to_owned(),
             },
         ];
-        let mut panel = build_panel(&blocks, 320.0, &AKAR_THEME_DARK).expect("panel");
+        let mut panel = build_panel(&blocks, 320.0, &DAFTPROMPT_THEME).expect("panel");
         let first = panel.layout.rect(panel.entries[0].node);
         let third = panel.layout.rect(panel.entries[2].node);
         assert!(third[1] > first[1] + first[3]);
@@ -1225,26 +1266,26 @@ mod tests {
             &mut panel,
             viewport,
             &mut scroll,
-            &AKAR_THEME_DARK,
+            &DAFTPROMPT_THEME,
         );
         for call in core.draw_list.text_calls() {
             let DrawCall::Text(call) = call else { continue };
             assert_eq!(call.clip, viewport);
         }
-        assert!(build_panel(&[], 320.0, &AKAR_THEME_DARK).is_none());
-        assert!(build_panel(&blocks, 2.0, &AKAR_THEME_DARK).is_none());
+        assert!(build_panel(&[], 320.0, &DAFTPROMPT_THEME).is_none());
+        assert!(build_panel(&blocks, 2.0, &DAFTPROMPT_THEME).is_none());
     }
 
     #[test]
     fn empty_blocks_or_narrow_widths_do_not_build() {
-        assert!(build_content(&[], 500.0, &AKAR_THEME_DARK).is_none());
+        assert!(build_content(&[], 500.0, &DAFTPROMPT_THEME).is_none());
         assert!(
             build_content(
                 &[Block::Text {
                     text: "x".to_owned()
                 }],
                 2.0,
-                &AKAR_THEME_DARK
+                &DAFTPROMPT_THEME
             )
             .is_none()
         );

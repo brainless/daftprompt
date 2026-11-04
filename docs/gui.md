@@ -5,13 +5,39 @@ columns: a composer on the left with a multiline textarea anchored at the bottom
 and a Parse button, and a wider source view on the right. The right column shows
 the original text as blocks, not a chat transcript: validated spans become cards
 with API-assigned `#N` identifiers, label badges, statuses, assignee handles, and relationship targets, and unlabelled
-text between them stays visible in source order.
+text between them stays visible in source order. A span's card background, border,
+and rounded corners are drawn only while the pointer is over it (hit-tested against
+the scroll viewport); otherwise it reads as flowing text with its badges and
+Clarify button. Blocks are spaced tightly (4 px between blocks, 6 px vertical padding).
+
+The GUI uses its own palette, `DAFTPROMPT_THEME` in `src/theme.rs`: akar's dark theme with darker backgrounds (`base_100` `#000000` main column, `base_200` `#0a0a0b` left column, cards, and hover box, `base_300` `#26262b` borders, scrollbar thumbs, and hover/pressed fills). Text and semantic colours are akar's.
 
 The app only talks to the API. It depends on `daftprompt-types`, the four akar
 crates, `ureq` for HTTP, the `wgpu`/`winit`/`pollster` host integration akar does
 not re-export, and `glyphon` for explicit viewport clipping in the scrollable
 block view. It never links `daftprompt-core` or `daftprompt-api`, and it contains
 no parsing, validation, or graph construction.
+
+## Fonts
+
+Two bundled SIL OFL fonts (files, versions, and checksums in
+[development.md](development.md#bundled-gui-fonts); license texts in
+`crates/daftprompt-gui/assets/fonts/`), declared in `src/fonts.rs`:
+
+| role | font | used for |
+| --- | --- | --- |
+| UI | Inter (Regular, Medium, SemiBold) | headings (SemiBold), buttons including Clarify (Medium), badges (Medium), labels, relationship/answer-link lines, status and notice text, sidebar hint and footer, panel citations, metadata, notices, and errors |
+| Text | Source Serif 4 (Regular) | composer and follow-up textareas, span quotes and unlabelled text in the main column, and the clarify panel's target, question, and explanation text |
+
+Fonts load once at startup with `TextPipeline::load_font_bytes`; the family
+handles are used as `FontFamily::Named`. akar cannot change its default
+sans-serif family, so every draw names its family (`TextStyle.font_family`,
+`ButtonStyle.text_style`, `akar_textarea_styled`, and glyphon `Attrs` for the
+directly drawn badges and content). A font that fails to load is logged to
+stderr and that role falls back to akar's generic family. Source text is drawn at
+1.06x the theme base size (`TEXT_FONT_SCALE` in `render.rs`), and the height
+estimates use the same size. The composer textareas use akar's fixed base size
+and 1.2 line height.
 
 ## Build and run
 
