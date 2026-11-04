@@ -528,6 +528,8 @@ mod tests {
             ended_at: None,
             status: RunStatus::Done,
             attempts: 1,
+            consistency_followup: false,
+            consistency_used: false,
         }
     }
 

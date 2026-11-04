@@ -24,6 +24,8 @@ References: [PRD](../docs/PRD.md), [data model](../docs/data-model.md), [Epic 00
 - **Trigger:** poor span accuracy on long lines, such as unwrapped prose paragraphs, minified JSON, or long email lines, where segment range plus quote is not enough.
 - Split long lines further (for example, by sentence) and present sub-segments to the model, keeping the same byte-range and coordinate rules.
 
+Spans larger than a line, such as whole Markdown sections or list items, are covered by [Epic 005: Structure-aware parsing](005-structure-aware-parsing.md).
+
 ### Overlapping and nested spans
 
 - **Trigger:** fixtures or real use show annotations that need overlapping or nested spans (for example, a question inside a larger answer).

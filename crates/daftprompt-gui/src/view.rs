@@ -479,6 +479,8 @@ mod tests {
                 ended_at: Some("now".to_owned()),
                 status: RunStatus::Done,
                 attempts: 1,
+                consistency_followup: false,
+                consistency_used: false,
             },
             run_inputs: vec![RunInput {
                 run_id: "run".to_owned(),

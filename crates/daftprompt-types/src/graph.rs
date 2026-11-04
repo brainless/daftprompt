@@ -199,6 +199,13 @@ pub struct Run {
     /// Total attempts used, including failed deserialization and validation
     /// attempts. Always at least 1 for a started run.
     pub attempts: u32,
+    /// Whether a sibling-consistency follow-up model call ran after a valid
+    /// extraction. It is outside the attempt budget and not counted in `attempts`.
+    #[serde(default)]
+    pub consistency_followup: bool,
+    /// Whether the follow-up's extraction replaced the original one.
+    #[serde(default)]
+    pub consistency_used: bool,
 }
 
 /// One node an agent run took as input.

@@ -163,7 +163,7 @@ Abbreviated example (IDs, hashes, and timestamps vary):
     { "node_id": "node-s1", "display_id": 1, "start_byte": 5, "end_byte": 28 },
     { "node_id": "node-s2", "display_id": 2, "start_byte": 42, "end_byte": 58 }
   ],
-  "run": { "id": "run-1", "agent": "scribe", "provider": "openai", "model": "gpt-4o-mini", "prompt_version": "scribe-v4+plain-v1", "started_at": "…", "ended_at": "…", "status": "done", "attempts": 1 },
+  "run": { "id": "run-1", "agent": "scribe", "provider": "openai", "model": "gpt-4o-mini", "prompt_version": "scribe-v4+plain-v1", "started_at": "…", "ended_at": "…", "status": "done", "attempts": 1, "consistency_followup": false, "consistency_used": false },
   "run_inputs": [{ "run_id": "run-1", "node_id": "node-root" }],
   "tool_calls": [{ "id": "tool-1", "run_id": "run-1", "seq": 0, "tool": "submit", "input": "{...}", "output_hash": null, "created_at": "…" }]
 }

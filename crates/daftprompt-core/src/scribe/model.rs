@@ -23,6 +23,8 @@ pub struct ModelInput {
     pub segments: String,
     /// Format used for structure and prompt selection.
     pub content_type: daftprompt_types::ContentType,
+    /// Corrective feedback for a follow-up call; the extractor appends it to the prompt.
+    pub feedback: Option<String>,
 }
 
 /// Why one extraction attempt produced no usable value.
@@ -92,7 +94,11 @@ impl ExtractionModel for RigExtractor {
                 daftprompt_types::ContentType::Plain => &self.plain,
                 daftprompt_types::ContentType::Markdown => &self.markdown,
             };
-            match extractor.extract(input.segments).await {
+            let prompt = match &input.feedback {
+                Some(feedback) => format!("{}\n\nReviewer feedback:\n{feedback}", input.segments),
+                None => input.segments,
+            };
+            match extractor.extract(prompt).await {
                 Ok(response) => Ok(response.output),
                 Err(error) => Err(model_error(error)),
             }

@@ -239,6 +239,8 @@ pub(crate) fn build(input: Built<'_>) -> Result<ClarifyResult, ParseError> {
         ended_at: Some(now()),
         status: RunStatus::Done,
         attempts,
+        consistency_followup: false,
+        consistency_used: false,
     };
 
     Ok(ClarifyResult {

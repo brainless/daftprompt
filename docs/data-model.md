@@ -73,7 +73,9 @@ CREATE TABLE run (
   started_at     TEXT NOT NULL,
   ended_at       TEXT,
   status         TEXT NOT NULL,              -- running | done | failed
-  attempts       INTEGER NOT NULL DEFAULT 1  -- attempts used, including invalid output
+  attempts       INTEGER NOT NULL DEFAULT 1,  -- attempts used, including invalid output
+  consistency_followup INTEGER NOT NULL DEFAULT 0,  -- a sibling-consistency follow-up call ran (not counted in attempts)
+  consistency_used     INTEGER NOT NULL DEFAULT 0  -- its result replaced the original extraction
 );
 
 CREATE TABLE run_input (

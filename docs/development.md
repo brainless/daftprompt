@@ -107,6 +107,20 @@ markers and may select whole blocks or smaller segment ranges.
   out, then returned as an explicit `ParseError`. Provider errors and per-attempt
   timeouts fail fast with `ParseError::Provider` / `ParseError::Timeout`; they do not
   consume further attempts, so worst-case latency is one timeout.
+- Sibling consistency follow-up (Epic 005): after an extraction validates, Rust groups the
+  `item` and `section` children of each parent (top-level blocks share a virtual root) by
+  kind. If a group has at least two blocks, one is exactly covered by an annotated span,
+  and a sibling has no span overlapping it or its descendants, Scribe makes ONE extra
+  model call with the same input plus corrective feedback (`ModelInput::feedback`, which
+  `RigExtractor` appends to the user prompt) naming the labelled block, its kind, and the
+  untouched sibling IDs. The call is outside the attempt budget, uses the per-call
+  timeout, and is controlled by `ScribeConfig::consistency_followup` (default on; disable
+  with `with_consistency_followup(false)`). The result is used only if it validates;
+  errors, timeouts, and invalid output keep the original extraction, so the follow-up
+  never fails a parse. Rust never adds labels itself. `Run` records
+  `consistency_followup` (a call ran) and `consistency_used` (its result replaced the
+  original); `attempts` does not count the follow-up. The live evaluation uses the default
+  config, so it includes the follow-up and costs at most one extra call per fixture.
 - Tests use the public `ExtractionModel` seam with a stub. No LLM credentials are needed
   for `cargo test --workspace`; live evaluation is opt-in (see below).
 

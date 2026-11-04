@@ -38,6 +38,9 @@ pub struct ScribeConfig {
     pub max_attempts: u32,
     /// Time allowed for one model attempt.
     pub timeout: Duration,
+    /// Allow one extra model call when sibling blocks of one kind are partly
+    /// labelled. Outside the attempt budget; default on.
+    pub consistency_followup: bool,
 }
 
 impl Default for ScribeConfig {
@@ -50,6 +53,7 @@ impl Default for ScribeConfig {
             max_segments: DEFAULT_MAX_SEGMENTS,
             max_attempts: DEFAULT_MAX_ATTEMPTS,
             timeout: DEFAULT_TIMEOUT,
+            consistency_followup: true,
         }
     }
 }
@@ -88,6 +92,12 @@ impl ScribeConfig {
     /// Set the time allowed for one model attempt.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Enable or disable the sibling-consistency follow-up call.
+    pub fn with_consistency_followup(mut self, enabled: bool) -> Self {
+        self.consistency_followup = enabled;
         self
     }
 

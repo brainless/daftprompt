@@ -186,6 +186,8 @@ fn graph_records_round_trip_as_json() {
             ended_at: Some("2026-10-31T00:00:01Z".to_owned()),
             status: RunStatus::Done,
             attempts: 1,
+            consistency_followup: false,
+            consistency_used: false,
         },
         run_inputs: vec![RunInput {
             run_id: "r1".to_owned(),
@@ -445,6 +447,8 @@ fn clarify_result_round_trips_as_json() {
             ended_at: Some("2026-10-31T00:00:01Z".to_owned()),
             status: RunStatus::Done,
             attempts: 1,
+            consistency_followup: false,
+            consistency_used: false,
         },
         run_inputs: vec![RunInput {
             run_id: "r1".to_owned(),

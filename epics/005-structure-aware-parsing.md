@@ -147,8 +147,31 @@ v4 run detects all 23 fixtures correctly and improves aggregate plain-text span
 metrics over the paired v3 baseline. It extracts all expected nested-list and
 Markdown reply units, but only 8 of 11 Epic 003 recommendations: three optional
 bullets are omitted. Full extraction-quality acceptance therefore remains open.
+
+The sibling consistency follow-up (above) is implemented with deterministic stub tests
+and targets the omitted bullets. Its effect on the live Epic 003 fixture has not yet been
+measured; rerun the live evaluation to confirm.
 Prompt experiments reached 11/11 while regressing plain-text precision, so that
 variant was not retained. See [the recorded comparison and limitations](../docs/development.md#recorded-structure-aware-results-2026-11-04).
+
+## Sibling consistency follow-up
+
+Models often label only the first of several sibling bullets under a heading. Rust cannot
+decide the labels, but it can see the gap. After an extraction validates, Rust groups the
+`item` blocks and the `section` blocks of each parent separately (top-level blocks share a
+virtual root), so a sub-heading is never required to match bullet siblings. In a group of
+at least two, if one block is exactly covered by an annotated span and a sibling has no
+span overlapping it or its descendants, Scribe makes one more model call with the same
+input plus feedback naming the labelled block, its kind, and the untouched sibling IDs.
+A parent labelled as a whole covers its children and is not a gap; plain text has no gaps.
+
+- The model still proposes every annotation; Rust never copies a label onto a block.
+- The call is outside `max_attempts`, uses the per-call timeout, and is controlled by
+  `ScribeConfig::consistency_followup` (default on).
+- The follow-up is accepted only if it validates. Errors, timeouts, and invalid output keep
+  the original extraction, so it never turns a success into an error.
+- `Run.consistency_followup` and `Run.consistency_used` record whether it ran and whether
+  its result was used. The system prompt is unchanged, so the prompt version is too.
 
 ## Open questions
 

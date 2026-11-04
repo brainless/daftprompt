@@ -10,6 +10,7 @@
 //! use [`ExtractionModel`] stubs and never need model credentials.
 
 mod config;
+mod consistency;
 mod graph;
 mod model;
 pub mod prompt;
@@ -108,6 +109,7 @@ impl<M: ExtractionModel> Scribe<M> {
                 prompt::render_structure(text, &tree)
             },
             content_type,
+            feedback: None,
         };
         let max_attempts = self.config.effective_max_attempts();
         let mut last_invalid = "no attempt ran".to_owned();
@@ -136,6 +138,9 @@ impl<M: ExtractionModel> Scribe<M> {
                 }
                 Ok(Ok(extraction)) => match validate::validate(text, &extraction, &tree) {
                     Ok(validated) => {
+                        let (extraction, validated, followup) = self
+                            .consistency_followup(text, &tree, &input, extraction, validated)
+                            .await;
                         return graph::build(
                             &request,
                             &extraction,
@@ -144,6 +149,7 @@ impl<M: ExtractionModel> Scribe<M> {
                             run_id,
                             started_at,
                             attempt,
+                            followup,
                         );
                     }
                     Err(error) => {
@@ -158,6 +164,67 @@ impl<M: ExtractionModel> Scribe<M> {
             attempts: max_attempts,
         })
     }
+}
+
+impl<M: ExtractionModel> Scribe<M> {
+    /// One optional follow-up when sibling blocks of one kind are partly labelled.
+    ///
+    /// The model proposes every label; Rust only detects the gap and asks again.
+    /// The follow-up is outside the attempt budget, uses the per-call timeout,
+    /// and can never fail the parse: any error, timeout, or invalid output keeps
+    /// the original valid extraction.
+    async fn consistency_followup(
+        &self,
+        text: &str,
+        tree: &crate::text::structure::Structure,
+        input: &ModelInput,
+        extraction: daftprompt_types::Extraction,
+        validated: validate::ValidatedExtraction,
+    ) -> (
+        daftprompt_types::Extraction,
+        validate::ValidatedExtraction,
+        ConsistencyOutcome,
+    ) {
+        let none = ConsistencyOutcome::default();
+        if !self.config.consistency_followup || self.config.legacy_v3 {
+            return (extraction, validated, none);
+        }
+        let gaps = consistency::sibling_gaps(tree, &extraction, &validated);
+        if gaps.is_empty() {
+            return (extraction, validated, none);
+        }
+        let mut followup_input = input.clone();
+        followup_input.feedback = Some(consistency::feedback(&gaps));
+        let outcome =
+            tokio::time::timeout(self.config.timeout, self.model.extract(followup_input)).await;
+        if let Ok(Ok(second)) = outcome
+            && let Ok(second_validated) = validate::validate(text, &second, tree)
+        {
+            return (
+                second,
+                second_validated,
+                ConsistencyOutcome {
+                    ran: true,
+                    used: true,
+                },
+            );
+        }
+        (
+            extraction,
+            validated,
+            ConsistencyOutcome {
+                ran: true,
+                used: false,
+            },
+        )
+    }
+}
+
+/// What the sibling-consistency follow-up did, recorded on the run.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ConsistencyOutcome {
+    pub(crate) ran: bool,
+    pub(crate) used: bool,
 }
 
 impl Scribe<RigExtractor> {
