@@ -12,8 +12,8 @@
 //!   endpoints work through `OPENAI_BASE_URL`) or `neuralwatt`.
 //! - `DAFTPROMPT_EVAL_MODEL` — model id, default `gpt-4o-mini` for `openai`
 //!   and `qwen3.6-35b-fast` for `neuralwatt`.
-//! - `DAFTPROMPT_EVAL_PROMPT_VERSION` — optional guard; must equal the
-//!   compiled prompt version (currently `scribe-v3`).
+//! - `DAFTPROMPT_EVAL_PROMPT_VERSION` — `scribe-v4` (default) or `scribe-v3`
+//!   for the original prompt, segment rendering and segment-only output schema.
 //! - `DAFTPROMPT_EVAL_MAX_ATTEMPTS` — total attempts, default 3.
 //! - `DAFTPROMPT_EVAL_TIMEOUT_SECS` — per-attempt timeout, default 60.
 //! - `OPENAI_API_KEY` — read by the provider client, never by this crate.
@@ -96,13 +96,23 @@ async fn run() -> Result<ExitCode, String> {
     let max_attempts = env_u32("DAFTPROMPT_EVAL_MAX_ATTEMPTS", DEFAULT_MAX_ATTEMPTS)?;
     let timeout_secs = env_u64("DAFTPROMPT_EVAL_TIMEOUT_SECS", DEFAULT_TIMEOUT.as_secs())?;
     let timeout = Duration::from_secs(timeout_secs);
-    let requested_prompt = env_string("DAFTPROMPT_EVAL_PROMPT_VERSION");
+    let requested_prompt =
+        env_string("DAFTPROMPT_EVAL_PROMPT_VERSION").unwrap_or_else(|| PROMPT_VERSION.to_owned());
+    if !matches!(requested_prompt.as_str(), "scribe-v3" | "scribe-v4") {
+        return Err("DAFTPROMPT_EVAL_PROMPT_VERSION must be scribe-v3 or scribe-v4".into());
+    }
+    let legacy_v3 = requested_prompt == "scribe-v3";
     let live = env_flag("DAFTPROMPT_EVAL_LIVE");
 
     let metadata = RunMetadata {
         provider: Some(provider.clone()),
         model: Some(model.clone()),
-        prompt_version: PROMPT_VERSION.to_owned(),
+        prompt_version: if legacy_v3 {
+            "scribe-v3"
+        } else {
+            "scribe-v4+plain-v1 / scribe-v4+markdown-v1"
+        }
+        .to_owned(),
         max_attempts,
         timeout,
         fixtures_path: options.fixtures.clone(),
@@ -125,15 +135,6 @@ async fn run() -> Result<ExitCode, String> {
         return finish(&options.output, &report, ExitCode::from(2));
     }
 
-    if let Some(requested) = &requested_prompt
-        && requested != PROMPT_VERSION
-    {
-        report.not_run = Some(format!(
-            "prompt version {requested:?} was requested, but this build contains only {PROMPT_VERSION:?}. Add a new versioned prompt file and rebuild to evaluate another revision."
-        ));
-        return finish(&options.output, &report, ExitCode::from(2));
-    }
-
     let completion_model = match build_model(&provider, &model) {
         Ok(model) => model,
         Err(error) => {
@@ -143,26 +144,32 @@ async fn run() -> Result<ExitCode, String> {
             return finish(&options.output, &report, ExitCode::from(2));
         }
     };
-    let config = ScribeConfig::new()
+    let mut config = ScribeConfig::new()
         .with_provider(provider)
         .with_model(model)
         .with_max_attempts(max_attempts)
         .with_timeout(timeout);
-    let scribe = Scribe::from_rig_model(config, completion_model);
+    config.legacy_v3 = legacy_v3;
+    let scribe: Box<dyn daftprompt_core::Parser> = if legacy_v3 {
+        Box::new(Scribe::new(config, BaselineModel::new(completion_model)))
+    } else {
+        Box::new(Scribe::from_rig_model(config, completion_model))
+    };
 
     println!(
         "running {} fixture(s) with prompt {} and {} total attempt(s)",
         fixtures.len(),
-        PROMPT_VERSION,
+        requested_prompt,
         max_attempts.max(1)
     );
 
     for fixture in &fixtures {
-        let request = match &fixture.source {
+        let mut request = match &fixture.source {
             Some(source) => ParseRequest::with_source(fixture.text.clone(), source.clone()),
             None => ParseRequest::new(fixture.text.clone()),
         };
 
+        request.content_type = Some(fixture.content_type);
         let started = Instant::now();
         let outcome = scribe.parse(request).await;
         let latency_ms = started.elapsed().as_secs_f64() * 1_000.0;
@@ -379,5 +386,79 @@ fn env_u64(name: &str, default: u64) -> Result<u64, String> {
             .parse()
             .map_err(|_| format!("{name} expects an integer, got {value:?}")),
         None => Ok(default),
+    }
+}
+
+// Preserve the original v3 submit schema as well as its prompt and rendering:
+// using the extended v4 schema would confound the baseline comparison.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+struct BaselineExtraction {
+    #[serde(default)]
+    spans: Vec<BaselineSpan>,
+    #[serde(default)]
+    annotations: Vec<daftprompt_types::ExtractedAnnotation>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+struct BaselineSpan {
+    id: String,
+    start_segment: u32,
+    end_segment: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    quote: Option<String>,
+}
+
+struct BaselineModel(rig::extractor::Extractor<BaselineExtraction>);
+
+impl BaselineModel {
+    fn new(model: DynModel<Completion>) -> Self {
+        Self(
+            rig::extractor::ExtractorBuilder::new(model)
+                .append_preamble(include_str!("../../prompts/scribe-v3.md"))
+                .retries(0)
+                .build(),
+        )
+    }
+}
+
+impl daftprompt_core::ExtractionModel for BaselineModel {
+    fn extract(
+        &self,
+        input: daftprompt_core::ModelInput,
+    ) -> daftprompt_core::BoxFuture<
+        '_,
+        Result<daftprompt_types::Extraction, daftprompt_core::ModelError>,
+    > {
+        Box::pin(async move {
+            use daftprompt_core::ModelError;
+            use rig::completion::StructuredOutputError;
+            let response = self
+                .0
+                .extract(input.segments)
+                .await
+                .map_err(|error| match error {
+                    StructuredOutputError::Deserialization { error, .. } => {
+                        ModelError::Invalid(error.to_string())
+                    }
+                    StructuredOutputError::EmptyResponse => {
+                        ModelError::Invalid("the model did not call submit".into())
+                    }
+                    StructuredOutputError::Prompt(error) => ModelError::Provider(error.to_string()),
+                })?;
+            Ok(daftprompt_types::Extraction {
+                spans: response
+                    .output
+                    .spans
+                    .into_iter()
+                    .map(|span| daftprompt_types::ExtractedSpan::Segments {
+                        id: span.id,
+                        start_segment: span.start_segment,
+                        end_segment: span.end_segment,
+                        quote: span.quote,
+                    })
+                    .collect(),
+                annotations: response.output.annotations,
+            })
+        })
     }
 }

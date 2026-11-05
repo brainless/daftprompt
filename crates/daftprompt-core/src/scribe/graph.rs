@@ -15,6 +15,7 @@ use super::support::{content_hash, new_id, now};
 use super::validate::ValidatedExtraction;
 
 /// Build the complete parse result for an accepted extraction.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build(
     request: &ParseRequest,
     extraction: &daftprompt_types::Extraction,
@@ -23,7 +24,9 @@ pub(crate) fn build(
     run_id: String,
     started_at: String,
     attempts: u32,
+    consistency: super::ConsistencyOutcome,
 ) -> Result<ParseResult, daftprompt_types::ParseError> {
+    let (content_type, content_type_source) = crate::text::structure::resolve_content_type(request);
     let created_at = now();
     let payload_hash = content_hash(&request.text);
     let payload = Payload {
@@ -161,11 +164,20 @@ pub(crate) fn build(
         agent: "scribe".to_owned(),
         provider: config.provider.clone(),
         model: config.model.clone(),
-        prompt_version: Some(prompt::PROMPT_VERSION.to_owned()),
+        prompt_version: Some(
+            if config.legacy_v3 {
+                "scribe-v3"
+            } else {
+                prompt::prompt_version(content_type)
+            }
+            .to_owned(),
+        ),
         started_at,
         ended_at: Some(now()),
         status: RunStatus::Done,
         attempts,
+        consistency_followup: consistency.ran,
+        consistency_used: consistency.used,
     };
 
     let run_inputs = vec![RunInput {
@@ -183,6 +195,8 @@ pub(crate) fn build(
     }];
 
     Ok(ParseResult {
+        content_type,
+        content_type_source,
         payload,
         source: request.source.clone(),
         nodes,

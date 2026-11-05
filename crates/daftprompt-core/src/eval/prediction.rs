@@ -177,7 +177,10 @@ impl Prediction {
                         });
                     }
                 }
-                LabelKind::Conflict | LabelKind::Supersedes | LabelKind::Stale => {}
+                LabelKind::Conflict
+                | LabelKind::Supersedes
+                | LabelKind::Stale
+                | LabelKind::Clarification => {}
             }
         }
 

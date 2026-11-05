@@ -25,6 +25,14 @@ pub enum ParseError {
     /// The model output stayed invalid after the attempt budget ran out.
     #[serde(rename = "invalid_output")]
     InvalidOutput { detail: String, attempts: u32 },
+    /// The submitted source text does not hash to the `payload_hash` the
+    /// client supplied, so the target would not refer to the same payload.
+    #[serde(rename = "payload_mismatch")]
+    PayloadMismatch { detail: String },
+    /// A clarification target is out of bounds, empty, or not on `char`
+    /// boundaries of the source text.
+    #[serde(rename = "invalid_target")]
+    InvalidTarget { detail: String },
     /// The model provider failed.
     #[serde(rename = "provider_error")]
     Provider { detail: String },
@@ -43,6 +51,8 @@ impl ParseError {
             Self::InvalidRequest { .. } => "invalid_request",
             Self::OversizedInput { .. } => "oversized_input",
             Self::InvalidOutput { .. } => "invalid_output",
+            Self::PayloadMismatch { .. } => "payload_mismatch",
+            Self::InvalidTarget { .. } => "invalid_target",
             Self::Provider { .. } => "provider_error",
             Self::Timeout { .. } => "timeout",
             Self::Internal { .. } => "internal_error",
@@ -61,6 +71,8 @@ impl fmt::Display for ParseError {
                     "invalid model output after {attempts} attempt(s): {detail}"
                 )
             }
+            Self::PayloadMismatch { detail } => write!(f, "payload mismatch: {detail}"),
+            Self::InvalidTarget { detail } => write!(f, "invalid target: {detail}"),
             Self::Provider { detail } => write!(f, "provider failure: {detail}"),
             Self::Timeout { detail } => write!(f, "model call timed out: {detail}"),
             Self::Internal { detail } => write!(f, "internal error: {detail}"),

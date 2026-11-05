@@ -110,6 +110,9 @@ pub enum LabelKind {
     Supersedes,
     /// Unary: the source was built on superseded or changed content.
     Stale,
+    /// Binary: the source question opens a clarification branch about the
+    /// destination. Non-blocking, with NULL status.
+    Clarification,
 }
 
 impl LabelKind {
@@ -122,6 +125,7 @@ impl LabelKind {
                 | Self::AlternativeTo
                 | Self::Conflict
                 | Self::Supersedes
+                | Self::Clarification
         )
     }
 
@@ -195,6 +199,13 @@ pub struct Run {
     /// Total attempts used, including failed deserialization and validation
     /// attempts. Always at least 1 for a started run.
     pub attempts: u32,
+    /// Whether a sibling-consistency follow-up model call ran after a valid
+    /// extraction. It is outside the attempt budget and not counted in `attempts`.
+    #[serde(default)]
+    pub consistency_followup: bool,
+    /// Whether the follow-up's extraction replaced the original one.
+    #[serde(default)]
+    pub consistency_used: bool,
 }
 
 /// One node an agent run took as input.
@@ -240,6 +251,10 @@ pub struct SpanInfo {
 /// persistence and no conversation history.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParseResult {
+    /// Format used for this run, never a property of the immutable payload.
+    pub content_type: crate::ContentType,
+    /// How the run selected its format.
+    pub content_type_source: crate::ContentTypeSource,
     /// The immutable payload holding the complete original text.
     pub payload: Payload,
     /// Provenance supplied with the request, preserved unchanged. `None` when
@@ -253,5 +268,91 @@ pub struct ParseResult {
     /// Run metadata for the Scribe run that produced this fragment.
     pub run: Run,
     pub run_inputs: Vec<RunInput>,
+    pub tool_calls: Vec<ToolCall>,
+}
+
+/// Whether an explanation was grounded in project files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Grounding {
+    /// Read-only project tools were available (a project root is configured).
+    Project,
+    /// Only the submitted text was available; there are no file citations.
+    TextOnly,
+}
+
+/// Where one citation points, in coordinates computed by Rust.
+///
+/// Clients render these and never recompute them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CitationLocation {
+    /// Whole lines of a project file. Lines are 1-based and inclusive here,
+    /// for display; the context's range is end-exclusive.
+    File {
+        path: String,
+        start_line: u32,
+        end_line: u32,
+    },
+    /// A half-open byte range `[start, end)` of the source payload, on `char`
+    /// boundaries.
+    Source { start_byte: usize, end_byte: usize },
+}
+
+/// One validated citation of an explanation, for rendering.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CitationInfo {
+    /// 1-based position, matching `[n]` markers in the explanation.
+    pub index: u32,
+    /// The explanation node's context that holds this citation.
+    pub context_id: String,
+    pub location: CitationLocation,
+}
+
+/// The numbered source segments an Explainer run was given, as 1-based
+/// inclusive segment numbers and the byte range they cover.
+///
+/// Rust records it so a reader can see exactly what text the agent saw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceWindow {
+    pub start_segment: u32,
+    pub end_segment: u32,
+    pub start_byte: usize,
+    pub end_byte: usize,
+}
+
+/// The validated graph fragment produced by one clarification turn.
+///
+/// It holds only the new question and explanation records, the `clarification`
+/// label on a first turn, and run metadata. It never adds or changes
+/// `question`, `answer`, `recommendation`, `task`, `conflict`, `supersedes`,
+/// or `stale` labels, and never alters a status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClarifyResult {
+    /// The user's question text, unchanged.
+    pub question_payload: Payload,
+    /// The agent's explanation text.
+    pub explanation_payload: Payload,
+    /// Payloads holding tool outputs, referenced by `tool_calls`.
+    pub tool_payloads: Vec<Payload>,
+    pub question_node_id: String,
+    pub explanation_node_id: String,
+    /// The question node and the explanation node.
+    pub nodes: Vec<Node>,
+    /// Question context, explanation context (`seq 0`), then citations.
+    pub node_contexts: Vec<NodeContext>,
+    /// One `clarification` label on a first turn; empty on a follow-up.
+    pub labels: Vec<Label>,
+    /// Validated citations in citation order.
+    pub citations: Vec<CitationInfo>,
+    pub grounding: Grounding,
+    /// The source segments the agent was given. `None` only in results
+    /// produced before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_window: Option<SourceWindow>,
+    /// Run metadata for the Explainer run.
+    pub run: Run,
+    pub run_inputs: Vec<RunInput>,
+    /// Every tool invocation, including `submit`.
     pub tool_calls: Vec<ToolCall>,
 }

@@ -1,0 +1,24 @@
+{
+  "format_version": 1,
+  "id": "defined-in-source",
+  "category": "defined_in_source",
+  "note": "The term is defined only in the submitted text; the project never mentions it.",
+  "source": {
+    "kind": "file"
+  },
+  "text": "Rollout plan.\nA canary ring is a small group of internal accounts that receive each build first.\nAfter two clean days we promote the build to the canary ring and then everyone.\n",
+  "target": {
+    "start": 121,
+    "end": 157,
+    "quote": "promote the build to the canary ring"
+  },
+  "question": "What is the canary ring?",
+  "expected": {
+    "files": [],
+    "source_quotes": [
+      "A canary ring is a small group of internal accounts that receive each build first."
+    ],
+    "not_found": false,
+    "injection_marker": null
+  }
+}

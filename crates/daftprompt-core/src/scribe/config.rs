@@ -22,6 +22,9 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 /// model call; oversized input is rejected, never truncated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScribeConfig {
+    /// Evaluation compatibility: render segment-only v3 input and record v3.
+    /// Use with an extractor built with the original v3 prompt/schema.
+    pub legacy_v3: bool,
     /// Provider identifier recorded on the run, for example `openai`.
     pub provider: Option<String>,
     /// Model identifier recorded on the run, for example `gpt-4o-mini`.
@@ -35,17 +38,22 @@ pub struct ScribeConfig {
     pub max_attempts: u32,
     /// Time allowed for one model attempt.
     pub timeout: Duration,
+    /// Allow one extra model call when sibling blocks of one kind are partly
+    /// labelled. Outside the attempt budget; default on.
+    pub consistency_followup: bool,
 }
 
 impl Default for ScribeConfig {
     fn default() -> Self {
         Self {
+            legacy_v3: false,
             provider: None,
             model: None,
             max_input_bytes: DEFAULT_MAX_INPUT_BYTES,
             max_segments: DEFAULT_MAX_SEGMENTS,
             max_attempts: DEFAULT_MAX_ATTEMPTS,
             timeout: DEFAULT_TIMEOUT,
+            consistency_followup: true,
         }
     }
 }
@@ -84,6 +92,12 @@ impl ScribeConfig {
     /// Set the time allowed for one model attempt.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Enable or disable the sibling-consistency follow-up call.
+    pub fn with_consistency_followup(mut self, enabled: bool) -> Self {
+        self.consistency_followup = enabled;
         self
     }
 

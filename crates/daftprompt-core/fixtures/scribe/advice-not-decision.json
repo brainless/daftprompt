@@ -47,5 +47,7 @@
       "to": "e1"
     }
   ],
-  "alternative_links": []
+  "alternative_links": [],
+  "content_type": "plain",
+  "expected_detection": "plain"
 }

@@ -94,7 +94,7 @@ fn config() -> ScribeConfig {
 }
 
 fn span(id: &str, start: u32, end: u32) -> ExtractedSpan {
-    ExtractedSpan {
+    ExtractedSpan::Segments {
         id: id.to_owned(),
         start_segment: start,
         end_segment: end,
@@ -103,7 +103,7 @@ fn span(id: &str, start: u32, end: u32) -> ExtractedSpan {
 }
 
 fn quoted(id: &str, start: u32, end: u32, quote: &str) -> ExtractedSpan {
-    ExtractedSpan {
+    ExtractedSpan::Segments {
         id: id.to_owned(),
         start_segment: start,
         end_segment: end,
@@ -219,7 +219,10 @@ async fn empty_extraction_builds_payload_root_and_run_metadata() {
     assert_eq!(result.run.agent, "scribe");
     assert_eq!(result.run.provider.as_deref(), Some("test-provider"));
     assert_eq!(result.run.model.as_deref(), Some("stub-model"));
-    assert_eq!(result.run.prompt_version.as_deref(), Some("scribe-v3"));
+    assert_eq!(
+        result.run.prompt_version.as_deref(),
+        Some("scribe-v4+plain-v1")
+    );
     assert_eq!(result.run.status, RunStatus::Done);
     assert_eq!(result.run.attempts, 1);
     assert!(result.run.ended_at.is_some());
@@ -673,7 +676,10 @@ async fn the_model_sees_numbered_segments_without_crlf() {
         .await
         .expect("parse succeeds");
 
-    assert_eq!(scribe.model().inputs(), vec!["[1] a\n[2] b"]);
+    assert_eq!(
+        scribe.model().inputs(),
+        vec!["{b1 paragraph 1-2}\n[1] a\n[2] b"]
+    );
 }
 
 // ---------------------------------------------------------------------------

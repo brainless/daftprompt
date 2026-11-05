@@ -15,6 +15,7 @@ akar-layout.workspace = true
 akar-components.workspace = true
 akar-winit.workspace = true
 ureq.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 wgpu.workspace = true
 winit.workspace = true

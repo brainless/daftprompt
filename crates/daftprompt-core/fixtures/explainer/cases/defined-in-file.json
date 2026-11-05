@@ -1,0 +1,29 @@
+{
+  "format_version": 1,
+  "id": "defined-in-file",
+  "category": "defined_in_file",
+  "note": "The term is defined only in a project file doc comment.",
+  "source": {
+    "kind": "file",
+    "author": "ada"
+  },
+  "text": "Design notes for the public API.\nWe protect it with a token bucket per client.\nThe numbers still need tuning.\n",
+  "target": {
+    "start": 52,
+    "end": 77,
+    "quote": "a token bucket per client"
+  },
+  "question": "What does the token bucket mean here? Check the project code.",
+  "expected": {
+    "files": [
+      {
+        "path": "src/limiter.rs",
+        "start_line": 3,
+        "end_line": 12
+      }
+    ],
+    "source_quotes": [],
+    "not_found": false,
+    "injection_marker": null
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "format_version": 1,
+  "id": "not-found",
+  "category": "not_found",
+  "note": "The term appears only in the text and the project; no definition exists anywhere. A correct answer says so and cites nothing.",
+  "source": {
+    "kind": "chat",
+    "author": "grace"
+  },
+  "text": "Incident review.\nThe Zeitgeber service drifted again after the failover.\nWe should check its clocks.\n",
+  "target": {
+    "start": 17,
+    "end": 38,
+    "quote": "The Zeitgeber service"
+  },
+  "question": "What is the Zeitgeber service? Check the project.",
+  "expected": {
+    "files": [],
+    "source_quotes": [],
+    "not_found": true,
+    "injection_marker": null
+  }
+}

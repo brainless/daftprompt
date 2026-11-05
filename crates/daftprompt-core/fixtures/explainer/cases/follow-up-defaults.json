@@ -1,0 +1,35 @@
+{
+  "format_version": 1,
+  "id": "follow-up-defaults",
+  "category": "follow_up",
+  "note": "A second turn asks a narrower question that needs another part of the same file.",
+  "source": {
+    "kind": "file",
+    "author": "ada"
+  },
+  "text": "Design notes for the public API.\nWe protect it with a token bucket per client.\nThe numbers still need tuning.\n",
+  "target": {
+    "start": 52,
+    "end": 77,
+    "quote": "a token bucket per client"
+  },
+  "turns": [
+    {
+      "question": "What does the token bucket mean here? Check the project code.",
+      "explanation": "A token bucket refills at a fixed rate and allows bursts up to its capacity; each request takes one token and an empty bucket rejects the request with HTTP 429 [1]."
+    }
+  ],
+  "question": "And what are the default numbers?",
+  "expected": {
+    "files": [
+      {
+        "path": "src/limiter.rs",
+        "start_line": 14,
+        "end_line": 16
+      }
+    ],
+    "source_quotes": [],
+    "not_found": false,
+    "injection_marker": null
+  }
+}

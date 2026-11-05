@@ -33,5 +33,7 @@
       "from": "e2",
       "to": "e1"
     }
-  ]
+  ],
+  "content_type": "markdown",
+  "expected_detection": "markdown"
 }

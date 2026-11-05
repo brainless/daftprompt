@@ -1,8 +1,8 @@
 //! The model-facing extraction contract.
 //!
 //! This is the schema handed to Rig's schema-defined `submit` output tool.
-//! The model proposes spans by segment reference plus an optional verbatim
-//! quote, and annotations by referencing span IDs. It never produces byte
+//! The model proposes spans by block ID or segment reference plus an optional
+//! verbatim quote, and annotations by referencing span IDs. It never produces byte
 //! offsets, IDs of graph records, statuses, or timestamps.
 //!
 //! `schemars` derives the tool schema; `serde` deserializes the submitted
@@ -27,21 +27,40 @@ pub struct Extraction {
 
 /// A source span proposed by the model.
 ///
-/// `start_segment` and `end_segment` are 1-based inclusive segment numbers as
-/// presented in the prompt. IDs are local to this extraction; Rust maps them
-/// to generated node IDs.
+/// Select either a Rust-built block or 1-based inclusive segment numbers with
+/// an optional quote. Mixed reference forms are rejected during deserialization.
+/// IDs are local to this extraction; Rust maps them to generated node IDs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ExtractedSpan {
-    /// Local identifier referenced by annotations, for example `s1`.
-    pub id: String,
-    /// First segment of the span, 1-based and inclusive.
-    pub start_segment: u32,
-    /// Last segment of the span, 1-based and inclusive.
-    pub end_segment: u32,
-    /// Optional verbatim excerpt from the segment range. When present it must
-    /// match the original text exactly and occur exactly once.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quote: Option<String>,
+#[serde(untagged, deny_unknown_fields)]
+pub enum ExtractedSpan {
+    /// Select one complete Rust-built block. No quote or segment range is allowed.
+    Block {
+        /// Extraction-local identifier referenced by annotations.
+        id: String,
+        /// Local block identifier, for example `b8`.
+        block: String,
+    },
+    /// Select an inclusive segment range, optionally narrowed by a quote.
+    Segments {
+        /// Extraction-local identifier referenced by annotations.
+        id: String,
+        /// First segment, 1-based and inclusive.
+        start_segment: u32,
+        /// Last segment, 1-based and inclusive.
+        end_segment: u32,
+        /// Optional verbatim excerpt occurring exactly once in the range.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quote: Option<String>,
+    },
+}
+
+impl ExtractedSpan {
+    /// The extraction-local identifier shared by both reference forms.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Block { id, .. } | Self::Segments { id, .. } => id,
+        }
+    }
 }
 
 /// A label attached to one span.
@@ -84,4 +103,43 @@ pub enum AnnotationKind {
     Recommendation,
     /// An outstanding requested or committed action.
     Task,
+}
+
+/// One complete Explainer result, submitted through its `submit` output tool.
+///
+/// The model returns an explanation and the sources it used. It never
+/// produces IDs, hashes, byte offsets, labels, or statuses: Rust validates
+/// every citation and builds the records.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExplainerExtraction {
+    /// Non-empty plain-text explanation. It may reference citations as `[1]`,
+    /// `[2]`, ... numbered from 1 in `citations` order.
+    pub explanation: String,
+    /// Sources the explanation relied on. Empty is valid when nothing
+    /// relevant was found.
+    #[serde(default)]
+    pub citations: Vec<ExplainerCitation>,
+}
+
+/// A source cited by an explanation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ExplainerCitation {
+    /// Lines of a project file. The range must lie within lines a `read_file`
+    /// call returned in the same run.
+    File {
+        /// Path relative to the project root.
+        path: String,
+        /// First line, 1-based and inclusive.
+        start_line: u32,
+        /// Last line, 1-based and inclusive.
+        end_line: u32,
+    },
+    /// Segments of the source window the agent was given.
+    Source {
+        /// First segment, 1-based and inclusive, as numbered in the prompt.
+        start_segment: u32,
+        /// Last segment, 1-based and inclusive.
+        end_segment: u32,
+    },
 }

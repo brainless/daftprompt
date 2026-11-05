@@ -1,0 +1,34 @@
+{
+  "format_version": 1,
+  "id": "ambiguous-quota",
+  "category": "ambiguous",
+  "note": "'quota' has two different meanings in two project files; a good answer cites both and does not merge them.",
+  "source": {
+    "kind": "email",
+    "author": "support"
+  },
+  "text": "Customer escalation.\nThe customer says they hit their quota and cannot continue.\nPlease look into it today.\n",
+  "target": {
+    "start": 44,
+    "end": 59,
+    "quote": "hit their quota"
+  },
+  "question": "What does quota mean in this context? Look at the project.",
+  "expected": {
+    "files": [
+      {
+        "path": "src/billing.rs",
+        "start_line": 3,
+        "end_line": 6
+      },
+      {
+        "path": "src/storage.rs",
+        "start_line": 3,
+        "end_line": 5
+      }
+    ],
+    "source_quotes": [],
+    "not_found": false,
+    "injection_marker": null
+  }
+}

@@ -65,5 +65,7 @@
       "from": "e3",
       "to": "e2"
     }
-  ]
+  ],
+  "content_type": "plain",
+  "expected_detection": "plain"
 }

@@ -21,6 +21,7 @@ rig = { workspace = true, features = ["reqwest", "rustls"] }
 
 [dev-dependencies]
 tower.workspace = true
+sha2.workspace = true
 
 [lints.cargo]
 # Wired in now so the dependency direction is fixed; the parse route uses the

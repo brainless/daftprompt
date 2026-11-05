@@ -73,6 +73,24 @@ The JSON request envelope is capped at six times the text limit plus 16 KiB, so
 JSON escaping and optional source metadata have room without hiding an
 oversized submission from the parser.
 
+## Text format
+
+`ParseRequest.content_type` is optional: `plain` or `markdown`. Omit it (or use
+`null`) for deterministic detection in core; unknown values return HTTP 400 before
+calling Scribe. Source provenance is independent: a file or email can use either
+format. A `.md` source reference alone does not establish Markdown.
+
+Every successful result includes top-level `content_type` (the format used) and
+`content_type_source` (`declared` or `detected`). These describe this parsing run,
+not the immutable payload. For example, `{"text":"# Plan","content_type":"plain"}`
+returns `"content_type":"plain","content_type_source":"declared"`; omitting the
+declaration returns `"content_type":"markdown","content_type_source":"detected"`.
+Scribe records `scribe-v4+plain-v1` or `scribe-v4+markdown-v1` in
+`run.prompt_version`. Rust computes paragraph or Markdown block boundaries; the
+model selects whole blocks or narrower segment ranges, and the result retains
+original byte ranges. The GUI displays the returned format and its source and
+offers no content-type override.
+
 ## Sample request
 
 ```sh
@@ -119,6 +137,8 @@ Abbreviated example (IDs, hashes, and timestamps vary):
 
 ```json
 {
+  "content_type": "plain",
+  "content_type_source": "detected",
   "payload": {
     "hash": "6b6f…",
     "content": "Plan\nShould we cache tokens? @infra-team\nYes, cache them.\n",
@@ -143,7 +163,7 @@ Abbreviated example (IDs, hashes, and timestamps vary):
     { "node_id": "node-s1", "display_id": 1, "start_byte": 5, "end_byte": 28 },
     { "node_id": "node-s2", "display_id": 2, "start_byte": 42, "end_byte": 58 }
   ],
-  "run": { "id": "run-1", "agent": "scribe", "provider": "openai", "model": "gpt-4o-mini", "prompt_version": "scribe-v3", "started_at": "…", "ended_at": "…", "status": "done", "attempts": 1 },
+  "run": { "id": "run-1", "agent": "scribe", "provider": "openai", "model": "gpt-4o-mini", "prompt_version": "scribe-v4+plain-v1", "started_at": "…", "ended_at": "…", "status": "done", "attempts": 1, "consistency_followup": false, "consistency_used": false },
   "run_inputs": [{ "run_id": "run-1", "node_id": "node-root" }],
   "tool_calls": [{ "id": "tool-1", "run_id": "run-1", "seq": 0, "tool": "submit", "input": "{...}", "output_hash": null, "created_at": "…" }]
 }
@@ -205,3 +225,132 @@ the client displays **#4 answers #1**, and #1 is resolved. A standalone
 recommendation emits no fabricated `recommendation_for` link. Explicit alternatives
 use the same node-ID lookup at both ends and display symmetrically, irrespective
 of stored direction. The API remains `POST /parse`; there are no new endpoints.
+
+## `POST /clarify` (Epic 004)
+
+`POST /clarify` explains one extracted span for one question. It is stateless
+like `/parse`: the client sends the original text, the target span, and any
+earlier turns of the branch; the response is one validated graph fragment
+(a question node, an explanation node, citations, run metadata). It never
+changes the parse result, adds labels other than `clarification`, or stores
+anything. The Explainer agent is Rig-backed, with its own provider and model.
+
+### Request
+
+```sh
+curl -sS -X POST http://127.0.0.1:8080/clarify \
+  -H 'content-type: application/json' \
+  --data-binary @- <<'JSON'
+{
+  "source": {
+    "text": "We use a token bucket.\nIt refills slowly.\nThe limit is per user.",
+    "payload_hash": "<payload.hash from the parse result>",
+    "metadata": { "kind": "chat", "reference": "thread-1", "author": "ada" }
+  },
+  "target": { "node_id": "node-s1", "display_id": 1, "start_byte": 7, "end_byte": 19 },
+  "turns": [
+    {
+      "question_node_id": "node-q1",
+      "question": "What is it?",
+      "explanation_node_id": "node-e1",
+      "explanation": "A rate limiter."
+    }
+  ],
+  "question": "Why not a fixed window?",
+  "author": "ada"
+}
+JSON
+```
+
+| field | meaning |
+| --- | --- |
+| `source.text` | The complete original text |
+| `source.payload_hash` | `payload.hash` from the parse result. Rust recomputes it from `text`; a mismatch is `400 payload_mismatch` |
+| `source.metadata` | Optional provenance (`kind`, `reference`, `author`), preserved |
+| `target` | The span asked about: opaque `node_id`, display-only `display_id`, and a half-open, non-empty byte range on `char` boundaries (`400 invalid_target` otherwise) |
+| `turns` | Earlier `{question_node_id, question, explanation_node_id, explanation}` entries, oldest first. Omit on the first turn. Node IDs are recorded as given, not verified |
+| `question` | The user's question, preserved unchanged |
+| `author` | Optional human identity; the question node author, otherwise `unknown` |
+
+### Response
+
+The response is a `ClarifyResult`:
+
+| field | meaning |
+| --- | --- |
+| `question_payload`, `explanation_payload` | Payloads holding the question and the explanation (`hash`, `content`, `created_at`) |
+| `tool_payloads` | Payloads holding tool outputs, referenced by `tool_calls[].output_hash` |
+| `question_node_id`, `explanation_node_id` | IDs of the two new nodes in `nodes` |
+| `nodes` | Question node (`parent_id` = target node, or the previous explanation node on a follow-up) and explanation node (`author` `agent`) |
+| `node_contexts` | Question context, explanation context (`seq 0`), then one context per citation (`seq 1..n`) |
+| `labels` | One `clarification` label on a first turn; empty on a follow-up |
+| `citations` | `{ index, context_id, location }` in citation order; `[n]` markers in the explanation refer to `index`. `location` is `{ "kind": "file", "path", "start_line", "end_line" }` (1-based, inclusive) or `{ "kind": "source", "start_byte", "end_byte" }` (half-open bytes of `source.text`) |
+| `grounding` | `project` or `text_only` |
+| `source_window` | `{ start_segment, end_segment, start_byte, end_byte }`: the 1-based inclusive `\n`-separated segments the agent was given, and the byte range they cover. Omitted only in results produced before the field existed |
+| `run`, `run_inputs`, `tool_calls` | In-memory run metadata (agent `explainer`), including every tool call and `submit` |
+
+### Configuration
+
+| variable | default | meaning |
+| --- | --- | --- |
+| `DAFTPROMPT_EXPLAINER_PROVIDER` | `neuralwatt` | `openai` or `neuralwatt`; recorded as `run.provider`. Independent of `DAFTPROMPT_API_PROVIDER` |
+| `DAFTPROMPT_EXPLAINER_MODEL` | `glm-5.3-flash` | Model identifier recorded as `run.model` |
+| `DAFTPROMPT_PROJECT_ROOT` | unset | Directory the Explainer may read. Must exist and be a directory or startup fails. Unset means text-only mode |
+
+Credentials are the provider's own variables (`NEURALWATT_API_KEY`,
+`NEURALWATT_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`), shared with Scribe.
+Startup builds both clients, so the credentials for both providers must be
+present; with the defaults that is `NEURALWATT_API_KEY` for the Explainer.
+Input limits (`DAFTPROMPT_API_MAX_INPUT_BYTES`, `DAFTPROMPT_API_MAX_SEGMENTS`)
+apply to `source.text` too. Startup logs the grounding mode:
+
+```text
+daftprompt-api POST /clarify: explainer provider neuralwatt, model glm-5.3-flash, grounding project (root /path/to/repo)
+```
+
+or `grounding text_only`. In project mode the model gets read-only
+`list_files`, `search`, and `read_file` tools. Every path is resolved against
+the canonical root; paths that escape it (including through symlinks) and
+ignored or sensitive files are refused. A file citation is valid only for lines
+a `read_file` call returned in the same run.
+
+### Limits and defaults
+
+| limit | default |
+| --- | --- |
+| Question | 2048 bytes |
+| Earlier turns | 8 turns, 16 KiB total |
+| Source text | 32768 bytes / 1000 segments (shared with `/parse`) |
+| Source window given to the agent | 20 segments around the target |
+| Agent model calls per attempt | 12 |
+| Tool calls per attempt | 20 |
+| Citations | 20 |
+| Attempts | 3 (invalid output only) |
+| Timeout | 120 s **per attempt**, covering the whole tool loop |
+| JSON envelope | twice the `/parse` envelope (`2 * (6 * text limit + 16 KiB)`) |
+
+Oversized fields are rejected, never truncated.
+
+### Errors
+
+Same shape and statuses as `/parse`, with two more `400` kinds:
+
+| status | `kind` | when |
+| --- | --- | --- |
+| 400 | `invalid_request` | Malformed JSON, missing fields, or empty question |
+| 400 | `payload_mismatch` | `source.payload_hash` is not the SHA-256 of `source.text` |
+| 400 | `invalid_target` | The target range is empty, out of bounds, or off a `char` boundary |
+| 413 | `oversized_input` | Question, history, source, or JSON envelope over its limit |
+| 422 | `invalid_output` | No valid submission within the attempt budget (bad schema, unread file citation, bad `[n]` marker, ...) |
+| 500 | `internal_error` | Adapter or configuration failure |
+| 502 | `provider_error` | The provider request failed (not retried) |
+| 504 | `timeout` | One attempt exceeded the timeout (not retried). The worst case is one timeout |
+
+### Security
+
+The API binds to loopback and has no authentication. With
+`DAFTPROMPT_PROJECT_ROOT` set, anything that can reach the port can make the
+model read files under that root and receive their contents in explanations and
+citations. Files outside the root are never exposed, but do not point the root
+at a directory holding secrets, and do not bind the service to a non-loopback
+address without your own access control.

@@ -22,7 +22,12 @@ schemars = "1"
 
 # Shared library.
 thiserror = "2"
+pulldown-cmark = { version = "0.13.6", default-features = false }
 sha2 = "0.10"
+# Project tools: `.gitignore`-aware traversal, glob filters, and test temp dirs.
+ignore = "0.4"
+globset = "0.4"
+tempfile = "3"
 rig = { git = "https://github.com/0xPlaygrounds/rig.git", rev = "7dfd8a4229a9d89af159489687cb14b404b2871d", default-features = false, features = [
   "agent",
 ] }
@@ -38,10 +43,10 @@ http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
 
 # Native GUI.
-akar-core = { git = "https://github.com/brainless/akar.git", rev = "969079c2e3d14d1843c5e7ba2dccfb4c93c06459" }
-akar-layout = { git = "https://github.com/brainless/akar.git", rev = "969079c2e3d14d1843c5e7ba2dccfb4c93c06459" }
-akar-components = { git = "https://github.com/brainless/akar.git", rev = "969079c2e3d14d1843c5e7ba2dccfb4c93c06459" }
-akar-winit = { git = "https://github.com/brainless/akar.git", rev = "969079c2e3d14d1843c5e7ba2dccfb4c93c06459" }
+akar-core = { git = "https://github.com/brainless/akar.git", rev = "1d61c6f10d952bd3cdb395f25cf22b7246e921d0" }
+akar-layout = { git = "https://github.com/brainless/akar.git", rev = "1d61c6f10d952bd3cdb395f25cf22b7246e921d0" }
+akar-components = { git = "https://github.com/brainless/akar.git", rev = "1d61c6f10d952bd3cdb395f25cf22b7246e921d0" }
+akar-winit = { git = "https://github.com/brainless/akar.git", rev = "1d61c6f10d952bd3cdb395f25cf22b7246e921d0" }
 ureq = "3"
 # akar's host integration: akar does not re-export its winit/wgpu surface
 # types, so the app declares the same versions akar builds against.

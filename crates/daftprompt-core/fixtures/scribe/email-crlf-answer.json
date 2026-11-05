@@ -37,5 +37,7 @@
       "from": "e2",
       "to": "e1"
     }
-  ]
+  ],
+  "content_type": "plain",
+  "expected_detection": "plain"
 }

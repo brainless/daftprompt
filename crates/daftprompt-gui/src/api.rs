@@ -9,7 +9,8 @@
 use std::fmt;
 use std::time::Duration;
 
-use daftprompt_types::{ParseError, ParseRequest, ParseResult};
+use daftprompt_types::{ClarifyRequest, ClarifyResult, ParseError, ParseRequest, ParseResult};
+use serde::{Serialize, de::DeserializeOwned};
 
 /// The endpoint the API documents as its default.
 pub const DEFAULT_API_URL: &str = "http://127.0.0.1:8080/parse";
@@ -17,6 +18,20 @@ pub const DEFAULT_API_URL: &str = "http://127.0.0.1:8080/parse";
 /// The API allows three 60-second model attempts; leave room for transport and
 /// request setup before the client gives up.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// `/clarify` allows up to 120 seconds per attempt and three attempts.
+const DEFAULT_CLARIFY_TIMEOUT: Duration = Duration::from_secs(420);
+
+/// The `/clarify` endpoint that belongs with a `/parse` URL: same host, the
+/// last path segment replaced. A URL that does not end in `/parse` gets
+/// `/clarify` appended.
+pub fn clarify_url(parse_url: &str) -> String {
+    let trimmed = parse_url.trim_end_matches('/');
+    match trimmed.strip_suffix("/parse") {
+        Some(base) => format!("{base}/clarify"),
+        None => format!("{trimmed}/clarify"),
+    }
+}
 
 /// One failed parse, shaped for display.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +79,8 @@ impl ApiError {
             "internal_error" => "The API had an internal error",
             "connection" => "Could not reach the API",
             "decode" => "The API response could not be read",
+            "payload_mismatch" => "The source text does not match the parse result",
+            "invalid_target" => "The span cannot be explained",
             _ => "Parsing failed",
         }
     }
@@ -120,6 +137,7 @@ pub fn error_from_response(status: u16, body: &str) -> ApiError {
 pub struct ParseClient {
     url: String,
     timeout: Duration,
+    clarify_timeout: Duration,
 }
 
 impl ParseClient {
@@ -136,7 +154,17 @@ impl ParseClient {
             })?,
             Err(_) => DEFAULT_TIMEOUT.as_secs(),
         };
-        Ok(Self::new(url, Duration::from_secs(timeout_secs.max(1))))
+        let clarify_secs = match std::env::var("DAFTPROMPT_GUI_CLARIFY_TIMEOUT_SECS") {
+            Ok(value) => value.trim().parse::<u64>().map_err(|_| {
+                format!(
+                    "DAFTPROMPT_GUI_CLARIFY_TIMEOUT_SECS expects a positive integer, got {value:?}"
+                )
+            })?,
+            Err(_) => DEFAULT_CLARIFY_TIMEOUT.as_secs(),
+        };
+        let mut client = Self::new(url, Duration::from_secs(timeout_secs.max(1)));
+        client.clarify_timeout = Duration::from_secs(clarify_secs.max(1));
+        Ok(client)
     }
 
     /// A client for an explicit endpoint. Used by tests and by `from_env`.
@@ -144,7 +172,13 @@ impl ParseClient {
         Self {
             url: url.into(),
             timeout,
+            clarify_timeout: DEFAULT_CLARIFY_TIMEOUT,
         }
+    }
+
+    /// The endpoint `clarify` posts to.
+    pub fn clarify_url(&self) -> String {
+        clarify_url(&self.url)
     }
 
     pub fn url(&self) -> &str {
@@ -153,37 +187,60 @@ impl ParseClient {
 
     /// Parse one independent submission. There is no session or history.
     pub fn parse(&self, text: &str) -> Result<ParseResult, ApiError> {
-        let request = ParseRequest::new(text);
-        let body = serde_json::to_vec(&request)
-            .map_err(|error| ApiError::decode(format!("could not encode the request: {error}")))?;
-
-        let response = ureq::post(&self.url)
-            .config()
-            .http_status_as_error(false)
-            .timeout_global(Some(self.timeout))
-            .build()
-            .header("content-type", "application/json")
-            .header("accept", "application/json")
-            .send(&body[..]);
-
-        let mut response = match response {
-            Ok(response) => response,
-            Err(error) => return Err(ApiError::connection(error.to_string())),
-        };
-
-        let status = response.status().as_u16();
-        let text = response.body_mut().read_to_string().map_err(|error| {
-            ApiError::connection(format!("could not read the response: {error}"))
-        })?;
-
-        if !(200..300).contains(&status) {
-            return Err(error_from_response(status, &text));
-        }
-
-        serde_json::from_str::<ParseResult>(&text).map_err(|error| {
-            ApiError::decode(format!("the response is not a ParseResult: {error}"))
-        })
+        post_json(
+            &self.url,
+            self.timeout,
+            &ParseRequest::new(text),
+            "ParseResult",
+        )
     }
+
+    /// Explain one span. Stateless: the request carries every earlier turn.
+    pub fn clarify(&self, request: &ClarifyRequest) -> Result<ClarifyResult, ApiError> {
+        post_json(
+            &self.clarify_url(),
+            self.clarify_timeout,
+            request,
+            "ClarifyResult",
+        )
+    }
+}
+
+fn post_json<B: Serialize, T: DeserializeOwned>(
+    url: &str,
+    timeout: Duration,
+    request: &B,
+    what: &str,
+) -> Result<T, ApiError> {
+    let body = serde_json::to_vec(request)
+        .map_err(|error| ApiError::decode(format!("could not encode the request: {error}")))?;
+
+    let response = ureq::post(url)
+        .config()
+        .http_status_as_error(false)
+        .timeout_global(Some(timeout))
+        .build()
+        .header("content-type", "application/json")
+        .header("accept", "application/json")
+        .send(&body[..]);
+
+    let mut response = match response {
+        Ok(response) => response,
+        Err(error) => return Err(ApiError::connection(error.to_string())),
+    };
+
+    let status = response.status().as_u16();
+    let text = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|error| ApiError::connection(format!("could not read the response: {error}")))?;
+
+    if !(200..300).contains(&status) {
+        return Err(error_from_response(status, &text));
+    }
+
+    serde_json::from_str::<T>(&text)
+        .map_err(|error| ApiError::decode(format!("the response is not a {what}: {error}")))
 }
 
 #[cfg(test)]
@@ -195,6 +252,8 @@ mod tests {
 
     fn canned_result_json() -> String {
         serde_json::json!({
+            "content_type": "plain",
+            "content_type_source": "detected",
             "payload": {
                 "hash": "hash",
                 "content": "Plan\nQ?\nA\n",
@@ -315,6 +374,73 @@ mod tests {
         let error = error_from_response(500, "  ");
         assert_eq!(error.kind, "http_500");
         assert!(error.detail.contains("empty body"));
+    }
+
+    #[test]
+    fn clarify_endpoint_sits_beside_parse() {
+        assert_eq!(
+            clarify_url("http://127.0.0.1:8080/parse"),
+            "http://127.0.0.1:8080/clarify"
+        );
+        assert_eq!(
+            clarify_url("http://h:1/api/parse/"),
+            "http://h:1/api/clarify"
+        );
+        assert_eq!(clarify_url("http://h:1"), "http://h:1/clarify");
+    }
+
+    #[test]
+    fn clarify_posts_to_the_clarify_path_and_reports_api_errors() {
+        use daftprompt_types::{ClarifySource, ClarifyTarget};
+        let request = ClarifyRequest {
+            source: ClarifySource {
+                text: "Plan".to_owned(),
+                payload_hash: "bad".to_owned(),
+                metadata: None,
+            },
+            target: ClarifyTarget {
+                node_id: "n".to_owned(),
+                display_id: 1,
+                start_byte: 0,
+                end_byte: 4,
+            },
+            turns: Vec::new(),
+            question: "Why?".to_owned(),
+            author: None,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a stub API");
+        let address = listener.local_addr().expect("stub address");
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept a request");
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("read timeout");
+            let mut received = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !String::from_utf8_lossy(&received).contains("\"question\"") {
+                let read = socket.read(&mut buffer).expect("read the request");
+                if read == 0 {
+                    break;
+                }
+                received.extend_from_slice(&buffer[..read]);
+            }
+            let head = String::from_utf8_lossy(&received).to_string();
+            let body = r#"{"kind":"payload_mismatch","detail":"hash differs"}"#;
+            let response = format!(
+                "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\n\
+                 content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).expect("respond");
+            head
+        });
+        let client = ParseClient::new(format!("http://{address}/parse"), Duration::from_secs(5));
+        let error = client.clarify(&request).expect_err("a 400 is an error");
+        assert_eq!(error.kind, "payload_mismatch");
+        assert!(error.detail.contains("hash differs"));
+        let head = server.join().expect("stub server");
+        assert!(head.starts_with("POST /clarify HTTP/1.1"));
+        assert!(head.contains("\"question\":\"Why?\""));
     }
 
     #[test]

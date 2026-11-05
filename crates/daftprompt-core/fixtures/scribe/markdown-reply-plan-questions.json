@@ -1,0 +1,56 @@
+{
+  "format_version": 1,
+  "id": "markdown-reply-plan-questions",
+  "category": "prose",
+  "note": "LLM-style plan sections include conditions; question list items remain separate.",
+  "text": "## Suggested plan\n\n### Measure latency\n\n- Record p95 before changes.\n- This gives a baseline for comparison.\n\n### Cache responses\n\n- Add a five-minute cache.\n- Keep memory bounded during rollout.\n\n## Questions\n\n- What is the memory budget?\n- Who owns the rollout?\n",
+  "spans": [
+    {
+      "id": "e1",
+      "start": 19,
+      "end": 108,
+      "quote": "### Measure latency\n\n- Record p95 before changes.\n- This gives a baseline for comparison.",
+      "labels": [
+        {
+          "kind": "recommendation"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "start": 110,
+      "end": 195,
+      "quote": "### Cache responses\n\n- Add a five-minute cache.\n- Keep memory bounded during rollout.",
+      "labels": [
+        {
+          "kind": "recommendation"
+        }
+      ]
+    },
+    {
+      "id": "e3",
+      "start": 211,
+      "end": 239,
+      "quote": "- What is the memory budget?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    },
+    {
+      "id": "e4",
+      "start": 240,
+      "end": 263,
+      "quote": "- Who owns the rollout?",
+      "labels": [
+        {
+          "kind": "question"
+        }
+      ]
+    }
+  ],
+  "answer_links": [],
+  "content_type": "markdown",
+  "expected_detection": "markdown"
+}

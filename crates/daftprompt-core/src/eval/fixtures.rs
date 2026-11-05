@@ -27,6 +27,10 @@ pub fn default_fixture_dir() -> PathBuf {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fixture {
+    /// Format declared to Scribe for extraction scoring.
+    pub content_type: daftprompt_types::ContentType,
+    /// Independently expected result of deterministic detection.
+    pub expected_detection: daftprompt_types::ContentType,
     /// Format revision; currently [`FIXTURE_FORMAT_VERSION`].
     pub format_version: u32,
     /// Stable identifier, matching the file stem.
@@ -456,6 +460,8 @@ mod tests {
 
     fn fixture(text: &str, spans: Vec<ExpectedSpan>) -> Fixture {
         Fixture {
+            content_type: daftprompt_types::ContentType::Plain,
+            expected_detection: daftprompt_types::ContentType::Plain,
             format_version: FIXTURE_FORMAT_VERSION,
             id: "test".to_owned(),
             category: FixtureCategory::Chat,

@@ -100,13 +100,13 @@ fn source() -> SourceMetadata {
 async fn successful_result() -> ParseResult {
     let extraction = Extraction {
         spans: vec![
-            ExtractedSpan {
+            ExtractedSpan::Segments {
                 id: "s1".to_owned(),
                 start_segment: 2,
                 end_segment: 2,
                 quote: Some(QUESTION.to_owned()),
             },
-            ExtractedSpan {
+            ExtractedSpan::Segments {
                 id: "s2".to_owned(),
                 start_segment: 3,
                 end_segment: 3,
@@ -524,4 +524,55 @@ async fn expanded_results_serialize_numbers_and_relationships() {
             .iter()
             .any(|l| l["kind"] == "recommendation")
     );
+}
+
+#[tokio::test]
+async fn declared_content_type_is_passed_to_core() {
+    let parser = StubParser::returning(Ok(successful_result().await));
+    let (status, _) = post(
+        app(parser.clone(), ApiConfig::default()),
+        r##"{"text":"# Plan","content_type":"plain"}"##,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        parser.requests()[0].content_type,
+        Some(daftprompt_types::ContentType::Plain)
+    );
+}
+
+#[tokio::test]
+async fn unknown_content_type_is_rejected_before_parsing() {
+    let parser = StubParser::returning(Ok(successful_result().await));
+    let (status, _) = post(
+        app(parser.clone(), ApiConfig::default()),
+        r#"{"text":"Plan","content_type":"html"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(parser.calls(), 0);
+}
+
+#[tokio::test]
+async fn api_returns_detected_and_declared_format_metadata() {
+    for (declared, expected_format, expected_source) in [
+        (None, "markdown", "detected"),
+        (Some("plain"), "plain", "declared"),
+    ] {
+        let parser = Arc::new(Scribe::new(
+            ScribeConfig::default(),
+            StubModel {
+                extraction: Extraction::default(),
+            },
+        ));
+        let application = router(AppState::new(parser, ApiConfig::default()));
+        let mut request = serde_json::json!({"text":"# Plan"});
+        if let Some(declared) = declared {
+            request["content_type"] = declared.into();
+        }
+        let (status, body) = post(application, request.to_string()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["content_type"], expected_format);
+        assert_eq!(body["content_type_source"], expected_source);
+    }
 }
