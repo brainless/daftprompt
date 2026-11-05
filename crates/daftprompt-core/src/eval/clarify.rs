@@ -782,9 +782,17 @@ impl ClarifyReport {
 
     fn render_command(&self, out: &mut String) {
         let _ = writeln!(out, "## How to run the live evaluation\n");
+        let provider = self.metadata.provider.as_deref().unwrap_or("neuralwatt");
+        let model = self.metadata.model.as_deref().unwrap_or("glm-5.3-flash");
+        let key_name = match provider {
+            "openai" => "OPENAI_API_KEY",
+            "cerebras" => "CEREBRAS_API_KEY",
+            "groq" => "GROQ_API_KEY",
+            _ => "NEURALWATT_API_KEY",
+        };
         let _ = writeln!(
             out,
-            "```sh\nNEURALWATT_API_KEY=... DAFTPROMPT_EVAL_LIVE=1 \\\n  cargo run -p daftprompt-core --features live-eval --bin evaluate-explainer -- \\\n  --output docs/evaluations/explainer-<provider>-<model>.md\n```\n"
+            "```sh\n{key_name}=... DAFTPROMPT_EVAL_LIVE=1 \\\n  DAFTPROMPT_EXPLAINER_PROVIDER={provider} DAFTPROMPT_EXPLAINER_MODEL={model} \\\n  cargo run -p daftprompt-core --features live-eval --bin evaluate-explainer -- \\\n  --output docs/evaluations/explainer-<provider>-<model>.md\n```\n"
         );
     }
 

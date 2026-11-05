@@ -49,6 +49,71 @@ async fn block_spans_cover_whole_sections_with_original_bytes() {
 }
 
 #[tokio::test]
+async fn markdown_grouping_sections_cannot_be_labelled_by_any_reference_form() {
+    let source = "# Epic\n\n## Retry\n\nUse feedback.\n\n## Metrics\n\nRecord latency.";
+    for reference in [
+        serde_json::json!({"id":"s1","block":"b1"}),
+        serde_json::json!({"id":"s1","start_segment":1,"end_segment":9}),
+        serde_json::json!({"id":"s1","start_segment":1,"end_segment":9,"quote":source}),
+        serde_json::json!({"id":"s1","start_segment":3,"end_segment":9}),
+        serde_json::json!({"id":"s1","start_segment":5,"end_segment":7,"quote":"feedback. ## Metrics"}),
+    ] {
+        let error = parse(
+            source,
+            serde_json::json!({
+                "spans":[reference],
+                "annotations":[{"kind":"question","span":"s1"}]
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error, ParseError::InvalidOutput { ref detail, .. } if detail.contains("heading section boundary")),
+            "unexpected error: {error:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn leaf_section_and_fenced_heading_text_can_be_labelled() {
+    let source = "# Epic\n\n## Retry\n\nUse feedback.\n\n```md\n## Not a section\n```\n\n## Metrics\n\nRecord latency.";
+    // The fence contains heading-looking text, but it creates no section.
+    let result = parse(
+        source,
+        serde_json::json!({
+            "spans":[{"id":"s1","block":"b2"}],
+            "annotations":[{"kind":"recommendation","span":"s1"}]
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        &source[result.spans[0].start_byte..result.spans[0].end_byte],
+        "## Retry\n\nUse feedback.\n\n```md\n## Not a section\n```"
+    );
+}
+
+#[tokio::test]
+async fn declared_plain_text_does_not_apply_markdown_section_boundaries() {
+    let source = "# Epic\n\n## First\n\none";
+    let mut request = ParseRequest::new(source);
+    request.content_type = Some(ContentType::Plain);
+    let extraction = serde_json::from_value(serde_json::json!({
+        "spans":[{"id":"s1","start_segment":1,"end_segment":5}],
+        "annotations":[{"kind":"recommendation","span":"s1"}]
+    }))
+    .unwrap();
+    let result = Scribe::new(
+        ScribeConfig::default().with_max_attempts(1),
+        Stub(extraction),
+    )
+    .parse(request)
+    .await
+    .unwrap();
+    assert_eq!(result.spans.len(), 1);
+}
+
+#[tokio::test]
 async fn unknown_blocks_and_parent_child_overlap_are_invalid() {
     for spans in [
         serde_json::json!([{"id":"s1","block":"missing"}]),

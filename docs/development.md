@@ -141,10 +141,10 @@ markers and may select whole blocks or smaller segment ranges.
 
 `daftprompt_core::explainer` is the clarification agent of [Epic 004](../epics/004-clarification-branch.md). Public surface: `Explainer<M: ExplainerModel>` (`new(config, model)`, `with_project(Arc<dyn ProjectFiles>)`, async `clarify(ClarifyRequest) -> Result<ClarifyResult, ParseError>`, `grounding()`), the object-safe `Clarifier` trait, `ExplainerConfig`, `ExplainerModel`/`ExplainerInput` (the model seam), and `RigExplainer`/`Explainer::from_rig_model`.
 
-- **Configuration:** `ExplainerConfig::default()` is provider `neuralwatt`, model `glm-5.3-flash`, independent of Scribe. `ExplainerConfig::from_env()` applies `DAFTPROMPT_EXPLAINER_PROVIDER` and `DAFTPROMPT_EXPLAINER_MODEL` (blank values ignored); it reads no credentials. The caller builds the provider client (for Neuralwatt, the Chat Completions wire from `OPENAI`-compatible config with `NEURALWATT_API_KEY` and optional `NEURALWATT_BASE_URL`, as the API binary does for Scribe) and passes the model to `Explainer::from_rig_model`. Limits and defaults: question 2 KiB, 8 earlier turns, 16 KiB of earlier turns, 20 segments on each side of the subject, source limits as for parsing, 12 model calls per attempt, 20 citations, 3 attempts, 120 s per attempt covering the whole tool loop, plus `ProjectToolConfig` caps.
+- **Configuration:** `ExplainerConfig::default()` is provider `neuralwatt`, model `glm-5.3-flash`, independent of Scribe. `ExplainerConfig::from_env()` applies `DAFTPROMPT_EXPLAINER_PROVIDER` and `DAFTPROMPT_EXPLAINER_MODEL` (blank values ignored); it reads no credentials. The caller builds the provider client (for Neuralwatt or Cerebras, the Chat Completions wire from OpenAI-compatible config with the selected provider's `*_API_KEY` and optional `*_BASE_URL`, as the API binary does for Scribe) and passes the model to `Explainer::from_rig_model`. Limits and defaults: question 2 KiB, 8 earlier turns, 16 KiB of earlier turns, 20 segments on each side of the subject, source limits as for parsing, 12 model calls per attempt, 20 citations, 3 attempts, 120 s per attempt covering the whole tool loop, plus `ProjectToolConfig` caps.
 - **Rig usage (rev `7dfd8a42`):** Rig's `Extractor` is single-turn, so `RigExplainer` builds an `AgentBuilder` with `.output_schema::<ExplainerExtraction>()` and `.output_mode(OutputMode::Tool)`, the project tools registered through `rig_tools`, and runs `agent.prompt(..).max_turns(n).await`. `AgentRunner::output_tool` and the extractor's `submit` name are crate-private in `rig-agent`, so the synthetic output tool has Rig's default name `final_result` (the prompt says so); Explainer records it as the `submit` tool call. The run ends when the model calls it; `PromptResponse::output_tool_calls()` must be at least 1 and `output()` is the serialized arguments. `MaxTurns` and `UnknownToolCall` count as invalid output; other `PromptError`s are provider errors.
 - **Tool-call records:** every project tool invocation is read from the per-attempt `ToolRecorder` (no hooks are needed), so the records cover exactly the attempt that succeeded; `submit` is appended. Outputs are stored as content-addressed payloads in `tool_payloads`.
-- **Tests:** `tests/explainer.rs` uses a stub `ExplainerModel` that drives the attempt's `ProjectToolbox` over an `InMemoryProject` and then returns an extraction; it needs no credentials. `tests/explainer_live.rs` is an opt-in (`--features live-eval -- --ignored`) check of multi-turn tool calling with the output tool against the configured model. It has not been run in this environment (no `NEURALWATT_API_KEY` in the process environment).
+- **Tests:** `tests/explainer.rs` uses a stub `ExplainerModel` that drives the attempt's `ProjectToolbox` over an `InMemoryProject` and then returns an extraction; it needs no credentials. `tests/explainer_live.rs` is an opt-in (`--features live-eval -- --ignored`) check of multi-turn tool calling with the output tool against the configured model. It has not been run in this environment.
 
 ## Scribe evaluation
 
@@ -192,14 +192,18 @@ OPENAI_API_KEY=... DAFTPROMPT_EVAL_LIVE=1 \
 | variable | default | meaning |
 | --- | --- | --- |
 | `DAFTPROMPT_EVAL_LIVE` | unset | `1`, `true`, or `yes` enables model calls |
-| `DAFTPROMPT_EVAL_PROVIDER` | `openai` | `openai` (`OPENAI_BASE_URL` selects a compatible endpoint) or `neuralwatt` |
-| `DAFTPROMPT_EVAL_MODEL` | `gpt-4o-mini` (`qwen3.6-35b-fast` for `neuralwatt`) | Model identifier recorded on every run |
+| `DAFTPROMPT_EVAL_PROVIDER` | `openai` | `openai` (`OPENAI_BASE_URL` selects a compatible endpoint), `neuralwatt`, `cerebras`, or `groq` |
+| `DAFTPROMPT_EVAL_MODEL` | `gpt-4o-mini` (`qwen3.6-35b-fast` for `neuralwatt`, `gpt-oss-120b` for `cerebras`, `openai/gpt-oss-20b` for `groq`) | Model identifier recorded on every run |
 | `DAFTPROMPT_EVAL_PROMPT_VERSION` | `scribe-v4` | `scribe-v4` or original `scribe-v3` prompt, rendering and schema for paired comparisons |
 | `DAFTPROMPT_EVAL_MAX_ATTEMPTS` | `3` | Total attempt budget |
 | `DAFTPROMPT_EVAL_TIMEOUT_SECS` | `60` | Per-attempt timeout |
 | `OPENAI_API_KEY` | required for live `openai` runs | Read by `OpenAI::from_env()` |
 | `NEURALWATT_API_KEY` | required for live `neuralwatt` runs | Bearer key for Neuralwatt |
 | `NEURALWATT_BASE_URL` | `https://api.neuralwatt.com/v1` | Optional override |
+| `CEREBRAS_API_KEY` | required for live `cerebras` runs | Bearer key for Cerebras |
+| `CEREBRAS_BASE_URL` | `https://api.cerebras.ai/v1` | Optional override |
+| `GROQ_API_KEY` | required for `groq` | Bearer key for Groq |
+| `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` | Optional override |
 
 The binary loads a `.env` file from the working directory (or a parent) first, using
 `dotenvy::dotenv()` semantics: a missing file is fine, variables already in the
@@ -237,7 +241,7 @@ text; the deterministic tests in `crates/daftprompt-core/tests/explainer_eval.rs
 and every metric with synthetic results, without credentials.
 
 The `evaluate-explainer` binary is built only with `live-eval` and calls a model only when
-`DAFTPROMPT_EVAL_LIVE=1` is set and `NEURALWATT_API_KEY` is in the process environment. Unlike
+`DAFTPROMPT_EVAL_LIVE=1` is set and the selected provider's API key is in the process environment. Unlike
 `evaluate-scribe` it never reads a `.env` file.
 
 ```sh
@@ -247,9 +251,9 @@ NEURALWATT_API_KEY=... DAFTPROMPT_EVAL_LIVE=1 \
 ```
 
 Provider and model come from `DAFTPROMPT_EXPLAINER_PROVIDER` / `DAFTPROMPT_EXPLAINER_MODEL`
-(default `neuralwatt` / `glm-5.3-flash`), `DAFTPROMPT_EVAL_MAX_ATTEMPTS` and
+(default `neuralwatt` / `glm-5.3-flash`; `openai`, `cerebras`, and `groq` are also supported), `DAFTPROMPT_EVAL_MAX_ATTEMPTS` and
 `DAFTPROMPT_EVAL_TIMEOUT_SECS` override the attempt budget and per-attempt timeout, and
-`NEURALWATT_BASE_URL` overrides the endpoint. Flags: `--fixtures DIR`, `--project DIR`,
+the selected provider's `*_BASE_URL` overrides the endpoint. Flags: `--fixtures DIR`, `--project DIR`,
 `--output FILE`, `--limit N`. Exit codes: `0` success, `1` some case failed, `2` the run could
 not start. The report gives invalid-output rate, attempts, project tool calls per run, latency,
 file-citation recall and precision (exact and lenient line overlap), source-citation overlap,
@@ -271,7 +275,11 @@ OPENAI_API_KEY=... cargo run -p daftprompt-api
 The API (and the evaluation binary) load `.env` first; see
 [`.env.example`](../.env.example). `DAFTPROMPT_API_PROVIDER=neuralwatt` with
 `NEURALWATT_API_KEY` selects Neuralwatt's OpenAI-compatible Chat Completions
-endpoint. The full environment table, a curl example, the result shape, and the error
+endpoint. `DAFTPROMPT_API_PROVIDER=cerebras` with `CEREBRAS_API_KEY` selects
+Cerebras Chat Completions; `gpt-oss-120b` is the model default for that provider.
+Set `DAFTPROMPT_EXPLAINER_PROVIDER=cerebras` and
+`DAFTPROMPT_EXPLAINER_MODEL=gpt-oss-120b` to use it for clarification as well.
+The full environment table, a curl example, the result shape, and the error
 mapping are in [api.md](api.md). The API maps explicit `ParseError` variants to
 400, 413, 422, 502, 504, or 500 and never returns a partly valid graph. Tests
 drive the router with a stub `Parser`, so they need no credentials.
@@ -411,3 +419,10 @@ Verification: formatting, workspace checks for all targets/features, Clippy with
 warnings denied, types/core/API tests with all features, all 61 GUI tests, all 23
 expected detections, and whole-block stub scoring of the four new fixtures pass
 without LLM credentials. Live Explainer tests remain explicitly opt-in.
+
+Groq is also available in the API and both evaluation binaries. Use provider
+`groq`, model `openai/gpt-oss-20b`, and `GROQ_API_KEY`; the optional
+`GROQ_BASE_URL` defaults to `https://api.groq.com/openai/v1`. For Scribe evaluations,
+set `DAFTPROMPT_EVAL_PROVIDER=groq`; for Explainer evaluations, explicitly set both
+`DAFTPROMPT_EXPLAINER_PROVIDER=groq` and
+`DAFTPROMPT_EXPLAINER_MODEL=openai/gpt-oss-20b`. See [API setup](api.md#groq-configuration).

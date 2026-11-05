@@ -10,8 +10,9 @@
 //!
 //! - `DAFTPROMPT_EVAL_LIVE=1` — required to call the model.
 //! - `DAFTPROMPT_EXPLAINER_PROVIDER` / `DAFTPROMPT_EXPLAINER_MODEL` — default
-//!   `neuralwatt` / `glm-5.3-flash`; only `neuralwatt` is wired here.
-//! - `NEURALWATT_API_KEY`, optional `NEURALWATT_BASE_URL`.
+//!   `neuralwatt` / `glm-5.3-flash`; `openai`, `cerebras`, and `groq` are also supported.
+//! - Provider credentials: `OPENAI_API_KEY`, `NEURALWATT_API_KEY`, or
+//!   `CEREBRAS_API_KEY`, or `GROQ_API_KEY`; compatible providers accept an optional `*_BASE_URL`.
 //! - `DAFTPROMPT_EVAL_MAX_ATTEMPTS`, `DAFTPROMPT_EVAL_TIMEOUT_SECS` — override
 //!   the Explainer defaults.
 //!
@@ -34,10 +35,17 @@ use daftprompt_core::eval::{
 use daftprompt_core::explainer::{Explainer, ExplainerConfig, PROMPT_VERSION};
 use daftprompt_core::project_tools::FsProject;
 use daftprompt_types::ParseError;
-use rig::providers::openai::OpenAIConfig;
+use rig::DynModel;
+use rig::operation::Completion;
+use rig::providers::openai::{OpenAI, OpenAIConfig};
 
+const PROVIDER_OPENAI: &str = "openai";
 const PROVIDER_NEURALWATT: &str = "neuralwatt";
+const PROVIDER_CEREBRAS: &str = "cerebras";
+const PROVIDER_GROQ: &str = "groq";
 const DEFAULT_NEURALWATT_BASE_URL: &str = "https://api.neuralwatt.com/v1";
+const DEFAULT_CEREBRAS_BASE_URL: &str = "https://api.cerebras.ai/v1";
+const DEFAULT_GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -103,25 +111,24 @@ async fn run() -> Result<ExitCode, String> {
         );
         return finish(&options.output, &report, ExitCode::SUCCESS);
     }
-    if provider != PROVIDER_NEURALWATT {
+    if !matches!(
+        provider.as_str(),
+        PROVIDER_OPENAI | PROVIDER_NEURALWATT | PROVIDER_CEREBRAS | PROVIDER_GROQ
+    ) {
         report.not_run = Some(format!(
-            "provider {provider:?} is not wired into this evaluation; only {PROVIDER_NEURALWATT:?} is supported."
+            "provider {provider:?} is not wired into this evaluation; supported providers are {PROVIDER_OPENAI:?}, {PROVIDER_NEURALWATT:?}, {PROVIDER_CEREBRAS:?}, and {PROVIDER_GROQ:?}."
         ));
         return finish(&options.output, &report, ExitCode::from(2));
     }
-    let Some(api_key) = env_string("NEURALWATT_API_KEY") else {
-        report.not_run = Some(
-            "the live run could not start because NEURALWATT_API_KEY is not set in the process environment (no .env file is read)."
-                .to_owned(),
-        );
-        return finish(&options.output, &report, ExitCode::from(2));
+    let completion = match build_model(&provider, &model) {
+        Ok(completion) => completion,
+        Err(error) => {
+            report.not_run = Some(format!(
+                "the live run could not start because provider credentials were unavailable: {error} (no .env file is read)."
+            ));
+            return finish(&options.output, &report, ExitCode::from(2));
+        }
     };
-    let base_url =
-        env_string("NEURALWATT_BASE_URL").unwrap_or_else(|| DEFAULT_NEURALWATT_BASE_URL.to_owned());
-    let completion = OpenAIConfig::new(api_key)
-        .with_base_url(base_url)
-        .client()
-        .chat(model.clone());
     let project = FsProject::new(&options.project)
         .map_err(|error| format!("could not open the fixture project: {error}"))?;
     let explainer =
@@ -201,6 +208,37 @@ async fn run() -> Result<ExitCode, String> {
     )
 }
 
+fn build_model(provider: &str, model: &str) -> Result<DynModel<Completion>, String> {
+    match provider {
+        PROVIDER_OPENAI => {
+            let client = OpenAI::from_env().map_err(|error| error.to_string())?;
+            Ok(client.completion(model.to_owned()).into())
+        }
+        PROVIDER_NEURALWATT | PROVIDER_CEREBRAS | PROVIDER_GROQ => {
+            let (key_name, base_name, default_base) = if provider == PROVIDER_GROQ {
+                ("GROQ_API_KEY", "GROQ_BASE_URL", DEFAULT_GROQ_BASE_URL)
+            } else if provider == PROVIDER_CEREBRAS {
+                (
+                    "CEREBRAS_API_KEY",
+                    "CEREBRAS_BASE_URL",
+                    DEFAULT_CEREBRAS_BASE_URL,
+                )
+            } else {
+                (
+                    "NEURALWATT_API_KEY",
+                    "NEURALWATT_BASE_URL",
+                    DEFAULT_NEURALWATT_BASE_URL,
+                )
+            };
+            let api_key = env_string(key_name).ok_or_else(|| format!("set {key_name}"))?;
+            let base_url = env_string(base_name).unwrap_or_else(|| default_base.to_owned());
+            let client = OpenAIConfig::new(api_key).with_base_url(base_url).client();
+            Ok(client.chat(model.to_owned()).into())
+        }
+        _ => Err(format!("unsupported provider {provider:?}")),
+    }
+}
+
 /// A repository-relative path for the report, when under the repository.
 fn relative_to_repo(path: &Path) -> PathBuf {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -268,7 +306,7 @@ fn print_usage() {
         "Usage: evaluate-explainer [--fixtures DIR] [--project DIR] [--output FILE] [--limit N]\n\
          \n\
          Runs Explainer over the grounding cases against the fixture project.\n\
-         Without DAFTPROMPT_EVAL_LIVE=1 and NEURALWATT_API_KEY in the process\n\
+         Without DAFTPROMPT_EVAL_LIVE=1 and the selected provider's API key in the process\n\
          environment it writes a not-run report and makes no model calls.\n\
          \n\
          Options:\n\

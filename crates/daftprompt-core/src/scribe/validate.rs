@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use daftprompt_types::{AnnotationKind, Extraction, LabelKind, SourceRange};
+use daftprompt_types::{AnnotationKind, ContentType, Extraction, LabelKind, SourceRange};
 use thiserror::Error;
 
 use crate::text::byte_range_to_source_range;
@@ -90,6 +90,20 @@ pub(crate) fn validate(
 
         let anchored = crate::text::anchor_span_in_structure(source, span, tree)
             .map_err(|error| invalid(format!("span {:?}: {error}", span.id())))?;
+        // Every ATX heading starts a new section. Check the resolved bytes so a
+        // segment range or quote cannot select a grouping section indirectly.
+        if tree.content_type == ContentType::Markdown
+            && tree.blocks.iter().any(|block| {
+                block.kind == crate::text::structure::BlockKind::Section
+                    && anchored.start_byte < block.start_byte
+                    && block.start_byte < anchored.end_byte
+            })
+        {
+            return Err(invalid(format!(
+                "span {:?}: crosses a Markdown heading section boundary",
+                span.id()
+            )));
+        }
         let range = byte_range_to_source_range(source, anchored.start_byte, anchored.end_byte)
             .map_err(|error| invalid(format!("span {:?}: {error}", span.id())))?;
 

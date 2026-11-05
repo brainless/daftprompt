@@ -9,8 +9,8 @@ authentication, session, or history endpoints.
 
 The API process builds the provider client itself and reads its credentials
 from the environment. The default provider is OpenAI, and
-`OPENAI_BASE_URL` selects an OpenAI-compatible endpoint. Neuralwatt is also
-supported (see below).
+`OPENAI_BASE_URL` selects an OpenAI-compatible endpoint. Neuralwatt and Cerebras
+are also supported (see below).
 
 On startup the process first loads a `.env` file from the working directory (or
 a parent) with `dotenvy::dotenv()` semantics: a missing file is fine, variables
@@ -42,9 +42,13 @@ this command does.
 | `OPENAI_BASE_URL` | provider default | Optional OpenAI-compatible endpoint |
 | `NEURALWATT_API_KEY` | required for `neuralwatt` | Bearer key for Neuralwatt |
 | `NEURALWATT_BASE_URL` | `https://api.neuralwatt.com/v1` | Optional override of Neuralwatt's OpenAI-compatible base URL |
+| `CEREBRAS_API_KEY` | required for `cerebras` | Bearer key for Cerebras |
+| `CEREBRAS_BASE_URL` | `https://api.cerebras.ai/v1` | Optional override of Cerebras's OpenAI-compatible base URL |
+| `GROQ_API_KEY` | required for `groq` | Bearer key for Groq |
+| `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` | Optional override |
 | `DAFTPROMPT_API_ADDR` | `127.0.0.1:8080` | Bind address (`IP:port`). Keep it on loopback unless you add your own access control |
-| `DAFTPROMPT_API_PROVIDER` | `openai` | `openai` or `neuralwatt`; recorded as `run.provider` |
-| `DAFTPROMPT_API_MODEL` | `gpt-4o-mini` (`qwen3.6-35b-fast` for `neuralwatt`) | Model identifier recorded as `run.model` |
+| `DAFTPROMPT_API_PROVIDER` | `openai` | `openai`, `neuralwatt`, `cerebras`, or `groq`; recorded as `run.provider` |
+| `DAFTPROMPT_API_MODEL` | `gpt-4o-mini` (`glm-5.3-flash` for `neuralwatt`, `gpt-oss-120b` for `cerebras`, `openai/gpt-oss-20b` for `groq`) | Model identifier recorded as `run.model` |
 | `DAFTPROMPT_API_MAX_INPUT_BYTES` | `32768` | UTF-8 byte limit for the submitted text; oversized text is rejected, never truncated |
 | `DAFTPROMPT_API_MAX_SEGMENTS` | `1000` | `\n`-separated segment limit |
 | `DAFTPROMPT_API_MAX_ATTEMPTS` | `3` | Total attempts for invalid model output; provider errors and timeouts are never retried |
@@ -65,8 +69,27 @@ model with Rig's explicit Chat Completions wire
 # .env
 DAFTPROMPT_API_PROVIDER=neuralwatt
 NEURALWATT_API_KEY=...
-# DAFTPROMPT_API_MODEL defaults to qwen3.6-35b-fast
+# DAFTPROMPT_API_MODEL defaults to glm-5.3-flash
 cargo run -p daftprompt-api
+```
+
+### Cerebras
+
+Cerebras's [OpenAI compatibility](https://inference-docs.cerebras.ai/resources/openai)
+uses `https://api.cerebras.ai/v1`. Its
+[tool-calling guide](https://inference-docs.cerebras.ai/capabilities/tool-use)
+lists `gpt-oss-120b` with required tool choice and multi-turn tool calls. Scribe's
+schema-defined `submit` tool and Explainer's project/output tools use Rig's
+Chat Completions wire. The local `.env` can select Cerebras for both agents:
+
+```sh
+DAFTPROMPT_API_PROVIDER=cerebras
+DAFTPROMPT_API_MODEL=gpt-oss-120b
+DAFTPROMPT_EXPLAINER_PROVIDER=cerebras
+DAFTPROMPT_EXPLAINER_MODEL=gpt-oss-120b
+CEREBRAS_API_KEY=... # provide your own key
+cargo build --release -p daftprompt-api
+./target/release/daftprompt-api
 ```
 
 The JSON request envelope is capped at six times the text limit plus 16 KiB, so
@@ -293,12 +316,13 @@ The response is a `ClarifyResult`:
 
 | variable | default | meaning |
 | --- | --- | --- |
-| `DAFTPROMPT_EXPLAINER_PROVIDER` | `neuralwatt` | `openai` or `neuralwatt`; recorded as `run.provider`. Independent of `DAFTPROMPT_API_PROVIDER` |
-| `DAFTPROMPT_EXPLAINER_MODEL` | `glm-5.3-flash` | Model identifier recorded as `run.model` |
+| `DAFTPROMPT_EXPLAINER_PROVIDER` | `neuralwatt` | `openai`, `neuralwatt`, `cerebras`, or `groq`; recorded as `run.provider`. Independent of `DAFTPROMPT_API_PROVIDER` |
+| `DAFTPROMPT_EXPLAINER_MODEL` | `glm-5.3-flash` | Model identifier recorded as `run.model`; select `gpt-oss-120b` for Cerebras |
 | `DAFTPROMPT_PROJECT_ROOT` | unset | Directory the Explainer may read. Must exist and be a directory or startup fails. Unset means text-only mode |
 
 Credentials are the provider's own variables (`NEURALWATT_API_KEY`,
-`NEURALWATT_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`), shared with Scribe.
+`NEURALWATT_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CEREBRAS_API_KEY`,
+`CEREBRAS_BASE_URL`, `GROQ_API_KEY`, `GROQ_BASE_URL`), shared with Scribe.
 Startup builds both clients, so the credentials for both providers must be
 present; with the defaults that is `NEURALWATT_API_KEY` for the Explainer.
 Input limits (`DAFTPROMPT_API_MAX_INPUT_BYTES`, `DAFTPROMPT_API_MAX_SEGMENTS`)
@@ -354,3 +378,23 @@ model read files under that root and receive their contents in explanations and
 citations. Files outside the root are never exposed, but do not point the root
 at a directory holding secrets, and do not bind the service to a non-loopback
 address without your own access control.
+
+## Groq configuration
+
+Groq uses its [OpenAI-compatible endpoint](https://console.groq.com/docs/openai)
+with Rig's Chat Completions client. The model
+[`openai/gpt-oss-20b` supports tool calling](https://console.groq.com/docs/tool-use/overview),
+including the local tools used by Scribe and Explainer. Set both agents explicitly:
+
+```dotenv
+DAFTPROMPT_API_PROVIDER=groq
+DAFTPROMPT_API_MODEL=openai/gpt-oss-20b
+DAFTPROMPT_EXPLAINER_PROVIDER=groq
+DAFTPROMPT_EXPLAINER_MODEL=openai/gpt-oss-20b
+GROQ_API_KEY=your-key
+# GROQ_BASE_URL=https://api.groq.com/openai/v1
+```
+
+For the release GUI, build `cargo build --release -p daftprompt-api`, then restart
+the GUI/API. Process environment variables override `.env`. No new dependencies
+are required. Live model availability and extraction quality require a live test.

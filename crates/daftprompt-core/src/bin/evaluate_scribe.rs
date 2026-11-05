@@ -9,15 +9,17 @@
 //!
 //! - `DAFTPROMPT_EVAL_LIVE=1` — required to call the model.
 //! - `DAFTPROMPT_EVAL_PROVIDER` — `openai` (default; OpenAI-compatible
-//!   endpoints work through `OPENAI_BASE_URL`) or `neuralwatt`.
-//! - `DAFTPROMPT_EVAL_MODEL` — model id, default `gpt-4o-mini` for `openai`
-//!   and `qwen3.6-35b-fast` for `neuralwatt`.
+//!   endpoints work through `OPENAI_BASE_URL`), `neuralwatt`, `cerebras`, or `groq`.
+//! - `DAFTPROMPT_EVAL_MODEL` — model id, default `gpt-4o-mini` for `openai`,
+//!   `qwen3.6-35b-fast` for `neuralwatt`, `gpt-oss-120b` for `cerebras`, and `openai/gpt-oss-20b` for `groq`.
 //! - `DAFTPROMPT_EVAL_PROMPT_VERSION` — `scribe-v4` (default) or `scribe-v3`
 //!   for the original prompt, segment rendering and segment-only output schema.
 //! - `DAFTPROMPT_EVAL_MAX_ATTEMPTS` — total attempts, default 3.
 //! - `DAFTPROMPT_EVAL_TIMEOUT_SECS` — per-attempt timeout, default 60.
 //! - `OPENAI_API_KEY` — read by the provider client, never by this crate.
 //! - `NEURALWATT_API_KEY`, optional `NEURALWATT_BASE_URL` — for `neuralwatt`.
+//! - `CEREBRAS_API_KEY`, optional `CEREBRAS_BASE_URL` — for `cerebras`.
+//! - `GROQ_API_KEY`, optional `GROQ_BASE_URL` — for `groq`.
 //!
 //! A `.env` file in the working directory (or a parent) is loaded first; real
 //! environment variables take precedence over it.
@@ -48,11 +50,17 @@ use rig::providers::openai::{OpenAI, OpenAIConfig};
 
 const PROVIDER_OPENAI: &str = "openai";
 const PROVIDER_NEURALWATT: &str = "neuralwatt";
+const PROVIDER_CEREBRAS: &str = "cerebras";
+const PROVIDER_GROQ: &str = "groq";
 const DEFAULT_PROVIDER: &str = PROVIDER_OPENAI;
 const DEFAULT_OPENAI_MODEL: &str = "gpt-4o-mini";
 const DEFAULT_NEURALWATT_MODEL: &str = "qwen3.6-35b-fast";
+const DEFAULT_CEREBRAS_MODEL: &str = "gpt-oss-120b";
+const DEFAULT_GROQ_MODEL: &str = "openai/gpt-oss-20b";
 /// Neuralwatt's OpenAI-compatible base URL (<https://docs.neuralwatt.com/api/overview.md>).
 const DEFAULT_NEURALWATT_BASE_URL: &str = "https://api.neuralwatt.com/v1";
+const DEFAULT_CEREBRAS_BASE_URL: &str = "https://api.cerebras.ai/v1";
+const DEFAULT_GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -86,13 +94,8 @@ async fn run() -> Result<ExitCode, String> {
 
     let provider =
         env_string("DAFTPROMPT_EVAL_PROVIDER").unwrap_or_else(|| DEFAULT_PROVIDER.to_owned());
-    let model = env_string("DAFTPROMPT_EVAL_MODEL").unwrap_or_else(|| {
-        if provider == PROVIDER_NEURALWATT {
-            DEFAULT_NEURALWATT_MODEL.to_owned()
-        } else {
-            DEFAULT_OPENAI_MODEL.to_owned()
-        }
-    });
+    let model =
+        env_string("DAFTPROMPT_EVAL_MODEL").unwrap_or_else(|| default_model(&provider).to_owned());
     let max_attempts = env_u32("DAFTPROMPT_EVAL_MAX_ATTEMPTS", DEFAULT_MAX_ATTEMPTS)?;
     let timeout_secs = env_u64("DAFTPROMPT_EVAL_TIMEOUT_SECS", DEFAULT_TIMEOUT.as_secs())?;
     let timeout = Duration::from_secs(timeout_secs);
@@ -128,9 +131,12 @@ async fn run() -> Result<ExitCode, String> {
         return finish(&options.output, &report, ExitCode::SUCCESS);
     }
 
-    if provider != PROVIDER_OPENAI && provider != PROVIDER_NEURALWATT {
+    if !matches!(
+        provider.as_str(),
+        PROVIDER_OPENAI | PROVIDER_NEURALWATT | PROVIDER_CEREBRAS | PROVIDER_GROQ
+    ) {
         report.not_run = Some(format!(
-            "provider {provider:?} is not wired into this evaluation; supported providers are {PROVIDER_OPENAI:?} and {PROVIDER_NEURALWATT:?}."
+            "provider {provider:?} is not wired into this evaluation; supported providers are {PROVIDER_OPENAI:?}, {PROVIDER_NEURALWATT:?}, {PROVIDER_CEREBRAS:?}, and {PROVIDER_GROQ:?}."
         ));
         return finish(&options.output, &report, ExitCode::from(2));
     }
@@ -256,19 +262,58 @@ fn load_dotenv() -> Result<(), String> {
 
 /// Build the completion model for `provider`; the same selection as the API.
 ///
-/// Neuralwatt serves OpenAI-compatible Chat Completions, so it uses the
+/// Neuralwatt, Cerebras, and Groq serve OpenAI-compatible Chat Completions, so they use the
 /// explicit chat wire rather than OpenAI's default Responses route.
 fn build_model(provider: &str, model: &str) -> Result<DynModel<Completion>, String> {
-    if provider == PROVIDER_NEURALWATT {
-        let api_key =
-            env_string("NEURALWATT_API_KEY").ok_or_else(|| "set NEURALWATT_API_KEY".to_owned())?;
-        let base_url = env_string("NEURALWATT_BASE_URL")
-            .unwrap_or_else(|| DEFAULT_NEURALWATT_BASE_URL.to_owned());
-        let client = OpenAIConfig::new(api_key).with_base_url(base_url).client();
-        Ok(client.chat(model.to_owned()).into())
-    } else {
-        let client = OpenAI::from_env().map_err(|error| error.to_string())?;
-        Ok(client.completion(model.to_owned()).into())
+    match provider {
+        PROVIDER_NEURALWATT | PROVIDER_CEREBRAS | PROVIDER_GROQ => {
+            let (key_name, base_name, default_base) = if provider == PROVIDER_GROQ {
+                ("GROQ_API_KEY", "GROQ_BASE_URL", DEFAULT_GROQ_BASE_URL)
+            } else if provider == PROVIDER_CEREBRAS {
+                (
+                    "CEREBRAS_API_KEY",
+                    "CEREBRAS_BASE_URL",
+                    DEFAULT_CEREBRAS_BASE_URL,
+                )
+            } else {
+                (
+                    "NEURALWATT_API_KEY",
+                    "NEURALWATT_BASE_URL",
+                    DEFAULT_NEURALWATT_BASE_URL,
+                )
+            };
+            let api_key = env_string(key_name).ok_or_else(|| format!("set {key_name}"))?;
+            let base_url = env_string(base_name).unwrap_or_else(|| default_base.to_owned());
+            let client = OpenAIConfig::new(api_key).with_base_url(base_url).client();
+            Ok(client.chat(model.to_owned()).into())
+        }
+        PROVIDER_OPENAI => {
+            let client = OpenAI::from_env().map_err(|error| error.to_string())?;
+            Ok(client.completion(model.to_owned()).into())
+        }
+        _ => Err(format!("unsupported provider {provider:?}")),
+    }
+}
+
+fn default_model(provider: &str) -> &'static str {
+    match provider {
+        PROVIDER_NEURALWATT => DEFAULT_NEURALWATT_MODEL,
+        PROVIDER_CEREBRAS => DEFAULT_CEREBRAS_MODEL,
+        PROVIDER_GROQ => DEFAULT_GROQ_MODEL,
+        _ => DEFAULT_OPENAI_MODEL,
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+
+    #[test]
+    fn model_defaults_include_cerebras() {
+        assert_eq!(default_model(PROVIDER_OPENAI), DEFAULT_OPENAI_MODEL);
+        assert_eq!(default_model(PROVIDER_NEURALWATT), DEFAULT_NEURALWATT_MODEL);
+        assert_eq!(default_model(PROVIDER_CEREBRAS), "gpt-oss-120b");
+        assert_eq!(default_model(PROVIDER_GROQ), "openai/gpt-oss-20b");
     }
 }
 

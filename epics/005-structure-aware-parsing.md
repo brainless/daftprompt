@@ -91,6 +91,7 @@ A span is pointed at in one of two ways:
 
 - `block` and the segment range are mutually exclusive; exactly one must be present. A `quote` is allowed only with a segment range.
 - A block span covers the block's trimmed byte range. Rust resolves it; the model supplies no offsets.
+- A Markdown section containing subheadings is structural context and cannot be labelled as a whole. After resolving any block, segment, or quote reference to source bytes, validation rejects ranges crossing an ATX heading section boundary. A leaf section may include its own heading, paragraphs, and bullets; heading-looking text in a fenced code block creates no boundary. This structural rule cannot determine whether a valid leaf section is actually a recommendation or question; extraction quality still depends on the model.
 - Overlap rules are unchanged. A section and one of its child blocks overlap, so selecting both is invalid. The parent stays unlabelled and its children are labelled, or the reverse.
 - Unknown block IDs make the output invalid, like an out-of-range segment.
 

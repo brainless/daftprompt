@@ -2,7 +2,13 @@
 
 A section whose heading names an option, refinement, or plan step is usually one
 item: include the heading through its rationale and last bullet. A heading merely
-grouping independent items stays unlabelled. Conditional refinements with a
+grouping independent items stays unlabelled.
+Only leaf sections (sections with no subheadings) may be selected as a whole.
+Never select a section containing subheadings, and never use segments or a quote
+to span across a heading section boundary. A leaf section may include its own
+heading, paragraphs, and bullets. A fenced code line that looks like a heading
+does not create a section boundary.
+Conditional refinements with a
 Trigger and proposed change are still recommendations; label EVERY such sibling
 section, even when the text defers execution until needed. Do not skip the earlier
 refinements merely because later sections or bullets are easier to annotate. In bullet lists use whole item blocks,

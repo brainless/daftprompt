@@ -131,6 +131,22 @@ async fn invalid_followup_keeps_the_original_result() {
 }
 
 #[tokio::test]
+async fn grouping_section_in_followup_keeps_valid_initial_result() {
+    let source = "# Epic\n\n## First\n\none\n\n## Second\n\ntwo";
+    let script = vec![Ok(recommend(&["b2"])), Ok(recommend(&["b1"]))];
+    let (result, scribe) = parse(source, script, ScribeConfig::default()).await;
+    let result = result.unwrap();
+    assert_eq!(recs(&result), 1);
+    assert_eq!(
+        &source[result.spans[0].start_byte..result.spans[0].end_byte],
+        "## First\n\none"
+    );
+    assert!(result.run.consistency_followup);
+    assert!(!result.run.consistency_used);
+    assert_eq!(scribe.model().calls(), 2);
+}
+
+#[tokio::test]
 async fn followup_timeout_keeps_the_original_result() {
     struct Slow(Mutex<u32>);
     impl ExtractionModel for Slow {

@@ -2,11 +2,13 @@
 //! tool calls together with the output tool. Not run by default.
 //!
 //! ```text
-//! NEURALWATT_API_KEY=... cargo test -p daftprompt-core --features live-eval \
+//! CEREBRAS_API_KEY=... DAFTPROMPT_EXPLAINER_PROVIDER=cerebras \
+//!     DAFTPROMPT_EXPLAINER_MODEL=gpt-oss-120b \
+//!     cargo test -p daftprompt-core --features live-eval \
 //!     --test explainer_live -- --ignored --nocapture
 //! ```
 //! The model comes from `DAFTPROMPT_EXPLAINER_PROVIDER`/`_MODEL` (default
-//! `neuralwatt` / `glm-5.3-flash`); only `neuralwatt` is wired here.
+//! `neuralwatt` / `glm-5.3-flash`).
 #![cfg(feature = "live-eval")]
 
 use std::sync::Arc;
@@ -14,24 +16,51 @@ use std::sync::Arc;
 use daftprompt_core::explainer::{Explainer, ExplainerConfig};
 use daftprompt_core::project_tools::InMemoryProject;
 use daftprompt_types::{ClarifyRequest, ClarifySource, ClarifyTarget};
-use rig::providers::openai::OpenAIConfig;
+use rig::DynModel;
+use rig::operation::Completion;
+use rig::providers::openai::{OpenAI, OpenAIConfig};
 use sha2::{Digest, Sha256};
 
 #[tokio::test]
-#[ignore = "calls a live model; needs NEURALWATT_API_KEY"]
+#[ignore = "calls a live model; needs the selected provider's API key"]
 async fn live_multi_turn_tool_calls_and_submit() {
     let config = ExplainerConfig::from_env();
-    assert_eq!(
-        config.provider.as_deref().unwrap_or("neuralwatt"),
-        "neuralwatt"
-    );
-    let api_key = std::env::var("NEURALWATT_API_KEY").expect("set NEURALWATT_API_KEY");
-    let base_url = std::env::var("NEURALWATT_BASE_URL")
-        .unwrap_or_else(|_| "https://api.neuralwatt.com/v1".to_owned());
-    let model = OpenAIConfig::new(api_key)
-        .with_base_url(base_url)
-        .client()
-        .chat(config.model.clone().unwrap());
+    let model_name = config.model.clone().unwrap();
+    let model: DynModel<Completion> = match config.provider.as_deref().unwrap_or("neuralwatt") {
+        "openai" => OpenAI::from_env()
+            .expect("set OPENAI_API_KEY")
+            .completion(model_name)
+            .into(),
+        provider @ ("neuralwatt" | "cerebras" | "groq") => {
+            let (key_name, base_name, default_base) = if provider == "groq" {
+                (
+                    "GROQ_API_KEY",
+                    "GROQ_BASE_URL",
+                    "https://api.groq.com/openai/v1",
+                )
+            } else if provider == "cerebras" {
+                (
+                    "CEREBRAS_API_KEY",
+                    "CEREBRAS_BASE_URL",
+                    "https://api.cerebras.ai/v1",
+                )
+            } else {
+                (
+                    "NEURALWATT_API_KEY",
+                    "NEURALWATT_BASE_URL",
+                    "https://api.neuralwatt.com/v1",
+                )
+            };
+            let api_key = std::env::var(key_name).unwrap_or_else(|_| panic!("set {key_name}"));
+            let base_url = std::env::var(base_name).unwrap_or_else(|_| default_base.to_owned());
+            OpenAIConfig::new(api_key)
+                .with_base_url(base_url)
+                .client()
+                .chat(model_name)
+                .into()
+        }
+        other => panic!("unsupported provider {other:?}"),
+    };
 
     let project = InMemoryProject::new().with_file(
         "src/limit.rs",

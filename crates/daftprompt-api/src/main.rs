@@ -26,11 +26,17 @@ use rig::providers::openai::{OpenAI, OpenAIConfig};
 const DEFAULT_ADDR: &str = "127.0.0.1:8080";
 const PROVIDER_OPENAI: &str = "openai";
 const PROVIDER_NEURALWATT: &str = "neuralwatt";
+const PROVIDER_CEREBRAS: &str = "cerebras";
+const PROVIDER_GROQ: &str = "groq";
 const DEFAULT_PROVIDER: &str = PROVIDER_OPENAI;
 const DEFAULT_OPENAI_MODEL: &str = "gpt-4o-mini";
-const DEFAULT_NEURALWATT_MODEL: &str = "qwen3.6-35b-fast";
+const DEFAULT_NEURALWATT_MODEL: &str = "glm-5.3-flash";
+const DEFAULT_CEREBRAS_MODEL: &str = "gpt-oss-120b";
+const DEFAULT_GROQ_MODEL: &str = "openai/gpt-oss-20b";
 /// Neuralwatt's OpenAI-compatible base URL (<https://docs.neuralwatt.com/api/overview.md>).
 const DEFAULT_NEURALWATT_BASE_URL: &str = "https://api.neuralwatt.com/v1";
+const DEFAULT_CEREBRAS_BASE_URL: &str = "https://api.cerebras.ai/v1";
+const DEFAULT_GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -130,7 +136,7 @@ fn load_dotenv() -> Result<(), String> {
 /// Build the completion model for `provider`.
 ///
 /// OpenAI uses `client.completion`, which follows Rig's default OpenAI route.
-/// Neuralwatt is OpenAI-compatible but serves Chat Completions, so it uses the
+/// Neuralwatt, Cerebras, and Groq serve OpenAI-compatible Chat Completions, so they use the
 /// explicit chat wire (`POST {base}/chat/completions`) rather than the
 /// Responses API. Credentials are read from the environment here, never stored.
 fn build_model(provider: &str, model: &str) -> Result<DynModel<Completion>, String> {
@@ -151,9 +157,27 @@ fn build_model(provider: &str, model: &str) -> Result<DynModel<Completion>, Stri
             let client = OpenAIConfig::new(api_key).with_base_url(base_url).client();
             Ok(client.chat(model.to_owned()).into())
         }
+        PROVIDER_CEREBRAS => {
+            let api_key = env_string("CEREBRAS_API_KEY").ok_or_else(|| {
+                "provider credentials are unavailable (set CEREBRAS_API_KEY)".to_owned()
+            })?;
+            let base_url = env_string("CEREBRAS_BASE_URL")
+                .unwrap_or_else(|| DEFAULT_CEREBRAS_BASE_URL.to_owned());
+            let client = OpenAIConfig::new(api_key).with_base_url(base_url).client();
+            Ok(client.chat(model.to_owned()).into())
+        }
+        PROVIDER_GROQ => {
+            let api_key = env_string("GROQ_API_KEY").ok_or_else(|| {
+                "provider credentials are unavailable (set GROQ_API_KEY)".to_owned()
+            })?;
+            let base_url =
+                env_string("GROQ_BASE_URL").unwrap_or_else(|| DEFAULT_GROQ_BASE_URL.to_owned());
+            let client = OpenAIConfig::new(api_key).with_base_url(base_url).client();
+            Ok(client.chat(model.to_owned()).into())
+        }
         other => Err(format!(
             "provider {other:?} is not wired into this service; supported providers are \
-             {PROVIDER_OPENAI:?} and {PROVIDER_NEURALWATT:?}"
+             {PROVIDER_OPENAI:?}, {PROVIDER_NEURALWATT:?}, {PROVIDER_CEREBRAS:?}, and {PROVIDER_GROQ:?}"
         )),
     }
 }
@@ -217,10 +241,24 @@ impl Settings {
 }
 
 fn default_model(provider: &str) -> &'static str {
-    if provider == PROVIDER_NEURALWATT {
-        DEFAULT_NEURALWATT_MODEL
-    } else {
-        DEFAULT_OPENAI_MODEL
+    match provider {
+        PROVIDER_NEURALWATT => DEFAULT_NEURALWATT_MODEL,
+        PROVIDER_CEREBRAS => DEFAULT_CEREBRAS_MODEL,
+        PROVIDER_GROQ => DEFAULT_GROQ_MODEL,
+        _ => DEFAULT_OPENAI_MODEL,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_model_defaults() {
+        assert_eq!(default_model(PROVIDER_OPENAI), "gpt-4o-mini");
+        assert_eq!(default_model(PROVIDER_NEURALWATT), "glm-5.3-flash");
+        assert_eq!(default_model(PROVIDER_CEREBRAS), "gpt-oss-120b");
+        assert_eq!(default_model(PROVIDER_GROQ), "openai/gpt-oss-20b");
     }
 }
 
