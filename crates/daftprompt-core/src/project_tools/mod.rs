@@ -238,6 +238,29 @@ pub struct RecordedCall {
     pub truncated: bool,
     /// Set for a successful `read_file` that returned at least one line.
     pub read: Option<FileRead>,
+    /// Commits a git tool returned to the model, with full hashes. Citations
+    /// of commits are validated against these.
+    #[serde(default)]
+    pub commits: Vec<SeenCommit>,
+}
+
+/// A commit a git tool showed the model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeenCommit {
+    /// Full lowercase hex commit id (40 or 64 characters).
+    pub hash: String,
+    pub subject: String,
+}
+
+/// Why a cited commit does not resolve against the ledger.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CommitLookupError {
+    #[error("`{0}` is not a commit hash of at least 7 hex characters")]
+    Malformed(String),
+    #[error("commit `{0}` was not returned by any git tool call in this run")]
+    Unseen(String),
+    #[error("commit prefix `{0}` matches {1} commits seen in this run; cite more characters")]
+    Ambiguous(String, usize),
 }
 
 /// Shared per-run ledger. Clone it freely; all clones see the same calls.
@@ -302,6 +325,36 @@ impl ToolRecorder {
             }
         }
         false
+    }
+
+    /// Every distinct commit returned by git tools, in the order first seen.
+    pub fn commits(&self) -> Vec<SeenCommit> {
+        let mut seen: Vec<SeenCommit> = Vec::new();
+        for commit in self.calls().into_iter().flat_map(|call| call.commits) {
+            if !seen.iter().any(|known| known.hash == commit.hash) {
+                seen.push(commit);
+            }
+        }
+        seen
+    }
+
+    /// Resolve a cited hash or prefix (at least 7 hex characters,
+    /// case-insensitive) to exactly one commit the git tools returned.
+    pub fn resolve_commit(&self, cited: &str) -> Result<SeenCommit, CommitLookupError> {
+        let prefix = cited.trim().to_ascii_lowercase();
+        if prefix.len() < 7 || prefix.len() > 64 || !prefix.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(CommitLookupError::Malformed(cited.to_owned()));
+        }
+        let mut matches: Vec<SeenCommit> = self
+            .commits()
+            .into_iter()
+            .filter(|commit| commit.hash.starts_with(&prefix))
+            .collect();
+        match matches.len() {
+            0 => Err(CommitLookupError::Unseen(cited.to_owned())),
+            1 => Ok(matches.remove(0)),
+            n => Err(CommitLookupError::Ambiguous(cited.to_owned(), n)),
+        }
     }
 
     /// The hash of the file text last read at `path`, if any.

@@ -390,6 +390,9 @@ fn citation_line(citation: &CitationInfo, parse: &ParseResult) -> CitationLine {
                     None => format!("source bytes {start_byte}–{end_byte} (unavailable)"),
                 }
             }
+            CitationLocation::Commit { hash, subject } => {
+                format!("commit {} {subject}", hash.get(..7).unwrap_or(hash))
+            }
         };
     CitationLine { marker, text }
 }

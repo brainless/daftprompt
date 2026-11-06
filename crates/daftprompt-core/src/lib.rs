@@ -10,6 +10,9 @@
 //!   validated in-memory graph through a typed Rig extraction.
 //! - [`explainer`]: the clarification agent. Explainer answers a question about one
 //!   extracted span with a bounded tool loop and validated citations.
+//! - [`chronicler`]: the git-history briefing agent (Epic 006), built on the shared
+//!   [`project_agent`] runner and the read-only [`git_tools`].
+//! - [`llm`]: the provider factory that turns provider and model names into a Rig model.
 //! - [`project_tools`]: read-only `list_files`, `search`, and `read_file` with a
 //!   per-run call ledger, reusable by any agent, plus Rig adapters.
 //! - [`access`]: which registered project folders a caller may give an agent: the
@@ -19,8 +22,12 @@
 //!   the opt-in live Scribe evaluation.
 
 pub mod access;
+pub mod chronicler;
 pub mod eval;
 pub mod explainer;
+pub mod git_tools;
+pub mod llm;
+pub mod project_agent;
 pub mod project_tools;
 pub mod scribe;
 pub mod store;
@@ -39,7 +46,10 @@ pub use text::{
 pub use access::{
     AccessError, AgentKind, LocalPolicy, Principal, ProjectScope, RootPolicy, resolve_project,
 };
+pub use chronicler::{Chronicler, ChroniclerConfig, ChroniclerModel, RigChronicler};
 pub use explainer::{
     Clarifier, Explainer, ExplainerConfig, ExplainerInput, ExplainerModel, RigExplainer,
 };
+pub use llm::{LlmError, ModelSettings, build_model};
+pub use project_agent::Briefer;
 pub use store::{Store, StoreError, default_db_path};

@@ -122,6 +122,7 @@ impl ProjectToolbox {
             is_error,
             truncated,
             read,
+            commits: Vec::new(),
         });
         ToolResponse { text, is_error }
     }

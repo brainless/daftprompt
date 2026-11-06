@@ -182,3 +182,36 @@ pub enum ContentTypeSource {
     Declared,
     Detected,
 }
+
+/// Body of the agent endpoints (`POST /projects/{id}/history` and its
+/// siblings): an optional user prompt in place of the agent's default task.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTaskRequest {
+    /// `None` runs the agent's default task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// Human identity recorded as the author of the prompt node. Absent
+    /// means `unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+}
+
+impl AgentTaskRequest {
+    /// The prompt with surrounding whitespace removed, or `None` when absent
+    /// or blank (a blank prompt means the default task).
+    pub fn prompt_text(&self) -> Option<&str> {
+        self.prompt
+            .as_deref()
+            .map(str::trim)
+            .filter(|prompt| !prompt.is_empty())
+    }
+
+    /// The prompt node's author: the request author, or `unknown`.
+    pub fn prompt_author(&self) -> &str {
+        self.author
+            .as_deref()
+            .map(str::trim)
+            .filter(|author| !author.is_empty())
+            .unwrap_or("unknown")
+    }
+}

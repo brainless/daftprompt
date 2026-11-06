@@ -528,3 +528,65 @@ fn block_span_contract_rejects_mixed_or_incomplete_references() {
         );
     }
 }
+
+#[test]
+fn briefing_contracts_have_the_documented_json_shape() {
+    use daftprompt_types::{
+        AgentTask, AgentTaskRequest, BriefingCitation, BriefingExtraction, CitationLocation,
+        ContextTarget,
+    };
+
+    let extraction: BriefingExtraction = serde_json::from_value(serde_json::json!({
+        "summary": "Work [1].",
+        "citations": [
+            {"kind": "commit", "hash": "3f9c2ab"},
+            {"kind": "file", "path": "src/lib.rs", "start_line": 1, "end_line": 3}
+        ]
+    }))
+    .unwrap();
+    assert_eq!(
+        extraction.citations[0],
+        BriefingCitation::Commit {
+            hash: "3f9c2ab".to_owned()
+        }
+    );
+    // Citations may be omitted, but unknown fields are refused.
+    assert!(
+        serde_json::from_value::<BriefingExtraction>(serde_json::json!({"summary": "x"}))
+            .unwrap()
+            .citations
+            .is_empty()
+    );
+    assert!(
+        serde_json::from_value::<BriefingCitation>(
+            serde_json::json!({"kind": "commit", "hash": "3f9c2ab", "extra": 1})
+        )
+        .is_err()
+    );
+
+    let empty: AgentTaskRequest = serde_json::from_str("{}").unwrap();
+    assert_eq!(empty.prompt_text(), None);
+    assert_eq!(empty.prompt_author(), "unknown");
+    let blank = AgentTaskRequest {
+        prompt: Some("  ".to_owned()),
+        author: None,
+    };
+    assert_eq!(blank.prompt_text(), None);
+
+    assert_eq!(
+        serde_json::to_value(AgentTask::Default).unwrap(),
+        serde_json::json!({"kind": "default"})
+    );
+    assert_eq!(
+        serde_json::to_value(CitationLocation::Commit {
+            hash: "h".into(),
+            subject: "s".into()
+        })
+        .unwrap(),
+        serde_json::json!({"kind": "commit", "hash": "h", "subject": "s"})
+    );
+    assert_eq!(
+        serde_json::to_value(ContextTarget::Commit { hash: "h".into() }).unwrap(),
+        serde_json::json!({"kind": "commit", "hash": "h"})
+    );
+}

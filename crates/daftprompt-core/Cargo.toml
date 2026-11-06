@@ -8,7 +8,9 @@ publish.workspace = true
 
 [dependencies]
 daftprompt-types.workspace = true
-rig.workspace = true
+# The provider factory in `llm` builds OpenAI-compatible clients, which needs
+# Rig's reqwest transport (rustls TLS).
+rig = { workspace = true, features = ["reqwest", "rustls"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -22,9 +24,10 @@ pulldown-cmark.workspace = true
 schemars = { workspace = true, optional = true }
 # Only the live evaluation binary loads `.env`; see the `live-eval` feature.
 dotenvy = { workspace = true, optional = true }
-# Only the timer is used, for per-attempt timeouts. The library stays
-# runtime-agnostic otherwise.
-tokio = { workspace = true, features = ["time"] }
+# The timer is used for per-attempt timeouts, and `spawn_blocking` keeps the git
+# subprocess calls off the async workers. The library stays runtime-agnostic
+# otherwise.
+tokio = { workspace = true, features = ["time", "rt"] }
 
 [dev-dependencies]
 tempfile.workspace = true

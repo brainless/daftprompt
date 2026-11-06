@@ -34,6 +34,12 @@ pub enum Principal {
 pub enum AgentKind {
     Scribe,
     Explainer,
+    /// The git-history briefing agent.
+    Chronicler,
+    /// The files-and-documentation briefing agent.
+    Surveyor,
+    /// The how-the-project-is-run briefing agent.
+    Operator,
 }
 
 impl AgentKind {
@@ -42,6 +48,9 @@ impl AgentKind {
         match self {
             Self::Scribe => "scribe",
             Self::Explainer => "explainer",
+            Self::Chronicler => "chronicler",
+            Self::Surveyor => "surveyor",
+            Self::Operator => "operator",
         }
     }
 }
@@ -176,7 +185,10 @@ mod tests {
         ) -> Result<ProjectScope, AccessError> {
             match agent {
                 AgentKind::Explainer => LocalPolicy.grant(principal, agent, project),
-                AgentKind::Scribe => Err(AccessError::Denied("scribe is not allowed".to_owned())),
+                _ => Err(AccessError::Denied(format!(
+                    "{} is not allowed",
+                    agent.as_str()
+                ))),
             }
         }
     }

@@ -179,7 +179,9 @@ fn span_node(result: &ParseResult) -> &Node {
 fn payload_hash_of(context: &NodeContext) -> &str {
     match &context.target {
         ContextTarget::Payload { payload_hash } => payload_hash,
-        ContextTarget::File { .. } => panic!("span contexts target the root payload"),
+        ContextTarget::File { .. } | ContextTarget::Commit { .. } => {
+            panic!("span contexts target the root payload")
+        }
     }
 }
 

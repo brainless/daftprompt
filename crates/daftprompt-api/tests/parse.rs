@@ -232,7 +232,8 @@ async fn success_returns_the_graph_payload_text_and_span_byte_ranges() {
             daftprompt_types::ContextTarget::Payload { payload_hash } => {
                 assert_eq!(payload_hash, &result.payload.hash);
             }
-            daftprompt_types::ContextTarget::File { .. } => panic!("span targets the payload"),
+            daftprompt_types::ContextTarget::File { .. }
+            | daftprompt_types::ContextTarget::Commit { .. } => panic!("span targets the payload"),
         }
     }
 

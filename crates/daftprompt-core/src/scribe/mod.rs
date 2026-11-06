@@ -17,7 +17,7 @@ pub mod prompt;
 pub(crate) mod support;
 mod validate;
 
-use daftprompt_types::{ParseError, ParseRequest, ParseResult};
+use daftprompt_types::{AgentInfo, ParseError, ParseRequest, ParseResult};
 
 pub use config::{
     DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_INPUT_BYTES, DEFAULT_MAX_SEGMENTS, DEFAULT_TIMEOUT,
@@ -50,6 +50,12 @@ pub trait Parser: Send + Sync {
         _scope: Option<&ProjectScope>,
     ) -> BoxFuture<'a, Result<ParseResult, ParseError>> {
         self.parse(request)
+    }
+
+    /// How this parser is configured, for `GET /agents`. The default reports
+    /// nothing.
+    fn info(&self) -> Option<AgentInfo> {
+        None
     }
 }
 
@@ -282,6 +288,15 @@ where
 {
     fn parse(&self, request: ParseRequest) -> BoxFuture<'_, Result<ParseResult, ParseError>> {
         Box::pin(Scribe::parse(self, request))
+    }
+
+    fn info(&self) -> Option<AgentInfo> {
+        Some(AgentInfo {
+            kind: "scribe".to_owned(),
+            provider: self.config.provider.clone(),
+            model: self.config.model.clone(),
+            prompt_version: PROMPT_VERSION.to_owned(),
+        })
     }
 
     fn parse_in<'a>(

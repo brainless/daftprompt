@@ -55,6 +55,9 @@ pub enum ContextTarget {
         path: String,
         content_hash: Option<String>,
     },
+    /// A commit of the project's git history: the full 40- or 64-hex commit
+    /// id, resolved by Rust. Has no range.
+    Commit { hash: String },
 }
 
 /// A range in a payload or file.
@@ -302,6 +305,8 @@ pub enum CitationLocation {
     /// A half-open byte range `[start, end)` of the source payload, on `char`
     /// boundaries.
     Source { start_byte: usize, end_byte: usize },
+    /// A commit of the project's history, with its subject line for display.
+    Commit { hash: String, subject: String },
 }
 
 /// One validated citation of an explanation, for rendering.
@@ -360,4 +365,73 @@ pub struct ClarifyResult {
     pub run_inputs: Vec<RunInput>,
     /// Every tool invocation, including `submit`.
     pub tool_calls: Vec<ToolCall>,
+}
+
+/// Which task a briefing agent ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentTask {
+    /// The agent's built-in task (for Chronicler: summarize recent work).
+    Default,
+    /// The user's own prompt replaced the default task.
+    Prompt,
+}
+
+/// What a briefing wants the reader to know about how it was produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BriefingNoticeKind {
+    /// The project folder is not inside a git repository.
+    NotAGitRepository,
+    /// `git` could not be run (not installed or not executable).
+    GitUnavailable,
+    /// A tool result was cut by a size or count cap, so the briefing may be
+    /// incomplete.
+    Truncated,
+}
+
+/// A non-fatal remark about a briefing run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BriefingNotice {
+    pub kind: BriefingNoticeKind,
+    pub detail: String,
+}
+
+/// The validated, Rust-built result of one briefing agent run.
+///
+/// Like [`ClarifyResult`] it holds only new records: an optional prompt node,
+/// the summary node with its citation contexts, and run metadata. It adds no
+/// labels and never changes the record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BriefingResult {
+    pub project_id: String,
+    pub task: AgentTask,
+    /// The user's prompt text; only when the request had a prompt.
+    pub prompt_payload: Option<Payload>,
+    /// The agent's Markdown summary.
+    pub summary_payload: Payload,
+    pub summary_node_id: String,
+    /// The prompt node (when present) and the summary node.
+    pub nodes: Vec<Node>,
+    /// Prompt context, summary context (`seq 0`), then citations.
+    pub node_contexts: Vec<NodeContext>,
+    /// Validated citations in citation order.
+    pub citations: Vec<CitationInfo>,
+    pub notices: Vec<BriefingNotice>,
+    pub run: Run,
+    pub run_inputs: Vec<RunInput>,
+    /// Every tool invocation, including `submit`.
+    pub tool_calls: Vec<ToolCall>,
+    /// Payloads holding tool outputs, referenced by `tool_calls`.
+    pub tool_payloads: Vec<Payload>,
+}
+
+/// One configured agent, as listed by `GET /agents`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentInfo {
+    /// `scribe`, `explainer`, `chronicler`, ...
+    pub kind: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub prompt_version: String,
 }

@@ -32,7 +32,7 @@ CREATE TABLE node (
 );
 
 -- A Node has one or more contexts, ordered by seq.
--- Exactly one of payload_hash / path is set.
+-- Exactly one of payload_hash / path / commit_hash is set.
 -- Range NULL = whole payload/file. Lines and columns 1-based; end exclusive.
 -- Columns count Unicode scalar values (chars) and lines count \n. CRLF is
 -- preserved, so the \r of a CRLF terminator is a line character.
@@ -42,10 +42,11 @@ CREATE TABLE node_context (
   seq           INTEGER NOT NULL,
   payload_hash  TEXT REFERENCES payload(hash),
   path          TEXT,                     -- relative to project root
+  commit_hash   TEXT,                     -- full 40/64-hex commit id (git history; no range)
   content_hash  TEXT,                     -- file hash at capture time (files only)
   start_line    INTEGER, start_col INTEGER,
   end_line      INTEGER, end_col   INTEGER,
-  CHECK ((payload_hash IS NULL) != (path IS NULL))
+  CHECK ((payload_hash IS NOT NULL) + (path IS NOT NULL) + (commit_hash IS NOT NULL) = 1)
 );
 
 CREATE TABLE label (
@@ -97,6 +98,19 @@ CREATE TABLE tool_call (
 ```
 
 A run's outputs are the nodes and labels whose `run_id` points to it.
+
+### Briefing records (Epic 006)
+
+A project briefing (Chronicler now; Surveyor and Operator later) is agent-authored text recorded like an Explainer explanation, with no labels:
+
+| record | details |
+| --- | --- |
+| Prompt payload and node `P` | Only when the request has a `prompt`. Root node, `author` = request author or `unknown`, one context: the whole prompt payload. |
+| Summary payload and node `S` | `parent_id` = `P`, or none (root) for the default task; `author` `agent`; `run_id` set. Context `seq 0` is the summary payload; `seq 1..n` are the validated citations. |
+| Commit citation | A context with `commit_hash` set to the full commit id Rust resolved from the model's hash or prefix, and no range. In memory this is `ContextTarget::Commit { hash }`; its display form `CitationLocation::Commit { hash, subject }` carries the commit subject. |
+| Run metadata | `run` (agent `chronicler`, `project_id` set), a `run_input` for `P`, one `tool_call` per `git_log`/`git_show` invocation with its output payload, and the accepted `submit`. |
+
+The commit hash is a reference into the project's git repository, not a copy: nothing from the commit is stored in a payload. The cited commits must have been returned by a git tool in the same run (the `ToolRecorder` ledger records the hashes each call returned). Briefing results are in memory only.
 
 ### Persisted tables
 

@@ -66,6 +66,10 @@ For Markdown, a section with subheadings supplies context rather than one labela
 
 Implemented scope is stateless and targets extracted spans only. Later work: clarifying an arbitrary text selection or unlabelled text, persisting branches and verifying client-supplied node IDs, and promoting a clarification finding into the main record.
 
+## Project briefing (planned)
+
+[Epic 006](../epics/006-project-briefing.md) plans three read-only agents that brief the user when a project opens: **Chronicler** (git history), **Surveyor** (files and documentation) and **Operator** (the commands the project supports, discovered and never run). Each accepts an optional prompt in place of its default task and cites evidence that Rust validates. Task A (the shared agent runner, the git tools, `GET /agents`, and the Chronicler behind `POST /projects/{id}/history`) is implemented; the rest follows.
+
 ## Projects and storage
 
 A project is a named local folder registered in a single per-user SQLite database. The registry (add, list, open, rename, remove) is implemented and exposed over the API; it never modifies the folder. Graph persistence is a later step.

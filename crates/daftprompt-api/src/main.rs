@@ -5,7 +5,6 @@
 //! variable list and a sample request. A `.env` file in the working directory
 //! is loaded first; real environment variables take precedence over it.
 
-use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -13,30 +12,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use daftprompt_api::{ApiConfig, AppState, router};
+use daftprompt_core::llm::{
+    DEFAULT_PROVIDER, ModelSettings, build_model, default_model, env_string,
+};
 use daftprompt_core::project_tools::FsProject;
 use daftprompt_core::{
-    Clarifier, DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_INPUT_BYTES, DEFAULT_MAX_SEGMENTS,
-    DEFAULT_TIMEOUT, Explainer, ExplainerConfig, Parser, Scribe, ScribeConfig, Store,
+    Briefer, Chronicler, ChroniclerConfig, Clarifier, DEFAULT_MAX_ATTEMPTS,
+    DEFAULT_MAX_INPUT_BYTES, DEFAULT_MAX_SEGMENTS, DEFAULT_TIMEOUT, Explainer, ExplainerConfig,
+    Parser, Scribe, ScribeConfig, Store,
 };
-use rig::DynModel;
-use rig::operation::Completion;
-use rig::providers::openai::{OpenAI, OpenAIConfig};
 
 /// Loopback only: the experiment has no authentication and no persistence.
 const DEFAULT_ADDR: &str = "127.0.0.1:8080";
-const PROVIDER_OPENAI: &str = "openai";
-const PROVIDER_NEURALWATT: &str = "neuralwatt";
-const PROVIDER_CEREBRAS: &str = "cerebras";
-const PROVIDER_GROQ: &str = "groq";
-const DEFAULT_PROVIDER: &str = PROVIDER_OPENAI;
-const DEFAULT_OPENAI_MODEL: &str = "gpt-4o-mini";
-const DEFAULT_NEURALWATT_MODEL: &str = "glm-5.3-flash";
-const DEFAULT_CEREBRAS_MODEL: &str = "gpt-oss-120b";
-const DEFAULT_GROQ_MODEL: &str = "openai/gpt-oss-20b";
-/// Neuralwatt's OpenAI-compatible base URL (<https://docs.neuralwatt.com/api/overview.md>).
-const DEFAULT_NEURALWATT_BASE_URL: &str = "https://api.neuralwatt.com/v1";
-const DEFAULT_CEREBRAS_BASE_URL: &str = "https://api.cerebras.ai/v1";
-const DEFAULT_GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -53,7 +40,11 @@ async fn run() -> Result<(), String> {
     load_dotenv()?;
     let settings = Settings::from_env()?;
 
-    let completion_model = build_model(&settings.provider, &settings.model)?;
+    let completion_model = build_model(&ModelSettings::new(
+        settings.provider.clone(),
+        settings.model.clone(),
+    ))
+    .map_err(|error| error.to_string())?;
 
     let scribe_config = ScribeConfig::new()
         .with_provider(settings.provider.clone())
@@ -72,7 +63,11 @@ async fn run() -> Result<(), String> {
         .clone()
         .unwrap_or_else(|| DEFAULT_PROVIDER.to_owned());
     let explainer_model = explainer_config.model.clone().unwrap_or_default();
-    let explainer_completion = build_model(&explainer_provider, &explainer_model)?;
+    let explainer_completion = build_model(&ModelSettings::new(
+        explainer_provider.clone(),
+        explainer_model.clone(),
+    ))
+    .map_err(|error| error.to_string())?;
     let mut explainer = Explainer::from_rig_model(explainer_config, explainer_completion);
     let grounding = match &settings.project_root {
         Some(root) => {
@@ -92,6 +87,17 @@ async fn run() -> Result<(), String> {
     };
     let clarifier: Arc<dyn Clarifier> = Arc::new(explainer);
 
+    // Chronicler (git history) has its own provider and model too; the
+    // credentials are shared by provider name.
+    let chronicler_config = ChroniclerConfig::from_env();
+    let chronicler_settings = chronicler_config.model_settings();
+    let chronicler_completion =
+        build_model(&chronicler_settings).map_err(|error| error.to_string())?;
+    let chronicler: Arc<dyn Briefer> = Arc::new(Chronicler::from_rig_model(
+        chronicler_config,
+        chronicler_completion,
+    ));
+
     let api_config = ApiConfig::for_input_limit(settings.max_input_bytes);
     let db_location = settings
         .db_path
@@ -105,6 +111,7 @@ async fn run() -> Result<(), String> {
     let app = router(
         AppState::new(parser, api_config)
             .with_clarifier(clarifier)
+            .with_chronicler(chronicler)
             .with_store(Arc::new(store)),
     );
 
@@ -131,6 +138,11 @@ async fn run() -> Result<(), String> {
          {explainer_model}, grounding {grounding}"
     );
 
+    println!(
+        "daftprompt-api POST /projects/{{id}}/history: chronicler provider {}, model {}",
+        chronicler_settings.provider, chronicler_settings.model
+    );
+
     if let Some(path) = &db_location {
         println!("daftprompt-api database: {}", path.display());
     }
@@ -150,55 +162,6 @@ fn load_dotenv() -> Result<(), String> {
         Ok(_) => Ok(()),
         Err(error) if error.not_found() => Ok(()),
         Err(error) => Err(format!("could not load .env: {error}")),
-    }
-}
-
-/// Build the completion model for `provider`.
-///
-/// OpenAI uses `client.completion`, which follows Rig's default OpenAI route.
-/// Neuralwatt, Cerebras, and Groq serve OpenAI-compatible Chat Completions, so they use the
-/// explicit chat wire (`POST {base}/chat/completions`) rather than the
-/// Responses API. Credentials are read from the environment here, never stored.
-fn build_model(provider: &str, model: &str) -> Result<DynModel<Completion>, String> {
-    match provider {
-        PROVIDER_OPENAI => {
-            // The provider client reads OPENAI_API_KEY and OPENAI_BASE_URL itself.
-            let client = OpenAI::from_env().map_err(|error| {
-                format!("provider credentials are unavailable (set OPENAI_API_KEY): {error}")
-            })?;
-            Ok(client.completion(model.to_owned()).into())
-        }
-        PROVIDER_NEURALWATT => {
-            let api_key = env_string("NEURALWATT_API_KEY").ok_or_else(|| {
-                "provider credentials are unavailable (set NEURALWATT_API_KEY)".to_owned()
-            })?;
-            let base_url = env_string("NEURALWATT_BASE_URL")
-                .unwrap_or_else(|| DEFAULT_NEURALWATT_BASE_URL.to_owned());
-            let client = OpenAIConfig::new(api_key).with_base_url(base_url).client();
-            Ok(client.chat(model.to_owned()).into())
-        }
-        PROVIDER_CEREBRAS => {
-            let api_key = env_string("CEREBRAS_API_KEY").ok_or_else(|| {
-                "provider credentials are unavailable (set CEREBRAS_API_KEY)".to_owned()
-            })?;
-            let base_url = env_string("CEREBRAS_BASE_URL")
-                .unwrap_or_else(|| DEFAULT_CEREBRAS_BASE_URL.to_owned());
-            let client = OpenAIConfig::new(api_key).with_base_url(base_url).client();
-            Ok(client.chat(model.to_owned()).into())
-        }
-        PROVIDER_GROQ => {
-            let api_key = env_string("GROQ_API_KEY").ok_or_else(|| {
-                "provider credentials are unavailable (set GROQ_API_KEY)".to_owned()
-            })?;
-            let base_url =
-                env_string("GROQ_BASE_URL").unwrap_or_else(|| DEFAULT_GROQ_BASE_URL.to_owned());
-            let client = OpenAIConfig::new(api_key).with_base_url(base_url).client();
-            Ok(client.chat(model.to_owned()).into())
-        }
-        other => Err(format!(
-            "provider {other:?} is not wired into this service; supported providers are \
-             {PROVIDER_OPENAI:?}, {PROVIDER_NEURALWATT:?}, {PROVIDER_CEREBRAS:?}, and {PROVIDER_GROQ:?}"
-        )),
     }
 }
 
@@ -261,35 +224,6 @@ impl Settings {
             )?),
         })
     }
-}
-
-fn default_model(provider: &str) -> &'static str {
-    match provider {
-        PROVIDER_NEURALWATT => DEFAULT_NEURALWATT_MODEL,
-        PROVIDER_CEREBRAS => DEFAULT_CEREBRAS_MODEL,
-        PROVIDER_GROQ => DEFAULT_GROQ_MODEL,
-        _ => DEFAULT_OPENAI_MODEL,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn provider_model_defaults() {
-        assert_eq!(default_model(PROVIDER_OPENAI), "gpt-4o-mini");
-        assert_eq!(default_model(PROVIDER_NEURALWATT), "glm-5.3-flash");
-        assert_eq!(default_model(PROVIDER_CEREBRAS), "gpt-oss-120b");
-        assert_eq!(default_model(PROVIDER_GROQ), "openai/gpt-oss-20b");
-    }
-}
-
-fn env_string(name: &str) -> Option<String> {
-    env::var(name)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
 }
 
 fn env_usize(name: &str, default: usize) -> Result<usize, String> {

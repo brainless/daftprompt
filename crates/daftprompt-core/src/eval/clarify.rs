@@ -488,7 +488,7 @@ pub fn score(fixture: &ClarifyFixture, observed: &Observed) -> CaseScore {
                 start_line,
                 end_line,
             } => Some((path.as_str(), *start_line, *end_line)),
-            CitationLocation::Source { .. } => None,
+            CitationLocation::Source { .. } | CitationLocation::Commit { .. } => None,
         })
         .collect();
     let file_coverage = |matches: fn(&ExpectedFile, (&str, u32, u32)) -> bool| Coverage {
@@ -519,7 +519,7 @@ pub fn score(fixture: &ClarifyFixture, observed: &Observed) -> CaseScore {
                 start_byte,
                 end_byte,
             } => Some((*start_byte, *end_byte)),
-            CitationLocation::File { .. } => None,
+            CitationLocation::File { .. } | CitationLocation::Commit { .. } => None,
         })
         .collect();
     let overlaps = |a: (usize, usize), b: (usize, usize)| a.0 < b.1 && b.0 < a.1;
@@ -600,6 +600,9 @@ pub fn describe_location(location: &CitationLocation) -> String {
             start_byte,
             end_byte,
         } => format!("source bytes {start_byte}..{end_byte}"),
+        CitationLocation::Commit { hash, subject } => {
+            format!("commit {} {subject}", hash.get(..7).unwrap_or(hash))
+        }
     }
 }
 

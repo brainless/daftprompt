@@ -7,8 +7,9 @@ authentication, session, or history endpoints.
 
 ## Start the service
 
-The API process builds the provider client itself and reads its credentials
-from the environment. The default provider is OpenAI, and
+The API process builds the provider clients itself (through
+`daftprompt_core::llm::build_model`) and reads their credentials from the
+environment. The default provider is OpenAI, and
 `OPENAI_BASE_URL` selects an OpenAI-compatible endpoint. Neuralwatt and Cerebras
 are also supported (see below).
 
@@ -408,6 +409,87 @@ model read files under that root and receive their contents in explanations and
 citations. Files outside the root are never exposed, but do not point the root
 at a directory holding secrets, and do not bind the service to a non-loopback
 address without your own access control.
+
+## Agents and project briefings (Epic 006, Task A)
+
+[Epic 006](../epics/006-project-briefing.md) adds read-only agents that brief the user on a registered project. Task A provides `GET /agents` and the first agent, the **Chronicler**, which reads git history. `GET /projects/{id}/profile`, `POST /projects/{id}/overview` (Surveyor) and `POST /projects/{id}/commands` (Operator) are planned and not implemented yet.
+
+### `GET /agents`
+
+Lists every configured agent as `AgentInfo[]`: `{ "kind", "provider", "model", "prompt_version" }`. `provider` and `model` are configuration (the values recorded on runs), never credentials. An agent that is not configured on this service is not listed.
+
+```sh
+curl -sS http://127.0.0.1:8080/agents
+```
+
+```json
+[
+  { "kind": "scribe", "provider": "openai", "model": "gpt-4o-mini", "prompt_version": "scribe-v4" },
+  { "kind": "explainer", "provider": "neuralwatt", "model": "glm-5.3-flash", "prompt_version": "explainer-v1" },
+  { "kind": "chronicler", "provider": "neuralwatt", "model": "glm-5.3-flash", "prompt_version": "chronicler-v1" }
+]
+```
+
+### `POST /projects/{id}/history` (Chronicler)
+
+Summarizes the project's git history. The body is an `AgentTaskRequest`; an empty body or `{}` runs the default task, **summarize recent work** (themes, notable changes, areas in progress).
+
+| field | meaning |
+| --- | --- |
+| `prompt` | Optional. Replaces the default task, for example `"what changed in auth recently?"`. Blank means absent. At most 2048 bytes (`413 oversized_input`). |
+| `author` | Optional human identity for the prompt node; absent means `unknown`. At most 200 bytes. |
+
+```sh
+# Default task
+curl -sS -X POST http://127.0.0.1:8080/projects/project-18f3a2-1/history
+
+# With a prompt
+curl -sS -X POST http://127.0.0.1:8080/projects/project-18f3a2-1/history \
+  -H 'content-type: application/json' \
+  -d '{"prompt": "what changed in auth recently?", "author": "ada"}'
+```
+
+The response is a `BriefingResult`:
+
+| field | meaning |
+| --- | --- |
+| `project_id` | The resolved project. |
+| `task` | `{ "kind": "default" }` or `{ "kind": "prompt" }`. |
+| `prompt_payload` | The prompt text; `null` for the default task. |
+| `summary_payload`, `summary_node_id` | The agent's Markdown summary and its node. `[n]` markers refer to `citations`, 1-based. |
+| `nodes`, `node_contexts` | The optional prompt node `P` (root, author = request author or `unknown`) and the summary node `S` (`parent_id` = `P`, or `null` for the default task; `author` `agent`). `S` context `seq 0` is the summary payload; `seq 1..n` are the citations. |
+| `citations` | `CitationInfo[]`. Chronicler cites commits: `{ "index", "context_id", "location": { "kind": "commit", "hash": "<full hash>", "subject": "..." } }`. |
+| `notices` | `{ "kind", "detail" }` with `kind` `not_a_git_repository`, `git_unavailable`, or `truncated`. The first two mean the folder has no readable history; this is a briefing that says so, not an error. |
+| `run`, `run_inputs`, `tool_calls`, `tool_payloads` | Run metadata (agent `chronicler`, `project_id` set), the prompt node as input, every `git_log`/`git_show` call plus `submit`, and their outputs. |
+
+Rust validates every citation: a `commit` citation (a hash or a prefix of at least 7 hex characters) must resolve to exactly one commit that `git_log` or `git_show` returned in the same run, and every `[n]` marker must have a citation. Invalid output is retried within the attempt budget (3), then `422 invalid_output`. Nothing is stored; each request recomputes the briefing and no labels are created.
+
+Errors are the existing `{ "kind", "detail" }` shapes. The project is resolved first, for `AgentKind::Chronicler`, so `404 not_found`, `403 forbidden` and `422 project_unavailable` are answered before any model call. After that: `400 invalid_request` (malformed body), `413 oversized_input`, `422 invalid_output`, `502 provider_error`, `504 timeout`, `500 internal_error` (including a service without a Chronicler).
+
+### Git tools and their limits
+
+The Chronicler's only tools are `git_log` and `git_show` (`daftprompt_core::git_tools`). They are read-only and run `git` as a subprocess without a shell:
+
+- Arguments come only from validated, typed parameters: hashes are 7 to 64 hex characters, `since` is a short date expression, `path` is a root-relative path with no `..`, absolute, hidden or `.env` component, and nothing starts with `-` (or `:`).
+- Every invocation is `git -C <root> --no-pager -c core.pager=cat -c core.fsmonitor=false -c log.showSignature=false --literal-pathspecs`, with `--no-ext-diff --no-textconv --no-color`, and the environment sets `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0` and `GIT_CONFIG_NOSYSTEM=1`.
+- Each call has a 10 s timeout and a 1 MiB read cap; model-visible output is capped at 32 KiB (`git_show` patches at 16 KiB), at most 50 commits per `git_log`, and at most 12 tool calls per attempt.
+- A project root that is a subdirectory of a repository sees only history under it (`-- .`; `git_show` paths are root-relative). A root that is not in a repository, or a machine without `git`, yields a `not_a_git_repository` or `git_unavailable` notice.
+- Commit subjects, messages and diffs are data; the system prompt tells the model never to follow instructions found in them.
+
+### Configuration
+
+| variable | default | meaning |
+| --- | --- | --- |
+| `DAFTPROMPT_CHRONICLER_PROVIDER` | `neuralwatt` | `openai`, `neuralwatt`, `cerebras`, or `groq`; recorded as `run.provider`. Same default as the Explainer, independent of the other agents |
+| `DAFTPROMPT_CHRONICLER_MODEL` | `glm-5.3-flash` | Model identifier recorded as `run.model` |
+
+Credentials are the provider's own variables, shared with Scribe and Explainer. Startup builds the Chronicler's client too, so with the defaults `NEURALWATT_API_KEY` must be present. Startup logs its provider and model:
+
+```text
+daftprompt-api POST /projects/{id}/history: chronicler provider neuralwatt, model glm-5.3-flash
+```
+
+The provider factory itself (`daftprompt_core::llm::build_model`) reads the provider variables listed above; the API no longer contains it.
 
 ## Groq configuration
 

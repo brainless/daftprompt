@@ -40,6 +40,11 @@
 //! `not_found` (404, unknown id), `forbidden` (403, the policy refused) and
 //! `project_unavailable` (422, the registered folder is gone or unreadable).
 //!
+//! `GET /agents` lists the configured agents. `POST /projects/{id}/history`
+//! takes an [`AgentTaskRequest`] and answers with a [`BriefingResult`] from the
+//! Chronicler (git history), resolved for [`AgentKind::Chronicler`] like the
+//! other project routes.
+//!
 //! A request whose JSON envelope is too large is rejected with 413 before it
 //! can reach the parser. A partly valid graph is never returned.
 
@@ -56,16 +61,16 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use daftprompt_core::{
-    AccessError, AgentKind, Clarifier, DEFAULT_MAX_INPUT_BYTES, LocalPolicy, Parser, Principal,
-    ProjectScope, RootPolicy, Store, StoreError, resolve_project,
+    AccessError, AgentKind, Briefer, Clarifier, DEFAULT_MAX_INPUT_BYTES, LocalPolicy, Parser,
+    Principal, ProjectScope, RootPolicy, Store, StoreError, resolve_project,
 };
 use http_body_util::LengthLimitError;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
 pub use daftprompt_types::{
-    ClarifyRequest, ClarifyResult, CreateProjectRequest, ParseError, ParseRequest, ParseResult,
-    Project, RenameProjectRequest,
+    AgentInfo, AgentTaskRequest, BriefingResult, ClarifyRequest, ClarifyResult,
+    CreateProjectRequest, ParseError, ParseRequest, ParseResult, Project, RenameProjectRequest,
 };
 
 /// Room for JSON escaping and source metadata beyond the text itself.
@@ -116,6 +121,7 @@ impl Default for ApiConfig {
 pub struct AppState {
     parser: Arc<dyn Parser>,
     clarifier: Option<Arc<dyn Clarifier>>,
+    chronicler: Option<Arc<dyn Briefer>>,
     store: Option<Arc<Store>>,
     policy: Arc<dyn RootPolicy>,
     config: ApiConfig,
@@ -127,6 +133,7 @@ impl AppState {
         Self {
             parser,
             clarifier: None,
+            chronicler: None,
             store: None,
             policy: Arc::new(LocalPolicy),
             config,
@@ -137,6 +144,13 @@ impl AppState {
     /// `500 internal_error`.
     pub fn with_clarifier(mut self, clarifier: Arc<dyn Clarifier>) -> Self {
         self.clarifier = Some(clarifier);
+        self
+    }
+
+    /// Serve `POST /projects/{id}/history` with `chronicler`. Without one the
+    /// route answers `500 internal_error`.
+    pub fn with_chronicler(mut self, chronicler: Arc<dyn Briefer>) -> Self {
+        self.chronicler = Some(chronicler);
         self
     }
 
@@ -180,6 +194,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/parse", post(parse))
         .route("/clarify", post(clarify))
+        .route("/agents", get(list_agents))
         .route("/projects", get(list_projects).post(create_project))
         .route(
             "/projects/{id}",
@@ -188,6 +203,7 @@ pub fn router(state: AppState) -> Router {
                 .delete(delete_project),
         )
         .route("/projects/{id}/open", post(open_project))
+        .route("/projects/{id}/history", post(project_history))
         .with_state(state)
 }
 
@@ -273,6 +289,68 @@ async fn parse(
     };
 
     match state.parser.parse_in(request, scope.as_ref()).await {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+/// `GET /agents`: every configured agent with its provider, model, and prompt
+/// version. Providers and models are configuration, never credentials.
+async fn list_agents(State(state): State<AppState>) -> Json<Vec<AgentInfo>> {
+    let agents = [
+        state.parser.info(),
+        state.clarifier.as_ref().and_then(|c| c.info()),
+        state.chronicler.as_ref().map(|c| c.info()),
+    ];
+    Json(agents.into_iter().flatten().collect())
+}
+
+/// `POST /projects/{id}/history`: the Chronicler's briefing of the project's
+/// git history. An empty body means the default task.
+async fn project_history(
+    State(state): State<AppState>,
+    Caller(principal): Caller,
+    Path(id): Path<String>,
+    request: Request,
+) -> Response {
+    let limit = state.config.max_body_bytes;
+    let body = match to_bytes(request.into_body(), limit).await {
+        Ok(body) => body,
+        Err(error) => return error_response(body_error(&error, limit)),
+    };
+    let task: AgentTaskRequest = if body.iter().all(u8::is_ascii_whitespace) {
+        AgentTaskRequest::default()
+    } else {
+        match serde_json::from_slice(&body) {
+            Ok(task) => task,
+            Err(error) => {
+                return error_response(ParseError::InvalidRequest {
+                    detail: format!(
+                        "the request body is not a valid AgentTaskRequest JSON object: {error}"
+                    ),
+                });
+            }
+        }
+    };
+
+    let Some(chronicler) = &state.chronicler else {
+        return error_response(ParseError::Internal {
+            detail: "the Chronicler is not configured on this service".to_owned(),
+        });
+    };
+
+    // 404, 403 and 422 are answered here, before any model call.
+    let scope = match resolve_scope(&state, &principal, AgentKind::Chronicler, Some(&id)) {
+        Ok(Some(scope)) => scope,
+        Ok(None) => {
+            return error_response(ParseError::Internal {
+                detail: "the project was not resolved".to_owned(),
+            });
+        }
+        Err(failure) => return failure.into_response(),
+    };
+
+    match chronicler.brief(task, &scope).await {
         Ok(result) => Json(result).into_response(),
         Err(error) => error_response(error),
     }

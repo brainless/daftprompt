@@ -143,3 +143,42 @@ pub enum ExplainerCitation {
         end_segment: u32,
     },
 }
+
+/// One complete Chronicler or Surveyor briefing, submitted through the agent's
+/// `submit` output tool.
+///
+/// The model returns Markdown and the sources it relied on. It never produces
+/// IDs, hashes beyond a commit prefix, or line positions Rust has not seen
+/// the tools return: Rust validates every citation and builds the records.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BriefingExtraction {
+    /// Non-empty Markdown summary. It may reference citations as `[1]`,
+    /// `[2]`, ... numbered from 1 in `citations` order.
+    pub summary: String,
+    /// Sources the summary relied on. Empty is valid when nothing relevant
+    /// was found.
+    #[serde(default)]
+    pub citations: Vec<BriefingCitation>,
+}
+
+/// A source cited by a briefing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BriefingCitation {
+    /// Lines of a project file. The range must lie within lines a `read_file`
+    /// call returned in the same run.
+    File {
+        /// Path relative to the project root.
+        path: String,
+        /// First line, 1-based and inclusive.
+        start_line: u32,
+        /// Last line, 1-based and inclusive.
+        end_line: u32,
+    },
+    /// A commit that `git_log` or `git_show` returned in the same run.
+    Commit {
+        /// A hash or prefix of at least 7 hex characters; Rust resolves it to
+        /// the full commit id.
+        hash: String,
+    },
+}

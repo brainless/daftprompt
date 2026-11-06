@@ -22,7 +22,7 @@ mod validate;
 
 use std::sync::Arc;
 
-use daftprompt_types::{ClarifyRequest, ClarifyResult, Grounding, ParseError};
+use daftprompt_types::{AgentInfo, ClarifyRequest, ClarifyResult, Grounding, ParseError};
 
 pub use config::{
     DEFAULT_MAX_AGENT_TURNS, DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_CITATIONS,
@@ -53,6 +53,12 @@ pub trait Clarifier: Send + Sync {
         _scope: Option<&ProjectScope>,
     ) -> BoxFuture<'a, Result<ClarifyResult, ParseError>> {
         self.clarify(request)
+    }
+
+    /// How this agent is configured, for `GET /agents`. The default reports
+    /// nothing.
+    fn info(&self) -> Option<AgentInfo> {
+        None
     }
 }
 
@@ -257,6 +263,15 @@ where
 {
     fn clarify(&self, request: ClarifyRequest) -> BoxFuture<'_, Result<ClarifyResult, ParseError>> {
         Box::pin(Explainer::clarify(self, request))
+    }
+
+    fn info(&self) -> Option<AgentInfo> {
+        Some(AgentInfo {
+            kind: "explainer".to_owned(),
+            provider: self.config.provider.clone(),
+            model: self.config.model.clone(),
+            prompt_version: PROMPT_VERSION.to_owned(),
+        })
     }
 
     fn clarify_in<'a>(
