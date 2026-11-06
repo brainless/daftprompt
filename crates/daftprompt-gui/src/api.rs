@@ -9,7 +9,10 @@
 use std::fmt;
 use std::time::Duration;
 
-use daftprompt_types::{ClarifyRequest, ClarifyResult, ParseError, ParseRequest, ParseResult};
+use daftprompt_types::{
+    ClarifyRequest, ClarifyResult, CreateProjectRequest, ParseError, ParseRequest, ParseResult,
+    Project,
+};
 use serde::{Serialize, de::DeserializeOwned};
 
 /// The endpoint the API documents as its default.
@@ -22,14 +25,35 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 /// `/clarify` allows up to 120 seconds per attempt and three attempts.
 const DEFAULT_CLARIFY_TIMEOUT: Duration = Duration::from_secs(420);
 
+/// Project calls only touch the local registry and the file system.
+const PROJECT_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// The `/clarify` endpoint that belongs with a `/parse` URL: same host, the
 /// last path segment replaced. A URL that does not end in `/parse` gets
 /// `/clarify` appended.
 pub fn clarify_url(parse_url: &str) -> String {
+    sibling_url(parse_url, "clarify")
+}
+
+/// The `/projects` endpoint that belongs with a `/parse` URL, derived the same
+/// way as [`clarify_url`].
+pub fn projects_url(parse_url: &str) -> String {
+    sibling_url(parse_url, "projects")
+}
+
+fn sibling_url(parse_url: &str, route: &str) -> String {
     let trimmed = parse_url.trim_end_matches('/');
     match trimmed.strip_suffix("/parse") {
-        Some(base) => format!("{base}/clarify"),
-        None => format!("{trimmed}/clarify"),
+        Some(base) => format!("{base}/{route}"),
+        None => format!("{trimmed}/{route}"),
+    }
+}
+
+/// The request for `text`, carrying the selected project when there is one.
+pub fn build_parse_request(text: &str, project_id: Option<&str>) -> ParseRequest {
+    ParseRequest {
+        project_id: project_id.map(str::to_owned),
+        ..ParseRequest::new(text)
     }
 }
 
@@ -81,6 +105,9 @@ impl ApiError {
             "decode" => "The API response could not be read",
             "payload_mismatch" => "The source text does not match the parse result",
             "invalid_target" => "The span cannot be explained",
+            "not_found" => "The project is not registered",
+            "forbidden" => "This project is not available to you",
+            "project_unavailable" => "The project folder cannot be read",
             _ => "Parsing failed",
         }
     }
@@ -112,11 +139,26 @@ impl From<ParseError> for ApiError {
     }
 }
 
-/// Interpret a non-2xx response. The API always serializes a `ParseError`; a
-/// proxy or a stopped process may return HTML or an empty body instead.
+/// The `{kind, detail}` body every API route serializes on failure. It is wider
+/// than `ParseError`: project routes add kinds such as `not_found`,
+/// `forbidden`, and `project_unavailable`.
+#[derive(serde::Deserialize)]
+struct ErrorBody {
+    kind: String,
+    detail: String,
+    #[serde(default)]
+    attempts: Option<u32>,
+}
+
+/// Interpret a non-2xx response. The API serializes `{kind, detail}`; a proxy
+/// or a stopped process may return HTML or an empty body instead.
 pub fn error_from_response(status: u16, body: &str) -> ApiError {
-    match serde_json::from_str::<ParseError>(body) {
-        Ok(error) => error.into(),
+    match serde_json::from_str::<ErrorBody>(body) {
+        Ok(error) => ApiError {
+            kind: error.kind,
+            detail: error.detail,
+            attempts: error.attempts,
+        },
         Err(_) => {
             let detail = body.trim();
             let detail = if detail.is_empty() {
@@ -138,6 +180,7 @@ pub struct ParseClient {
     url: String,
     timeout: Duration,
     clarify_timeout: Duration,
+    project_timeout: Duration,
 }
 
 impl ParseClient {
@@ -173,6 +216,7 @@ impl ParseClient {
             url: url.into(),
             timeout,
             clarify_timeout: DEFAULT_CLARIFY_TIMEOUT,
+            project_timeout: PROJECT_TIMEOUT,
         }
     }
 
@@ -186,13 +230,38 @@ impl ParseClient {
     }
 
     /// Parse one independent submission. There is no session or history.
-    pub fn parse(&self, text: &str) -> Result<ParseResult, ApiError> {
-        post_json(
-            &self.url,
-            self.timeout,
-            &ParseRequest::new(text),
-            "ParseResult",
+    pub fn parse(&self, request: &ParseRequest) -> Result<ParseResult, ApiError> {
+        post_json(&self.url, self.timeout, request, "ParseResult")
+    }
+
+    /// `GET /projects`: registered projects, most recently opened first.
+    pub fn list_projects(&self) -> Result<Vec<Project>, ApiError> {
+        exchange(
+            &projects_url(&self.url),
+            None,
+            self.project_timeout,
+            "project list",
         )
+    }
+
+    /// `POST /projects`: register a folder (idempotent) and return its project.
+    pub fn create_project(&self, path: &str) -> Result<Project, ApiError> {
+        let request = CreateProjectRequest {
+            path: path.to_owned(),
+            name: None,
+        };
+        post_json(
+            &projects_url(&self.url),
+            self.project_timeout,
+            &request,
+            "Project",
+        )
+    }
+
+    /// `POST /projects/{id}/open`: mark a project as just opened.
+    pub fn open_project(&self, id: &str) -> Result<Project, ApiError> {
+        let url = format!("{}/{id}/open", projects_url(&self.url));
+        exchange(&url, Some(&[]), self.project_timeout, "Project")
     }
 
     /// Explain one span. Stateless: the request carries every earlier turn.
@@ -214,15 +283,34 @@ fn post_json<B: Serialize, T: DeserializeOwned>(
 ) -> Result<T, ApiError> {
     let body = serde_json::to_vec(request)
         .map_err(|error| ApiError::decode(format!("could not encode the request: {error}")))?;
+    exchange(url, Some(&body), timeout, what)
+}
 
-    let response = ureq::post(url)
-        .config()
-        .http_status_as_error(false)
-        .timeout_global(Some(timeout))
-        .build()
-        .header("content-type", "application/json")
-        .header("accept", "application/json")
-        .send(&body[..]);
+/// Send one request and decode a 2xx JSON body. `body` is `Some` for POST
+/// (possibly empty) and `None` for GET.
+fn exchange<T: DeserializeOwned>(
+    url: &str,
+    body: Option<&[u8]>,
+    timeout: Duration,
+    what: &str,
+) -> Result<T, ApiError> {
+    let response = match body {
+        Some(body) => ureq::post(url)
+            .config()
+            .http_status_as_error(false)
+            .timeout_global(Some(timeout))
+            .build()
+            .header("content-type", "application/json")
+            .header("accept", "application/json")
+            .send(body),
+        None => ureq::get(url)
+            .config()
+            .http_status_as_error(false)
+            .timeout_global(Some(timeout))
+            .build()
+            .header("accept", "application/json")
+            .call(),
+    };
 
     let mut response = match response {
         Ok(response) => response,
@@ -328,6 +416,7 @@ mod tests {
             assert!(request.starts_with("POST /parse HTTP/1.1"));
             assert!(request.contains("content-type: application/json"));
             assert!(request.contains("Plan"));
+            assert!(request.contains("\"project_id\":\"project-1\""));
 
             let response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
@@ -342,7 +431,7 @@ mod tests {
 
         let client = ParseClient::new(format!("http://{address}/parse"), Duration::from_secs(5));
         let result = client
-            .parse("Plan\nQ?\nA\n")
+            .parse(&build_parse_request("Plan\nQ?\nA\n", Some("project-1")))
             .expect("parse the stub result");
         assert_eq!(result.payload.content, "Plan\nQ?\nA\n");
         assert_eq!(result.run.model.as_deref(), Some("gpt-4o-mini"));
@@ -359,6 +448,38 @@ mod tests {
         assert_eq!(error.attempts, Some(3));
         assert!(error.detail.contains("spans 1 and 2 overlap"));
         assert_eq!(error.headline(), "Scribe could not produce a valid result");
+    }
+
+    #[test]
+    fn project_error_kinds_survive_decoding() {
+        for (status, kind) in [
+            (404, "not_found"),
+            (403, "forbidden"),
+            (422, "project_unavailable"),
+        ] {
+            let body = format!(r#"{{"kind":"{kind}","detail":"the folder is gone"}}"#);
+            let error = error_from_response(status, &body);
+            assert_eq!(error.kind, kind);
+            assert_eq!(error.detail, "the folder is gone");
+            assert_ne!(error.headline(), "Parsing failed");
+        }
+    }
+
+    #[test]
+    fn parse_requests_carry_the_selected_project() {
+        assert_eq!(build_parse_request("Q?", None).project_id, None);
+        let request = build_parse_request("Q?", Some("p1"));
+        assert_eq!(request.project_id.as_deref(), Some("p1"));
+        assert_eq!(request.text, "Q?");
+    }
+
+    #[test]
+    fn projects_endpoint_sits_beside_parse() {
+        assert_eq!(
+            projects_url("http://127.0.0.1:8080/parse"),
+            "http://127.0.0.1:8080/projects"
+        );
+        assert_eq!(projects_url("http://h:1"), "http://h:1/projects");
     }
 
     #[test]
@@ -407,6 +528,7 @@ mod tests {
             turns: Vec::new(),
             question: "Why?".to_owned(),
             author: None,
+            project_id: None,
         };
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind a stub API");
         let address = listener.local_addr().expect("stub address");

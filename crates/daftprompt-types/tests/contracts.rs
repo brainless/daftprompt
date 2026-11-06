@@ -188,6 +188,7 @@ fn graph_records_round_trip_as_json() {
             attempts: 1,
             consistency_followup: false,
             consistency_used: false,
+            project_id: None,
         },
         run_inputs: vec![RunInput {
             run_id: "r1".to_owned(),
@@ -449,6 +450,7 @@ fn clarify_result_round_trips_as_json() {
             attempts: 1,
             consistency_followup: false,
             consistency_used: false,
+            project_id: None,
         },
         run_inputs: vec![RunInput {
             run_id: "r1".to_owned(),

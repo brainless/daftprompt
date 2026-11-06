@@ -136,6 +136,20 @@ JSON
 and `author` are opaque strings. The root node's author is the supplied author,
 otherwise `unknown`; it is never derived from the text.
 
+`project_id` is optional: the id of a project registered with `POST /projects`
+(see "Projects and storage"). The server resolves it against the registry and
+its access policy; Scribe validates it the same way as the Explainer, so an
+unknown id is `404 not_found` and a refused one `403 forbidden` before any
+model call. Scribe has no file tools, so it never reads the folder; the
+granted id is recorded as `run.project_id` in the result. Requests never carry
+a filesystem path.
+
+```sh
+curl -sS -X POST http://127.0.0.1:8080/parse \
+  -H 'content-type: application/json' \
+  -d '{"text": "Should we cache tokens?\nYes.", "project_id": "project-18f3a2-1"}'
+```
+
 ## Response
 
 The response is a `ParseResult` as JSON. Its important fields:
@@ -203,6 +217,9 @@ request never returns a partly valid graph.
 | 400 | `invalid_request` | Malformed JSON, missing `text`, or empty text |
 | 413 | `oversized_input` | Text exceeds the byte or segment limit, or the JSON envelope is too large |
 | 422 | `invalid_output` | The model did not submit a valid extraction within the attempt budget |
+| 403 | `forbidden` | `project_id` names a project the access policy refuses for this caller and agent |
+| 404 | `not_found` | `project_id` names no registered project |
+| 422 | `project_unavailable` | `project_id` is registered and allowed, but its folder no longer exists or is not a directory |
 | 500 | `internal_error` | A configuration or adapter failure unrelated to model output |
 | 502 | `provider_error` | The provider request failed |
 | 504 | `timeout` | A model attempt exceeded the configured timeout |
@@ -294,6 +311,16 @@ JSON
 | `turns` | Earlier `{question_node_id, question, explanation_node_id, explanation}` entries, oldest first. Omit on the first turn. Node IDs are recorded as given, not verified |
 | `question` | The user's question, preserved unchanged |
 | `author` | Optional human identity; the question node author, otherwise `unknown` |
+| `project_id` | Optional id of a registered project (`POST /projects`). The Explainer then reads that project's folder for this call only, grounding is `project`, and `run.project_id` records it. It takes precedence over `DAFTPROMPT_PROJECT_ROOT`. Never a filesystem path |
+
+```sh
+curl -sS -X POST http://127.0.0.1:8080/clarify \
+  -H 'content-type: application/json' \
+  -d '{"source": {"text": "We use a token bucket.", "payload_hash": "<payload.hash>"},
+       "target": {"node_id": "node-s1", "display_id": 1, "start_byte": 7, "end_byte": 19},
+       "question": "What is a token bucket?",
+       "project_id": "project-18f3a2-1"}'
+```
 
 ### Response
 
@@ -318,7 +345,7 @@ The response is a `ClarifyResult`:
 | --- | --- | --- |
 | `DAFTPROMPT_EXPLAINER_PROVIDER` | `neuralwatt` | `openai`, `neuralwatt`, `cerebras`, or `groq`; recorded as `run.provider`. Independent of `DAFTPROMPT_API_PROVIDER` |
 | `DAFTPROMPT_EXPLAINER_MODEL` | `glm-5.3-flash` | Model identifier recorded as `run.model`; select `gpt-oss-120b` for Cerebras |
-| `DAFTPROMPT_PROJECT_ROOT` | unset | Directory the Explainer may read. Must exist and be a directory or startup fails. Unset means text-only mode |
+| `DAFTPROMPT_PROJECT_ROOT` | unset | Fallback directory for requests without `project_id`. Must exist and be a directory or startup fails. A request's `project_id` takes precedence over it. Unset means such requests are text-only; a hosted deployment would leave it unset so every folder goes through the registry and policy |
 
 Credentials are the provider's own variables (`NEURALWATT_API_KEY`,
 `NEURALWATT_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CEREBRAS_API_KEY`,
@@ -366,6 +393,9 @@ Same shape and statuses as `/parse`, with two more `400` kinds:
 | 400 | `invalid_target` | The target range is empty, out of bounds, or off a `char` boundary |
 | 413 | `oversized_input` | Question, history, source, or JSON envelope over its limit |
 | 422 | `invalid_output` | No valid submission within the attempt budget (bad schema, unread file citation, bad `[n]` marker, ...) |
+| 403 | `forbidden` | The access policy refuses `project_id` for this caller |
+| 404 | `not_found` | `project_id` names no registered project |
+| 422 | `project_unavailable` | The project's folder is gone or not a directory |
 | 500 | `internal_error` | Adapter or configuration failure |
 | 502 | `provider_error` | The provider request failed (not retried) |
 | 504 | `timeout` | One attempt exceeded the timeout (not retried). The worst case is one timeout |
@@ -398,3 +428,61 @@ GROQ_API_KEY=your-key
 For the release GUI, build `cargo build --release -p daftprompt-api`, then restart
 the GUI/API. Process environment variables override `.env`. No new dependencies
 are required. Live model availability and extraction quality require a live test.
+
+## Projects and storage
+
+The API opens one SQLite database at startup and serves a registry of
+*projects*: a project is a named local folder. Registering a project records
+its location only; nothing inside the folder is read, written, or deleted, and
+removing a project from the registry never touches files.
+
+A request selects a project per call with `project_id` on `/parse` and
+`/clarify`; clients register a folder here first (the GUI will do this on a
+folder pick or drop). Resolution has three steps, in `daftprompt_core::access`:
+the registry lookup, a `RootPolicy` decision for the caller (`Principal`) and
+the agent (Scribe or Explainer), and a check that the folder still exists. The
+default `LocalPolicy` allows every registered project for both agents and the
+principal is always `Local`, because there is no authentication yet. A hosted
+server would replace the principal extractor with its auth layer and install a
+policy that applies per-user, per-team, and per-agent folder rules. When a
+request has no `project_id`, `DAFTPROMPT_PROJECT_ROOT` (if set) is the
+Explainer's default project.
+
+| variable | default | meaning |
+| --- | --- | --- |
+| `DAFTPROMPT_DB_PATH` | `<OS user data dir>/daftprompt/daftprompt.db` | SQLite file. Missing parent directories are created. On macOS: `~/Library/Application Support/daftprompt/daftprompt.db`; Linux: `$XDG_DATA_HOME/daftprompt/daftprompt.db`. A database written by a newer build is refused at startup |
+
+A project is `{ id, name, root_path, created_at, last_opened_at }`. `id` is a
+Rust-generated string (`project-<nanos hex>-<counter hex>`, the same scheme as
+other records). `root_path` is the absolute, canonicalized folder path and is
+unique. Timestamps are RFC 3339 UTC.
+
+| route | body | success | notes |
+| --- | --- | --- | --- |
+| `GET /projects` | none | `200` array, most recently opened first | |
+| `POST /projects` | `{ "path": "...", "name": "..."? }` | `201` project | The path must exist and be a directory; the name defaults to the folder name. If the folder is already registered the existing project is returned unchanged with `200` (the supplied name is ignored) |
+| `GET /projects/{id}` | none | `200` project | |
+| `POST /projects/{id}/open` | none | `200` project | Sets `last_opened_at` to now |
+| `PATCH /projects/{id}` | `{ "name": "..." }` | `200` project | Blank names are rejected |
+| `DELETE /projects/{id}` | none | `204` | Registry only |
+
+Failures use the same `{ "kind", "detail" }` body as the other routes:
+`invalid_request` (400: bad path, blank name, malformed JSON), `not_found`
+(404: unknown id), `internal_error` (500: storage failure, or no store
+configured). On `/parse` and `/clarify`, `project_id` adds `not_found` (404),
+`forbidden` (403), and `project_unavailable` (422: the request is well formed
+but the registered folder cannot be used right now, which is not the client's
+syntax error that 400 means). A `project_id` with no store configured is
+`500 internal_error`.
+
+```sh
+curl -s -X POST http://127.0.0.1:8080/projects \
+  -H 'content-type: application/json' \
+  -d '{"path": "/Users/me/code/my-app"}'
+curl -s http://127.0.0.1:8080/projects
+curl -s http://127.0.0.1:8080/projects/$ID
+curl -s -X POST http://127.0.0.1:8080/projects/$ID/open
+curl -s -X PATCH http://127.0.0.1:8080/projects/$ID \
+  -H 'content-type: application/json' -d '{"name": "My app"}'
+curl -s -X DELETE http://127.0.0.1:8080/projects/$ID
+```

@@ -59,10 +59,12 @@ Crates.io dependencies are declared once in the workspace `Cargo.toml`. Resolved
 - `rig` 0.43.0 with `reqwest` and `rustls` — enabled only by `daftprompt-api`, which builds the provider client from environment credentials. Core keeps Rig's `agent` feature only, so the shared library stays transport-free.
 - `dotenvy` 0.15.7 — loads a local `.env` at startup of `daftprompt-api` and, as an optional dependency of the `live-eval` feature, of `evaluate-scribe`. Core's normal build does not include it.
 - `ignore` 0.4.34, `globset` 0.4.21 — core's read-only project tools (`daftprompt_core::project_tools`): `ignore::WalkBuilder` for `.gitignore`-aware, hidden-skipping, sorted traversal and `ignore::gitignore::Gitignore` for single-path checks (sources inspected before choosing); `globset` for the `glob` filters. `tempfile` 3.27.0 is a dev-dependency of core for filesystem tests.
+- `rusqlite` 0.41.1 with `bundled` (pulls `libsqlite3-sys` 0.39.1, which compiles SQLite from source, so no system SQLite is needed; the first build needs a C compiler) — the SQLite store in `daftprompt_core::store`. `directories` 6.0.0 — resolves the per-user data directory for the default database path (`ProjectDirs::from("", "", "daftprompt")`). Both used only by core.
 - `ureq` 3.5.0 — GUI HTTP client.
 - `wgpu` 29.0.4, `winit` 0.30.13, `pollster` 0.4.0 — GUI host integration. These are the versions akar builds against; akar does not re-export its surface or event-loop types, so the app declares them directly. They stay out of core, types, and the API.
 - `glyphon` 0.11.0 — same text shaping version as akar's pipeline. The GUI uses it only to give the scrollable block text an explicit viewport clip; app chrome still uses akar components.
 - `arboard` 3.7.0 (default features off: text only, no image stack) — GUI system clipboard for textarea copy and paste. Also pulls `clipboard-win` 5.4.3 and `error-code` 3.4.0 on Windows, and `objc2-core-graphics`/`objc2-io-surface` 0.3.2 on macOS. Used only by `daftprompt-gui`.
+- `rfd` 0.17.2 (default features) — GUI native folder dialog (`AsyncFileDialog::pick_folder`) for choosing a project folder. On macOS it uses `objc2`/`objc2-app-kit` (already in the tree through winit and arboard); on Linux the default `xdg-portal` backend. Used only by `daftprompt-gui`.
 
 ### Bundled GUI fonts
 
@@ -91,7 +93,7 @@ First build needs network access to fetch both Git repositories; afterwards they
 | `daftprompt-types` | `serde`, `schemars` | Serializable request, extraction, graph-result, and error contracts. No HTTP, GUI, or core dependency. |
 | `daftprompt-core` | `daftprompt-types`, Rig, `serde`, `sha2`, Tokio (timer) | Shared library: text primitives, validation, graph construction, agents, and evaluation fixtures/scoring. |
 | `daftprompt-api` | `daftprompt-core`, `daftprompt-types`, Axum, Tokio, Rig (provider transport) | Stateless HTTP service: `POST /parse`, implemented in task 4 and documented in [api.md](api.md). |
-| `daftprompt-gui` | `daftprompt-types`, akar, `ureq`, `wgpu`/`winit`/`pollster`, `glyphon` | Native akar app: two-column parse view. Calls the API over HTTP; never links core or api. |
+| `daftprompt-gui` | `daftprompt-types`, akar, `ureq`, `wgpu`/`winit`/`pollster`, `glyphon`, `arboard`, `rfd` | Native akar app: two-column parse view. Calls the API over HTTP; never links core or api. |
 
 The GUI is implemented in [gui.md](gui.md). It talks to the API only, keeps the
 HTTP call on a worker thread, and renders the API's payload and span ranges
@@ -282,7 +284,9 @@ Set `DAFTPROMPT_EXPLAINER_PROVIDER=cerebras` and
 The full environment table, a curl example, the result shape, and the error
 mapping are in [api.md](api.md). The API maps explicit `ParseError` variants to
 400, 413, 422, 502, 504, or 500 and never returns a partly valid graph. Tests
-drive the router with a stub `Parser`, so they need no credentials.
+drive the router with a stub `Parser`, so they need no credentials. The `/projects` tests open a SQLite database in a temporary directory.
+
+The API opens the SQLite database at startup: `DAFTPROMPT_DB_PATH` if set, otherwise `<OS user data dir>/daftprompt/daftprompt.db` (`~/Library/Application Support/daftprompt/daftprompt.db` on macOS). Parent directories are created and migrations (`PRAGMA user_version`) are applied.
 
 ## Native GUI
 

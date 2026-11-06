@@ -28,6 +28,9 @@ sha2 = "0.10"
 ignore = "0.4"
 globset = "0.4"
 tempfile = "3"
+# Persistent storage: bundled SQLite (no system library) and OS data directory lookup.
+rusqlite = { version = "0.41", features = ["bundled"] }
+directories = "6"
 rig = { git = "https://github.com/0xPlaygrounds/rig.git", rev = "7dfd8a4229a9d89af159489687cb14b404b2871d", default-features = false, features = [
   "agent",
 ] }
@@ -59,6 +62,8 @@ glyphon = "0.11"
 # System clipboard for textarea copy/paste. The default `image-data` feature is
 # off: only text is used, and it would pull in the image stack.
 arboard = { version = "3.7", default-features = false }
+# Native folder dialog for choosing a project folder.
+rfd = "0.17"
 
 [profile.dev]
 # Keep debuginfo useful without making large GUI/LLM dependency builds heavy.

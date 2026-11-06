@@ -33,7 +33,8 @@ pub use config::{
 pub use model::{BoxFuture, ExplainerInput, ExplainerModel, ModelError, RigExplainer};
 pub use prompt::{PROMPT_VERSION, SYSTEM_PROMPT};
 
-use crate::project_tools::{ProjectFiles, ProjectToolbox};
+use crate::access::ProjectScope;
+use crate::project_tools::{FsProject, ProjectFiles, ProjectToolbox};
 use crate::scribe::support;
 
 /// An object-safe clarification interface for clients that want to erase the
@@ -41,6 +42,18 @@ use crate::scribe::support;
 pub trait Clarifier: Send + Sync {
     /// Explain one span for one question.
     fn clarify(&self, request: ClarifyRequest) -> BoxFuture<'_, Result<ClarifyResult, ParseError>>;
+
+    /// Explain one span, reading the project the caller's access policy
+    /// granted. `None` keeps the Explainer's default project, if it has one.
+    ///
+    /// The default ignores the scope.
+    fn clarify_in<'a>(
+        &'a self,
+        request: ClarifyRequest,
+        _scope: Option<&ProjectScope>,
+    ) -> BoxFuture<'a, Result<ClarifyResult, ParseError>> {
+        self.clarify(request)
+    }
 }
 
 /// The Explainer agent, parameterised by its model.
@@ -60,8 +73,9 @@ impl<M: ExplainerModel> Explainer<M> {
         }
     }
 
-    /// Provide a read-only project so each run gets project tools and file
-    /// citations. Without it the result is [`Grounding::TextOnly`].
+    /// Provide a default read-only project so each run gets project tools and
+    /// file citations. A project supplied for one call overrides it. Without
+    /// either the result is [`Grounding::TextOnly`].
     pub fn with_project(mut self, project: Arc<dyn ProjectFiles>) -> Self {
         self.project = Some(project);
         self
@@ -72,9 +86,13 @@ impl<M: ExplainerModel> Explainer<M> {
         &self.config
     }
 
-    /// The grounding mode every result of this Explainer has.
+    /// The grounding mode of a run that supplies no project of its own.
     pub fn grounding(&self) -> Grounding {
-        if self.project.is_some() {
+        Self::grounding_for(self.project.is_some())
+    }
+
+    fn grounding_for(has_project: bool) -> Grounding {
+        if has_project {
             Grounding::Project
         } else {
             Grounding::TextOnly
@@ -96,8 +114,48 @@ impl<M: ExplainerModel> Explainer<M> {
     /// The run records the successful attempt's tool calls; `run.attempts`
     /// counts all attempts.
     pub async fn clarify(&self, request: ClarifyRequest) -> Result<ClarifyResult, ParseError> {
+        self.run(request, None, None).await
+    }
+
+    /// Clarify one span with `project` for this call only.
+    ///
+    /// The per-call project replaces the default one, and grounding follows
+    /// it. Everything else behaves like [`Explainer::clarify`].
+    pub async fn clarify_with_project(
+        &self,
+        request: ClarifyRequest,
+        project: Arc<dyn ProjectFiles>,
+    ) -> Result<ClarifyResult, ParseError> {
+        self.run(request, Some(project), None).await
+    }
+
+    /// Clarify one span with the project an access policy granted.
+    ///
+    /// With a scope, the run reads a fresh [`FsProject`] over the scope's
+    /// root instead of the default project and records the project id on
+    /// the run. With `None` it is [`Explainer::clarify`].
+    pub async fn clarify_in(
+        &self,
+        request: ClarifyRequest,
+        scope: Option<&ProjectScope>,
+    ) -> Result<ClarifyResult, ParseError> {
+        let Some(scope) = scope else {
+            return self.run(request, None, None).await;
+        };
+        let project = scope_project(scope)?;
+        self.run(request, Some(project), Some(scope.project_id.clone()))
+            .await
+    }
+
+    async fn run(
+        &self,
+        request: ClarifyRequest,
+        call_project: Option<Arc<dyn ProjectFiles>>,
+        project_id: Option<String>,
+    ) -> Result<ClarifyResult, ParseError> {
         let prepared = context::prepare(&request, &self.config)?;
-        let grounding = self.grounding();
+        let project = call_project.or_else(|| self.project.clone());
+        let grounding = Self::grounding_for(project.is_some());
         let prompt = context::render_prompt(&prepared, grounding);
 
         let started_at = support::now();
@@ -106,7 +164,7 @@ impl<M: ExplainerModel> Explainer<M> {
         let mut last_invalid = "no attempt ran".to_owned();
 
         for attempt in 1..=max_attempts {
-            let toolbox = self.project.as_ref().map(|files| {
+            let toolbox = project.as_ref().map(|files| {
                 Arc::new(ProjectToolbox::new(
                     files.clone(),
                     self.config.tools.clone(),
@@ -156,6 +214,7 @@ impl<M: ExplainerModel> Explainer<M> {
                         run_id,
                         started_at,
                         attempts: attempt,
+                        project_id: project_id.clone(),
                     });
                 }
                 Err(detail) => last_invalid = detail,
@@ -167,6 +226,18 @@ impl<M: ExplainerModel> Explainer<M> {
             attempts: max_attempts,
         })
     }
+}
+
+/// A read-only project over the scope's root.
+fn scope_project(scope: &ProjectScope) -> Result<Arc<dyn ProjectFiles>, ParseError> {
+    FsProject::new(&scope.root)
+        .map(|project| Arc::new(project) as Arc<dyn ProjectFiles>)
+        .map_err(|error| ParseError::InvalidRequest {
+            detail: format!(
+                "the folder of project {:?} cannot be read: {error}",
+                scope.project_id
+            ),
+        })
 }
 
 impl Explainer<RigExplainer> {
@@ -186,5 +257,19 @@ where
 {
     fn clarify(&self, request: ClarifyRequest) -> BoxFuture<'_, Result<ClarifyResult, ParseError>> {
         Box::pin(Explainer::clarify(self, request))
+    }
+
+    fn clarify_in<'a>(
+        &'a self,
+        request: ClarifyRequest,
+        scope: Option<&ProjectScope>,
+    ) -> BoxFuture<'a, Result<ClarifyResult, ParseError>> {
+        let project = scope.map(|scope| (scope_project(scope), scope.project_id.clone()));
+        Box::pin(async move {
+            match project {
+                None => self.run(request, None, None).await,
+                Some((project, id)) => self.run(request, Some(project?), Some(id)).await,
+            }
+        })
     }
 }

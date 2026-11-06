@@ -4,6 +4,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use daftprompt_core::ProjectScope;
 use daftprompt_core::explainer::{
     Clarifier, Explainer, ExplainerConfig, ExplainerInput, ExplainerModel, ModelError,
 };
@@ -116,6 +117,7 @@ fn request(source: &str, needle: &str) -> ClarifyRequest {
         turns: Vec::new(),
         question: "What does the bucket mean here?".to_owned(),
         author: Some("ada".to_owned()),
+        project_id: None,
     }
 }
 
@@ -728,4 +730,135 @@ async fn clarifier_trait_object_works() {
         .await
         .unwrap();
     assert_eq!(result.run.agent, "explainer");
+}
+
+// ---------------------------------------------------------------------------
+// Per-call projects
+// ---------------------------------------------------------------------------
+
+fn other_project() -> Arc<dyn ProjectFiles> {
+    Arc::new(InMemoryProject::new().with_file("docs/other.md", "# Other\nA different folder.\n"))
+}
+
+fn read_other() -> Calls {
+    vec![(
+        "read_file",
+        json!({"path": "docs/other.md", "start_line": 1, "end_line": 2}),
+    )]
+}
+
+#[tokio::test]
+async fn a_per_call_project_gives_a_text_only_explainer_project_grounding() {
+    let stub = Arc::new(Stub::always(
+        read_other(),
+        answer("See [1].", vec![file("docs/other.md", 1, 2)]),
+    ));
+    let explainer = explainer(&stub, false);
+    assert_eq!(explainer.grounding(), Grounding::TextOnly);
+
+    let result = explainer
+        .clarify_with_project(request(SOURCE, "token bucket"), other_project())
+        .await
+        .unwrap();
+    assert_eq!(result.grounding, Grounding::Project);
+    assert!(stub.inputs.lock().unwrap()[0].toolbox.is_some());
+    assert_eq!(result.run.project_id, None);
+
+    // The next plain call is text-only again: the project was per call.
+    let stub = Arc::new(Stub::always(
+        Vec::new(),
+        answer("It is a limiter [1].", vec![source(1, 1)]),
+    ));
+    let result = self::explainer(&stub, false)
+        .clarify(request(SOURCE, "token bucket"))
+        .await
+        .unwrap();
+    assert_eq!(result.grounding, Grounding::TextOnly);
+}
+
+#[tokio::test]
+async fn a_per_call_project_overrides_the_default_one() {
+    let stub = Arc::new(Stub::always(
+        read_other(),
+        answer("See [1].", vec![file("docs/other.md", 1, 2)]),
+    ));
+    let explainer = explainer(&stub, true);
+
+    // The default project has no docs/other.md, so the call fails on its own.
+    let error = explainer
+        .clarify(request(SOURCE, "token bucket"))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ParseError::InvalidOutput { .. }), "{error}");
+
+    let result = explainer
+        .clarify_with_project(request(SOURCE, "token bucket"), other_project())
+        .await
+        .unwrap();
+    assert_eq!(result.grounding, Grounding::Project);
+    assert_eq!(result.citations.len(), 1);
+}
+
+#[tokio::test]
+async fn a_granted_scope_reads_its_folder_and_records_the_project_id() {
+    let folder = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(folder.path().join("src")).unwrap();
+    std::fs::write(folder.path().join("src/limit.rs"), LIMITER).unwrap();
+    let scope = ProjectScope {
+        project_id: "project-1".to_owned(),
+        root: folder.path().to_path_buf(),
+    };
+
+    let stub = Arc::new(Stub::always(
+        read_limiter(),
+        answer(
+            "A bucket holds capacity [1].",
+            vec![file("src/limit.rs", 2, 4)],
+        ),
+    ));
+    let explainer = explainer(&stub, false);
+    let result = explainer
+        .clarify_in(request(SOURCE, "token bucket"), Some(&scope))
+        .await
+        .unwrap();
+    assert_eq!(result.grounding, Grounding::Project);
+    assert_eq!(result.run.project_id.as_deref(), Some("project-1"));
+
+    // Through the trait object too.
+    let clarifier: Arc<dyn Clarifier> = Arc::new(self::explainer(&stub, false));
+    let result = clarifier
+        .clarify_in(request(SOURCE, "token bucket"), Some(&scope))
+        .await
+        .unwrap();
+    assert_eq!(result.run.project_id.as_deref(), Some("project-1"));
+
+    // No scope keeps the default (here: none).
+    let stub = Arc::new(Stub::always(
+        Vec::new(),
+        answer("It is a limiter [1].", vec![source(1, 1)]),
+    ));
+    let result = self::explainer(&stub, false)
+        .clarify_in(request(SOURCE, "token bucket"), None)
+        .await
+        .unwrap();
+    assert_eq!(result.grounding, Grounding::TextOnly);
+    assert_eq!(result.run.project_id, None);
+}
+
+#[tokio::test]
+async fn a_scope_over_a_missing_folder_is_rejected_before_any_model_call() {
+    let scope = ProjectScope {
+        project_id: "project-1".to_owned(),
+        root: "/definitely/not/a/folder".into(),
+    };
+    let stub = Arc::new(Stub::always(Vec::new(), answer("ok", vec![])));
+    let error = explainer(&stub, false)
+        .clarify_in(request(SOURCE, "token bucket"), Some(&scope))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, ParseError::InvalidRequest { .. }),
+        "{error}"
+    );
+    assert_eq!(stub.calls(), 0);
 }

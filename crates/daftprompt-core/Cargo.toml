@@ -15,6 +15,8 @@ sha2.workspace = true
 ignore.workspace = true
 globset.workspace = true
 thiserror.workspace = true
+rusqlite.workspace = true
+directories.workspace = true
 pulldown-cmark.workspace = true
 # Original v3 evaluation schema; normal core builds use the shared types.
 schemars = { workspace = true, optional = true }

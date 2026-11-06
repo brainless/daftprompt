@@ -9,6 +9,7 @@
 //!   Rig's `submit` tool. It contains source references, never offsets.
 //! - [`ClarifyRequest`], [`ExplainerExtraction`], and [`ClarifyResult`]: the
 //!   clarification branch's request, model-facing output, and validated result.
+//! - [`Project`] and its request bodies: the saved-project registry contract.
 //! - [`ParseResult`] and the graph records: the validated, Rust-built result.
 //! - [`ParseError`]: explicit failures; HTTP status mapping belongs to the API.
 //!
@@ -19,6 +20,7 @@
 pub mod error;
 pub mod extraction;
 pub mod graph;
+pub mod project;
 pub mod request;
 
 pub use error::ParseError;
@@ -31,6 +33,7 @@ pub use graph::{
     LabelStatus, Node, NodeContext, ParseResult, Payload, Run, RunInput, RunStatus, SourceRange,
     SourceWindow, SpanInfo, ToolCall,
 };
+pub use project::{CreateProjectRequest, Project, RenameProjectRequest};
 pub use request::{
     ClarifyRequest, ClarifySource, ClarifyTarget, ClarifyTurn, ContentType, ContentTypeSource,
     ParseRequest, SourceKind, SourceMetadata,

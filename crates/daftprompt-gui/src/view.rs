@@ -481,6 +481,7 @@ mod tests {
                 attempts: 1,
                 consistency_followup: false,
                 consistency_used: false,
+                project_id: None,
             },
             run_inputs: vec![RunInput {
                 run_id: "run".to_owned(),

@@ -29,6 +29,7 @@ pub(crate) struct Built<'a> {
     pub(crate) run_id: String,
     pub(crate) started_at: String,
     pub(crate) attempts: u32,
+    pub(crate) project_id: Option<String>,
 }
 
 pub(crate) fn build(input: Built<'_>) -> Result<ClarifyResult, ParseError> {
@@ -42,6 +43,7 @@ pub(crate) fn build(input: Built<'_>) -> Result<ClarifyResult, ParseError> {
         run_id,
         started_at,
         attempts,
+        project_id,
     } = input;
     let request = prepared.request;
     let created_at = now();
@@ -241,6 +243,7 @@ pub(crate) fn build(input: Built<'_>) -> Result<ClarifyResult, ParseError> {
         attempts,
         consistency_followup: false,
         consistency_used: false,
+        project_id,
     };
 
     Ok(ClarifyResult {

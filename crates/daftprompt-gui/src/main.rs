@@ -15,11 +15,13 @@ mod api;
 mod clarify;
 mod clipboard;
 mod fonts;
+mod projects;
 mod render;
 mod spawn;
 mod theme;
 mod view;
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -29,20 +31,22 @@ use akar_components::{
     AkarTheme, ButtonStyle, ButtonVariant, FontWeight, HeadingLevel, TextEditState, TextStyle,
     akar_button_styled, akar_container, akar_heading, akar_paragraph, akar_textarea_styled,
 };
-use akar_core::AkarCore;
+use akar_core::{AkarCore, InputState, Key};
 use akar_layout::{
     Dimension, Display, FlexDirection, Layout, NodeId, PageConfig, Rect, Size, Style, length,
 };
 use akar_winit::{ActivationProgress, StartupActivation, process_window_event};
-use api::{ApiError, ParseClient};
+use api::{ApiError, ParseClient, build_parse_request};
 use clarify::{Branches, build_branch_view, panel_blocks};
 use clipboard::{ClipboardRequest, SystemClipboard};
 use daftprompt_types::{ClarifyRequest, ClarifyResult, ParseResult};
+use projects::{DropAction, MenuAction, NoticeKind, ProjectMessage, Projects, classify_drop};
 use render::{
-    ContentLayout, PanelLayout, build_panel, draw_content, draw_notice, draw_panel_content,
+    ContentLayout, PanelLayout, build_panel, draw_content, draw_drop_frame, draw_notice,
+    draw_panel_content, draw_project_menu,
 };
 use theme::DAFTPROMPT_THEME;
-use view::{Block, ParseView, Phase, build_blocks, result_summary};
+use view::{Block, ParseView, Phase, build_blocks, result_summary, truncate_for_display};
 use wgpu::{
     CompositeAlphaMode, CurrentSurfaceTexture, InstanceDescriptor, PresentMode, TextureUsages,
 };
@@ -55,8 +59,13 @@ use winit::{
 };
 
 const SIDEBAR_WIDTH: f32 = 340.0;
+const PICKER_HEIGHT: f32 = 36.0;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const CURSOR_BLINK: Duration = Duration::from_millis(500);
+/// The API child is spawned without a readiness wait, so the first project
+/// fetch retries refused connections for up to about ten seconds.
+const STARTUP_LIST_ATTEMPTS: u32 = 40;
+const STARTUP_LIST_RETRY: Duration = Duration::from_millis(250);
 const API_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 fn main() {
@@ -122,6 +131,14 @@ struct App {
     api_note: Option<String>,
 }
 
+/// A project selection that needs the API.
+enum SelectJob {
+    /// Open a registered project.
+    Open(String),
+    /// Register a folder (idempotent), then open the resulting project.
+    Register(String),
+}
+
 struct GuiState {
     window: Arc<Window>,
     device: wgpu::Device,
@@ -132,6 +149,7 @@ struct GuiState {
     layout: Layout,
     page: akar_layout::PageLayout,
 
+    project_picker: NodeId,
     left_title: NodeId,
     left_hint: NodeId,
     input_node: NodeId,
@@ -146,6 +164,23 @@ struct GuiState {
     panel_body: NodeId,
     panel_input: NodeId,
     panel_send: NodeId,
+
+    /// The selected project and the registry list; every new request reads
+    /// its project id from here.
+    projects: Projects,
+    /// The picker list is open and replaces the sidebar body.
+    project_menu_open: bool,
+    /// "Choose folder…" was picked; the dialog opens after the frame.
+    want_folder_dialog: bool,
+    /// The native folder dialog is showing.
+    folder_dialog_open: bool,
+    /// Files are being dragged over the window.
+    drag_hover: bool,
+    /// A click closed the list from outside; its release must not also click
+    /// whatever lies beneath.
+    swallow_release: bool,
+    project_tx: Sender<ProjectMessage>,
+    project_rx: Receiver<ProjectMessage>,
 
     text: String,
     edit_state: TextEditState,
@@ -240,6 +275,7 @@ impl ApplicationHandler for App {
         let (layout, page, nodes) = build_layout();
         let (tx, rx) = mpsc::channel();
         let (clarify_tx, clarify_rx) = mpsc::channel();
+        let (project_tx, project_rx) = mpsc::channel();
 
         self.state = Some(GuiState {
             window,
@@ -250,6 +286,7 @@ impl ApplicationHandler for App {
             core,
             layout,
             page,
+            project_picker: nodes.project_picker,
             left_title: nodes.left_title,
             left_hint: nodes.left_hint,
             input_node: nodes.input_node,
@@ -264,6 +301,14 @@ impl ApplicationHandler for App {
             panel_body: nodes.panel_body,
             panel_input: nodes.panel_input,
             panel_send: nodes.panel_send,
+            projects: Projects::default(),
+            project_menu_open: false,
+            want_folder_dialog: false,
+            folder_dialog_open: false,
+            drag_hover: false,
+            swallow_release: false,
+            project_tx,
+            project_rx,
             text: String::new(),
             edit_state: TextEditState::default(),
             input_scroll: 0.0,
@@ -293,6 +338,11 @@ impl ApplicationHandler for App {
             clarify_rx,
             started: Instant::now(),
         });
+
+        // Preselect the most recently opened project.
+        if let Some(state) = &mut self.state {
+            spawn_list(state, true);
+        }
     }
 
     fn window_event(
@@ -326,6 +376,10 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => render(state),
+            WindowEvent::HoveredFile(_) => state.drag_hover = true,
+            WindowEvent::HoveredFileCancelled | WindowEvent::DroppedFile(_) => {
+                state.drag_hover = false;
+            }
             _ => {}
         }
 
@@ -363,7 +417,10 @@ impl ApplicationHandler for App {
         }
 
         if let Some(state) = &self.state {
-            if state.parse_view.is_loading() || state.branches.any_pending() {
+            if state.parse_view.is_loading()
+                || state.branches.any_pending()
+                || state.projects.is_busy()
+            {
                 wake_at = Some(now + POLL_INTERVAL);
                 state.window.request_redraw();
             } else if textarea_focused(state) {
@@ -433,6 +490,11 @@ fn render(state: &mut GuiState) {
     let theme = &DAFTPROMPT_THEME;
     let now = Instant::now();
     state.core.begin_frame(size.width, size.height, scale);
+    if state.swallow_release && state.core.input.mouse_buttons_released[0] {
+        state.core.input.mouse_buttons_released[0] = false;
+        state.swallow_release = false;
+    }
+    handle_drops(state);
 
     state.layout.compute(
         state.page.root,
@@ -447,6 +509,10 @@ fn render(state: &mut GuiState) {
     draw_sidebar(state, theme, now);
     ensure_content(state);
     draw_main(state, theme);
+    if state.drag_hover {
+        let (width, height) = (size.width as f32 / scale, size.height as f32 / scale);
+        draw_drop_frame(&mut state.core, width, height, theme);
+    }
 
     let mut encoder = state
         .device
@@ -478,8 +544,11 @@ fn render(state: &mut GuiState) {
     output.present();
 
     serve_clipboard(state);
+    if std::mem::take(&mut state.want_folder_dialog) {
+        start_folder_dialog(state);
+    }
 
-    if state.parse_view.is_loading() || state.branches.any_pending() {
+    if state.parse_view.is_loading() || state.branches.any_pending() || state.projects.is_busy() {
         state.window.request_redraw();
     }
 }
@@ -492,6 +561,7 @@ fn textarea_focused(state: &GuiState) -> bool {
 }
 
 struct LayoutNodes {
+    project_picker: NodeId,
     left_title: NodeId,
     left_hint: NodeId,
     input_node: NodeId,
@@ -538,6 +608,19 @@ fn build_layout() -> (Layout, akar_layout::PageLayout, LayoutNodes) {
         },
     );
 
+    let project_picker = layout.new_leaf(Style {
+        size: Size {
+            width: Dimension::percent(1.0),
+            height: length(PICKER_HEIGHT),
+        },
+        margin: Rect {
+            top: length(0.0_f32),
+            right: length(0.0_f32),
+            bottom: length(14.0_f32),
+            left: length(0.0_f32),
+        },
+        ..Default::default()
+    });
     let left_title = layout.new_leaf(Style {
         size: Size {
             width: Dimension::percent(1.0),
@@ -593,6 +676,7 @@ fn build_layout() -> (Layout, akar_layout::PageLayout, LayoutNodes) {
     layout.set_children(
         sidebar,
         &[
+            project_picker,
             left_title,
             left_hint,
             left_spacer,
@@ -754,6 +838,7 @@ fn build_layout() -> (Layout, akar_layout::PageLayout, LayoutNodes) {
         layout,
         page,
         LayoutNodes {
+            project_picker,
             left_title,
             left_hint,
             input_node,
@@ -825,6 +910,10 @@ fn text_style() -> TextStyle {
 }
 
 fn draw_sidebar(state: &mut GuiState, theme: &AkarTheme, now: Instant) {
+    if draw_project_picker(state, theme) {
+        // The open list replaces the rest of the sidebar.
+        return;
+    }
     akar_heading(
         &mut state.core,
         &state.layout,
@@ -835,8 +924,24 @@ fn draw_sidebar(state: &mut GuiState, theme: &AkarTheme, now: Instant) {
         theme,
     );
 
+    // A project message takes the hint's place until the next project action.
+    let (hint_text, hint_color) = match state.projects.notice() {
+        Some(notice) => (
+            notice.text.as_str(),
+            match notice.kind {
+                NoticeKind::Error => theme.error,
+                NoticeKind::Info => theme.warning,
+            },
+        ),
+        None => (
+            "Paste chat, code, email, or document text. Scribe marks questions, local \
+             answer links, statuses, and explicit @assignees. Unlabelled text stays \
+             unlabelled.",
+            theme.muted_content,
+        ),
+    };
     let hint_style = TextStyle {
-        color: Some(theme.muted_content),
+        color: Some(hint_color),
         font_size: Some(theme.font_size_sm),
         line_height: Some(theme.font_size_sm * 1.5),
         ..ui_style(FontWeight::Normal)
@@ -845,9 +950,7 @@ fn draw_sidebar(state: &mut GuiState, theme: &AkarTheme, now: Instant) {
         &mut state.core,
         &state.layout,
         state.left_hint,
-        "Paste chat, code, email, or document text. Scribe marks questions, local \
-         answer links, statuses, and explicit @assignees. Unlabelled text stays \
-         unlabelled.",
+        hint_text,
         Some(hint_style),
         theme,
     );
@@ -919,6 +1022,180 @@ fn draw_sidebar(state: &mut GuiState, theme: &AkarTheme, now: Instant) {
     if button.clicked && !busy {
         submit(state);
     }
+}
+
+/// Draw the project button and, while open, its list. Returns whether the list
+/// covered the sidebar body this frame, so the caller skips drawing beneath it.
+fn draw_project_picker(state: &mut GuiState, theme: &AkarTheme) -> bool {
+    let name = truncate_for_display(state.projects.label(), 30);
+    let mut style = ButtonStyle::empty();
+    style.text_style = Some(ui_style(FontWeight::Medium));
+    style.border_color = Some(theme.base_300);
+    style.hover_fill = Some(theme.primary);
+    style.content_color = Some(if state.projects.current().is_some() {
+        theme.base_content
+    } else {
+        theme.muted_content
+    });
+    let button = akar_button_styled(
+        &mut state.core,
+        &state.layout,
+        state.project_picker,
+        &format!("{name}  \u{25BE}"),
+        ButtonVariant::Outline,
+        &style,
+        theme,
+    );
+    if button.clicked {
+        state.project_menu_open = !state.project_menu_open;
+        if state.project_menu_open {
+            state.projects.dismiss_notice();
+        }
+        state.window.request_redraw();
+    }
+    if !state.project_menu_open {
+        return false;
+    }
+
+    let picker = state.layout.rect(state.project_picker);
+    let sidebar = state
+        .page
+        .sidebar_left
+        .map_or(picker, |node| state.layout.rect(node));
+    let top = picker[1] + picker[3] + 8.0;
+    let area = [
+        picker[0],
+        top,
+        picker[2],
+        sidebar[1] + sidebar[3] - 20.0 - top,
+    ];
+
+    let outside = state.core.input.mouse_buttons_pressed[0]
+        && !state.core.input.is_hovering(picker)
+        && !state.core.input.is_hovering(area);
+    if outside || state.core.input.keys_pressed.contains(&Key::Escape) {
+        state.project_menu_open = false;
+        state.swallow_release = outside;
+        state.window.request_redraw();
+        return false;
+    }
+
+    let entries = state.projects.entries();
+    if let Some(index) = draw_project_menu(&mut state.core, area, &entries, theme) {
+        state.project_menu_open = false;
+        apply_menu_action(state, &entries[index].action);
+        state.window.request_redraw();
+    }
+    true
+}
+
+fn apply_menu_action(state: &mut GuiState, action: &MenuAction) {
+    match action {
+        MenuAction::Clear => state.projects.clear(),
+        MenuAction::Select(id) => spawn_select(state, SelectJob::Open(id.clone())),
+        MenuAction::ChooseFolder => {
+            state.projects.dismiss_notice();
+            state.want_folder_dialog = true;
+        }
+    }
+}
+
+/// Everything dropped on the window this frame, in event order. winit 0.30
+/// reports one `DroppedFile` per path and no pointer position, so akar queues
+/// them as unpositioned window-level drops.
+fn drain_dropped(input: &mut InputState) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = std::mem::take(&mut input.unpositioned_file_drops)
+        .into_iter()
+        .flatten()
+        .collect();
+    for event in std::mem::take(&mut input.file_drop_events) {
+        paths.extend(event.paths);
+    }
+    paths
+}
+
+/// Register the first dropped folder; tell the user when only files arrived.
+fn handle_drops(state: &mut GuiState) {
+    let paths = drain_dropped(&mut state.core.input);
+    match classify_drop(&paths, Path::is_dir) {
+        DropAction::Ignore => {}
+        DropAction::Rejected(message) => {
+            state.projects.set_info(message);
+            state.window.request_redraw();
+        }
+        DropAction::Register(path) => {
+            state.project_menu_open = false;
+            spawn_select(
+                state,
+                SelectJob::Register(path.to_string_lossy().into_owned()),
+            );
+        }
+    }
+}
+
+/// Open the native folder dialog without blocking rendering.
+///
+/// On macOS `AsyncFileDialog` must be created on the main thread (this runs
+/// from the event loop): it attaches an `NSOpenPanel` sheet to the window,
+/// which the running `NSApplication` services. Only the returned future is
+/// moved to a worker thread to wait for the answer, as rfd recommends. On
+/// other platforms the same call works from any thread.
+fn start_folder_dialog(state: &mut GuiState) {
+    if state.folder_dialog_open {
+        return;
+    }
+    state.folder_dialog_open = true;
+    state.projects.job_started();
+    let dialog = rfd::AsyncFileDialog::new()
+        .set_title("Choose a project folder")
+        .set_parent(state.window.as_ref())
+        .pick_folder();
+    let tx = state.project_tx.clone();
+    thread::spawn(move || {
+        let path = pollster::block_on(dialog).map(|handle| handle.path().to_path_buf());
+        let _ = tx.send(ProjectMessage::Folder(path));
+    });
+}
+
+/// Fetch the registry on a worker thread. At startup the API may still be
+/// coming up, so refused connections are retried for a few seconds.
+fn spawn_list(state: &mut GuiState, retry: bool) {
+    state.projects.job_started();
+    let api = state.api.clone();
+    let tx = state.project_tx.clone();
+    thread::spawn(move || {
+        let attempts = if retry { STARTUP_LIST_ATTEMPTS } else { 1 };
+        let mut outcome = api.list_projects();
+        for _ in 1..attempts {
+            if outcome
+                .as_ref()
+                .is_err_and(|error| error.kind == "connection")
+            {
+                thread::sleep(STARTUP_LIST_RETRY);
+                outcome = api.list_projects();
+            } else {
+                break;
+            }
+        }
+        let _ = tx.send(ProjectMessage::Listed(outcome));
+    });
+}
+
+/// Select a project through the API; the reply makes it current.
+fn spawn_select(state: &mut GuiState, job: SelectJob) {
+    let token = state.projects.begin_select();
+    state.projects.job_started();
+    let api = state.api.clone();
+    let tx = state.project_tx.clone();
+    thread::spawn(move || {
+        let outcome = match job {
+            SelectJob::Open(id) => api.open_project(&id),
+            SelectJob::Register(path) => api
+                .create_project(&path)
+                .and_then(|project| api.open_project(&project.id)),
+        };
+        let _ = tx.send(ProjectMessage::Selected { token, outcome });
+    });
 }
 
 /// Serves the clipboard request recorded during the frame that just ended.
@@ -1258,7 +1535,12 @@ fn submit_clarify(state: &mut GuiState) {
         return;
     };
     let question = state.followup_text.clone();
-    let Some((token, request)) = state.branches.begin(parse, display_id, &question) else {
+    // The project is read now, so a later change affects only new requests.
+    let project_id = state.projects.current_id();
+    let Some((token, request)) = state
+        .branches
+        .begin(parse, display_id, &question, project_id)
+    else {
         return;
     };
     spawn_clarify(state, display_id, token, request);
@@ -1320,11 +1602,11 @@ fn submit(state: &mut GuiState) {
     state.scroll_y = 0.0;
     reset_branches(state);
 
-    let text = state.text.clone();
+    let request = build_parse_request(&state.text, state.projects.current_id());
     let api = state.api.clone();
     let tx = state.tx.clone();
     thread::spawn(move || {
-        let outcome = api.parse(&text);
+        let outcome = api.parse(&request);
         let _ = tx.send(WorkerMessage {
             submission,
             outcome,
@@ -1333,7 +1615,35 @@ fn submit(state: &mut GuiState) {
 }
 
 fn poll_worker(state: &mut GuiState) {
+    let mut refresh_projects = false;
+    while let Ok(message) = state.project_rx.try_recv() {
+        match message {
+            ProjectMessage::Listed(outcome) => {
+                state.projects.job_finished();
+                state.projects.apply_list(outcome);
+            }
+            ProjectMessage::Selected { token, outcome } => {
+                state.projects.job_finished();
+                state.projects.finish_select(token, outcome);
+            }
+            ProjectMessage::Folder(path) => {
+                state.projects.job_finished();
+                state.folder_dialog_open = false;
+                if let Some(path) = path {
+                    spawn_select(
+                        state,
+                        SelectJob::Register(path.to_string_lossy().into_owned()),
+                    );
+                }
+            }
+        }
+    }
     while let Ok(message) = state.rx.try_recv() {
+        refresh_projects |= message
+            .outcome
+            .as_ref()
+            .err()
+            .is_some_and(Projects::error_means_stale);
         if state.parse_view.finish(message.submission, message.outcome) {
             let blocks = state
                 .parse_view
@@ -1352,6 +1662,10 @@ fn poll_worker(state: &mut GuiState) {
             token,
             outcome,
         } = message;
+        refresh_projects |= outcome
+            .as_ref()
+            .err()
+            .is_some_and(Projects::error_means_stale);
         if state.branches.finish(display_id, token, outcome)
             && state.open_branch == Some(display_id)
             && let Some(branch) = state.branches.get(display_id)
@@ -1363,6 +1677,10 @@ fn poll_worker(state: &mut GuiState) {
             state.followup_text.clear();
             state.followup_edit = TextEditState::default();
         }
+    }
+    if refresh_projects {
+        // The error itself is already shown; refresh so the list is current.
+        spawn_list(state, false);
     }
 }
 

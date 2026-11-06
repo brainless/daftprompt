@@ -25,6 +25,7 @@ pub(crate) fn build(
     started_at: String,
     attempts: u32,
     consistency: super::ConsistencyOutcome,
+    project_id: Option<String>,
 ) -> Result<ParseResult, daftprompt_types::ParseError> {
     let (content_type, content_type_source) = crate::text::structure::resolve_content_type(request);
     let created_at = now();
@@ -178,6 +179,7 @@ pub(crate) fn build(
         attempts,
         consistency_followup: consistency.ran,
         consistency_used: consistency.used,
+        project_id,
     };
 
     let run_inputs = vec![RunInput {

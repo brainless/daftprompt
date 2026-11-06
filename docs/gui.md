@@ -14,8 +14,8 @@ The GUI uses its own palette, `DAFTPROMPT_THEME` in `src/theme.rs`: akar's dark 
 
 The app only talks to the API. It depends on `daftprompt-types`, the four akar
 crates, `ureq` for HTTP, the `wgpu`/`winit`/`pollster` host integration akar does
-not re-export, and `glyphon` for explicit viewport clipping in the scrollable
-block view. It never links `daftprompt-core` or `daftprompt-api`, and it contains
+not re-export, `glyphon` for explicit viewport clipping in the scrollable
+block view, and `rfd` for the native folder dialog. It never links `daftprompt-core` or `daftprompt-api`, and it contains
 no parsing, validation, or graph construction.
 
 ## Fonts
@@ -142,6 +142,66 @@ other suggestions have no implied alternative or preference.
 Each span has one API number even when it has several labels. Numbers belong to
 one result and restart on the next parse. A result with no spans remains valid.
 
+## Projects
+
+The top of the left sidebar is a project picker. It shows the current project's
+name, or "No project", and every new `/parse` and `/clarify` request carries that
+project's id as `project_id`, so the agents use the project's folder as their
+root (see [api.md](api.md#projects-and-storage)). The GUI never sends a path to
+those endpoints, and it keeps no project state of its own: the registry lives in
+the API's SQLite database.
+
+- **Picker.** Clicking the button replaces the sidebar body with a list: "No
+  project", the eight most recently opened registered projects (name, with the
+  folder path shortened from the left underneath; an accent bar marks the
+  current one), and "Choose folder…". Choosing a project calls
+  `POST /projects/{id}/open` and makes it current when the reply arrives;
+  "No project" clears the selection at once. Escape or a click outside closes the
+  list (that click is not passed on to whatever lies beneath). akar paints all
+  text above all ordinary quads, so a floating list would show the composer text
+  through it; replacing the body avoids that.
+- **Startup.** The GUI fetches `GET /projects` and preselects the first (most
+  recently opened) entry, unless the user has already chosen something. That is
+  how the last choice survives a restart. Because the GUI may have just started the
+  API, a refused connection is retried for up to about ten seconds before an error
+  is shown.
+- **Choose folder…** opens a native dialog (`rfd::AsyncFileDialog::pick_folder`)
+  with the window as parent. The call is made from the event loop (the main
+  thread), which macOS requires: the dialog is an `NSOpenPanel` sheet serviced by
+  the running `NSApplication`, so rendering continues. Only the returned future is
+  moved to a worker thread, where `pollster::block_on` waits for the answer, which
+  comes back through the project channel. The chosen folder goes to
+  `POST /projects` (idempotent: an already registered folder returns the existing
+  project) and then `POST /projects/{id}/open`; the result becomes current.
+  Cancelling does nothing. Only one dialog is open at a time.
+- **Drag and drop.** Dropping items anywhere on the window registers and selects
+  the first directory among them, exactly like the dialog. While files hover over
+  the window, an accent frame is drawn around it. Dropping only regular files
+  registers nothing and shows "<name> is a file. Drop a folder to use it as the
+  project." winit 0.30 reports one `DroppedFile` per path and no pointer position;
+  akar-winit queues them as unpositioned window-level drops, which the render loop
+  drains each frame.
+- **Requests.** The project id is read at the moment a request is built (Parse
+  text, Ask) and moved into the worker thread, so changing the project affects only
+  later requests and in-flight ones keep the project they were sent with. A
+  follow-up in an existing branch uses whichever project is current when it is
+  asked.
+- **Errors.** Project action failures (`not_found`, `forbidden`,
+  `project_unavailable`, `invalid_request`, or a network error) appear in red in
+  the hint's place at the top of the sidebar and clear on the next project action;
+  the rest of the UI keeps working, and a failed selection keeps the previous
+  project. Notices such as "dropped a file" use the warning colour. A
+  `not_found` or `project_unavailable` reply to a parse or clarify is shown as
+  that request's error as usual and also refreshes the project list; a project that
+  has disappeared from the registry is deselected.
+
+`projects.rs` holds the pure logic (selection, stale-reply tokens, startup
+preselection, picker entries, drop classification); `main.rs` runs the HTTP calls
+on worker threads exactly like `/parse` and polls a third channel; `render.rs`
+paints the list and the drop frame; `api.rs` has `list_projects`,
+`create_project`, `open_project` and decodes the API's `{kind, detail}` bodies
+generically so project error kinds survive.
+
 ## Clarification branches (epic 004)
 
 Every span card has a **Clarify** action. It opens a panel beside the source
@@ -247,6 +307,10 @@ The GUI's deterministic tests cover:
   never touched), quiet handling of empty or non-text content, and error
   messages instead of panics;
 - content layout stacking and viewport clipping for scrolled blocks;
+- projects: selection, stale and superseded replies, startup preselection of the
+  most recent project, picker entries, dropped file vs directory vs several
+  items, `project_id` on built parse and clarify requests, and project error
+  kinds decoded from `{kind, detail}` bodies;
 - clarification: request construction from a parse result (first turn, follow-up
   with earlier node ids, blank question, unknown span), one request per branch,
   stale replies, failures keeping earlier turns, malformed results (empty

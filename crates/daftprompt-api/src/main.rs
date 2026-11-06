@@ -16,7 +16,7 @@ use daftprompt_api::{ApiConfig, AppState, router};
 use daftprompt_core::project_tools::FsProject;
 use daftprompt_core::{
     Clarifier, DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_INPUT_BYTES, DEFAULT_MAX_SEGMENTS,
-    DEFAULT_TIMEOUT, Explainer, ExplainerConfig, Parser, Scribe, ScribeConfig,
+    DEFAULT_TIMEOUT, Explainer, ExplainerConfig, Parser, Scribe, ScribeConfig, Store,
 };
 use rig::DynModel;
 use rig::operation::Completion;
@@ -83,14 +83,30 @@ async fn run() -> Result<(), String> {
                 )
             })?;
             explainer = explainer.with_project(Arc::new(project));
-            format!("project (root {})", root.display())
+            format!(
+                "project (default root {}, used when a request has no project_id)",
+                root.display()
+            )
         }
         None => "text_only".to_owned(),
     };
     let clarifier: Arc<dyn Clarifier> = Arc::new(explainer);
 
     let api_config = ApiConfig::for_input_limit(settings.max_input_bytes);
-    let app = router(AppState::new(parser, api_config).with_clarifier(clarifier));
+    let db_location = settings
+        .db_path
+        .clone()
+        .or_else(daftprompt_core::default_db_path);
+    let store = match &settings.db_path {
+        Some(path) => Store::open(path),
+        None => Store::open_default(),
+    }
+    .map_err(|error| format!("could not open the database: {error}"))?;
+    let app = router(
+        AppState::new(parser, api_config)
+            .with_clarifier(clarifier)
+            .with_store(Arc::new(store)),
+    );
 
     let listener = tokio::net::TcpListener::bind(settings.addr)
         .await
@@ -114,6 +130,10 @@ async fn run() -> Result<(), String> {
         "daftprompt-api POST /clarify: explainer provider {explainer_provider}, model \
          {explainer_model}, grounding {grounding}"
     );
+
+    if let Some(path) = &db_location {
+        println!("daftprompt-api database: {}", path.display());
+    }
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
@@ -198,6 +218,8 @@ struct Settings {
     max_attempts: u32,
     timeout: Duration,
     project_root: Option<PathBuf>,
+    /// `DAFTPROMPT_DB_PATH`; unset means the per-user default location.
+    db_path: Option<PathBuf>,
 }
 
 impl Settings {
@@ -225,6 +247,7 @@ impl Settings {
 
         Ok(Self {
             project_root,
+            db_path: env_string("DAFTPROMPT_DB_PATH").map(PathBuf::from),
             addr,
             model: env_string("DAFTPROMPT_API_MODEL")
                 .unwrap_or_else(|| default_model(&provider).to_owned()),

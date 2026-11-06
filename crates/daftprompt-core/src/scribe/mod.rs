@@ -26,6 +26,7 @@ pub use config::{
 pub use model::{BoxFuture, ExtractionModel, ModelError, ModelInput, RigExtractor};
 pub use prompt::{PROMPT_VERSION, SYSTEM_PROMPT, render_segments};
 
+use crate::access::ProjectScope;
 use crate::text::{
     segments,
     structure::{resolve_content_type, structure},
@@ -38,6 +39,18 @@ use crate::text::{
 pub trait Parser: Send + Sync {
     /// Parse one submission into a complete validated graph.
     fn parse(&self, request: ParseRequest) -> BoxFuture<'_, Result<ParseResult, ParseError>>;
+
+    /// Parse with the project the caller's access policy granted, if any.
+    ///
+    /// The default ignores the scope. Scribe records the project id on the
+    /// run but gives the model no file access.
+    fn parse_in<'a>(
+        &'a self,
+        request: ParseRequest,
+        _scope: Option<&ProjectScope>,
+    ) -> BoxFuture<'a, Result<ParseResult, ParseError>> {
+        self.parse(request)
+    }
 }
 
 /// The Scribe parser, parameterised by its extraction model.
@@ -72,6 +85,28 @@ impl<M: ExtractionModel> Scribe<M> {
     /// retrying, so worst-case latency is one timeout. A partly valid graph is
     /// never returned.
     pub async fn parse(&self, request: ParseRequest) -> Result<ParseResult, ParseError> {
+        self.run(request, None).await
+    }
+
+    /// Parse one submission for a caller whose access policy granted `scope`.
+    ///
+    /// Behaves exactly like [`Scribe::parse`]; the granted project id is
+    /// recorded on [`Run::project_id`](daftprompt_types::Run). Scribe has no
+    /// file tools, so the scope's root is never read.
+    pub async fn parse_in(
+        &self,
+        request: ParseRequest,
+        scope: Option<&ProjectScope>,
+    ) -> Result<ParseResult, ParseError> {
+        self.run(request, scope.map(|scope| scope.project_id.clone()))
+            .await
+    }
+
+    async fn run(
+        &self,
+        request: ParseRequest,
+        project_id: Option<String>,
+    ) -> Result<ParseResult, ParseError> {
         let text = request.text.as_str();
 
         if text.is_empty() {
@@ -150,6 +185,7 @@ impl<M: ExtractionModel> Scribe<M> {
                             started_at,
                             attempt,
                             followup,
+                            project_id,
                         );
                     }
                     Err(error) => {
@@ -246,5 +282,14 @@ where
 {
     fn parse(&self, request: ParseRequest) -> BoxFuture<'_, Result<ParseResult, ParseError>> {
         Box::pin(Scribe::parse(self, request))
+    }
+
+    fn parse_in<'a>(
+        &'a self,
+        request: ParseRequest,
+        scope: Option<&ProjectScope>,
+    ) -> BoxFuture<'a, Result<ParseResult, ParseError>> {
+        let project_id = scope.map(|scope| scope.project_id.clone());
+        Box::pin(self.run(request, project_id))
     }
 }

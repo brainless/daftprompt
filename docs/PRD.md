@@ -66,6 +66,12 @@ For Markdown, a section with subheadings supplies context rather than one labela
 
 Implemented scope is stateless and targets extracted spans only. Later work: clarifying an arbitrary text selection or unlabelled text, persisting branches and verifying client-supplied node IDs, and promoting a clarification finding into the main record.
 
+## Projects and storage
+
+A project is a named local folder registered in a single per-user SQLite database. The registry (add, list, open, rename, remove) is implemented and exposed over the API; it never modifies the folder. Graph persistence is a later step.
+
+Agents receive a project per call: `/parse` and `/clarify` take a `project_id`, never a filesystem path. The server resolves it through the registry and an access policy (`daftprompt_core::access`) before an agent sees any folder. Locally every registered project is allowed; the same seam is where a hosted server's per-user, team, and per-agent folder rules would plug in. `DAFTPROMPT_PROJECT_ROOT` remains the fallback when a request names no project.
+
 ## Non-goals (for now)
 
 - Non-text modalities (images, audio).

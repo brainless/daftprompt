@@ -12,13 +12,18 @@
 //!   extracted span with a bounded tool loop and validated citations.
 //! - [`project_tools`]: read-only `list_files`, `search`, and `read_file` with a
 //!   per-run call ledger, reusable by any agent, plus Rig adapters.
+//! - [`access`]: which registered project folders a caller may give an agent: the
+//!   principal, a root policy, and the per-call project resolver.
+//! - [`store`]: the SQLite database, its migrations, and the project registry.
 //! - [`eval`]: the manually annotated fixture set and the scoring rules used by
 //!   the opt-in live Scribe evaluation.
 
+pub mod access;
 pub mod eval;
 pub mod explainer;
 pub mod project_tools;
 pub mod scribe;
+pub mod store;
 pub mod text;
 
 pub use scribe::{
@@ -31,6 +36,10 @@ pub use text::{
     byte_offset, byte_range_to_source_range, position_at, segments, source_range_to_byte_range,
 };
 
+pub use access::{
+    AccessError, AgentKind, LocalPolicy, Principal, ProjectScope, RootPolicy, resolve_project,
+};
 pub use explainer::{
     Clarifier, Explainer, ExplainerConfig, ExplainerInput, ExplainerModel, RigExplainer,
 };
+pub use store::{Store, StoreError, default_db_path};

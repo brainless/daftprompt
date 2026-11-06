@@ -60,12 +60,14 @@ impl Turn {
 ///
 /// `source.payload_hash` is the parse payload hash and the target comes from
 /// the matching `spans` entry. `turns` is empty on the first turn. The question
-/// is sent unchanged; only a blank question is refused.
+/// is sent unchanged; only a blank question is refused. `project_id` is the
+/// project selected when the request is built.
 pub fn build_clarify_request(
     parse: &ParseResult,
     display_id: u32,
     turns: &[Turn],
     question: &str,
+    project_id: Option<&str>,
 ) -> Result<ClarifyRequest, ApiError> {
     if question.trim().is_empty() {
         return Err(ApiError::local("Enter a question before asking."));
@@ -102,6 +104,7 @@ pub fn build_clarify_request(
             .collect(),
         question: question.to_owned(),
         author: None,
+        project_id: project_id.map(str::to_owned),
     })
 }
 
@@ -206,12 +209,13 @@ impl Branches {
         parse: &ParseResult,
         display_id: u32,
         question: &str,
+        project_id: Option<&str>,
     ) -> Option<(u64, ClarifyRequest)> {
         let branch = self.branches.entry(display_id).or_default();
         if branch.pending.is_some() {
             return None;
         }
-        match build_clarify_request(parse, display_id, &branch.turns, question) {
+        match build_clarify_request(parse, display_id, &branch.turns, question, project_id) {
             Ok(request) => {
                 self.next_token = self.next_token.wrapping_add(1);
                 branch.pending = Some(Pending {
@@ -530,6 +534,7 @@ mod tests {
             attempts: 1,
             consistency_followup: false,
             consistency_used: false,
+            project_id: None,
         }
     }
 
@@ -602,7 +607,7 @@ mod tests {
     #[test]
     fn first_turn_request_uses_the_parse_payload_and_span() {
         let parse = parse_result();
-        let request = build_clarify_request(&parse, 1, &[], "Why a bucket?").unwrap();
+        let request = build_clarify_request(&parse, 1, &[], "Why a bucket?", None).unwrap();
         assert_eq!(request.source.text, TEXT);
         assert_eq!(request.source.payload_hash, "parse-hash");
         assert_eq!(request.source.metadata, parse.source);
@@ -626,7 +631,8 @@ mod tests {
         second.question_node_id = "node-q2".to_owned();
         second.explanation_node_id = "node-e2".to_owned();
         second.question = "And?".to_owned();
-        let request = build_clarify_request(&parse, 2, &[first, second], "Anything else?").unwrap();
+        let request =
+            build_clarify_request(&parse, 2, &[first, second], "Anything else?", None).unwrap();
         assert_eq!(request.turns.len(), 2);
         assert_eq!(request.turns[0].question_node_id, "node-q1");
         assert_eq!(request.turns[0].explanation_node_id, "node-e1");
@@ -639,36 +645,50 @@ mod tests {
     #[test]
     fn blank_questions_and_unknown_spans_are_refused_locally() {
         let parse = parse_result();
-        let blank = build_clarify_request(&parse, 1, &[], "  \n").unwrap_err();
+        let blank = build_clarify_request(&parse, 1, &[], "  \n", None).unwrap_err();
         assert_eq!(blank.kind, "invalid_request");
-        let unknown = build_clarify_request(&parse, 9, &[], "Why?").unwrap_err();
+        let unknown = build_clarify_request(&parse, 9, &[], "Why?", None).unwrap_err();
         assert!(unknown.detail.contains("#9"));
+    }
+
+    #[test]
+    fn requests_carry_the_project_selected_when_they_are_built() {
+        let parse = parse_result();
+        let none = build_clarify_request(&parse, 1, &[], "Why?", None).unwrap();
+        assert_eq!(none.project_id, None);
+        let mut branches = Branches::default();
+        let (_, first) = branches.begin(&parse, 1, "Why?", Some("p1")).unwrap();
+        let (_, second) = branches.begin(&parse, 2, "Why?", Some("p2")).unwrap();
+        assert_eq!(first.project_id.as_deref(), Some("p1"));
+        assert_eq!(second.project_id.as_deref(), Some("p2"));
     }
 
     #[test]
     fn a_branch_allows_one_request_at_a_time() {
         let parse = parse_result();
         let mut branches = Branches::default();
-        let (token, _) = branches.begin(&parse, 1, "Why?").expect("first request");
-        assert!(branches.begin(&parse, 1, "Again?").is_none());
+        let (token, _) = branches
+            .begin(&parse, 1, "Why?", None)
+            .expect("first request");
+        assert!(branches.begin(&parse, 1, "Again?", None).is_none());
         assert!(branches.get(1).unwrap().error().is_none());
         // Another span's branch is independent.
-        assert!(branches.begin(&parse, 2, "Why?").is_some());
+        assert!(branches.begin(&parse, 2, "Why?", None).is_some());
         assert!(branches.finish(1, token, Ok(clarify_result("Because.", Vec::new()))));
-        assert!(branches.begin(&parse, 1, "Again?").is_some());
+        assert!(branches.begin(&parse, 1, "Again?", None).is_some());
     }
 
     #[test]
     fn replies_for_stale_tokens_or_discarded_branches_are_ignored() {
         let parse = parse_result();
         let mut branches = Branches::default();
-        let (token, _) = branches.begin(&parse, 1, "Why?").unwrap();
+        let (token, _) = branches.begin(&parse, 1, "Why?", None).unwrap();
         assert!(!branches.finish(1, token + 100, Ok(clarify_result("x", Vec::new()))));
         branches.clear();
         assert!(!branches.finish(1, token, Ok(clarify_result("x", Vec::new()))));
         assert!(branches.get(1).is_none());
         // A new branch with the same `#N` never accepts the old token.
-        let (new_token, _) = branches.begin(&parse, 1, "Why?").unwrap();
+        let (new_token, _) = branches.begin(&parse, 1, "Why?", None).unwrap();
         assert_ne!(token, new_token);
         assert!(!branches.finish(1, token, Ok(clarify_result("x", Vec::new()))));
         assert!(branches.get(1).unwrap().is_pending());
@@ -678,10 +698,10 @@ mod tests {
     fn failures_keep_earlier_turns_and_the_draft() {
         let parse = parse_result();
         let mut branches = Branches::default();
-        let (token, _) = branches.begin(&parse, 1, "Why?").unwrap();
+        let (token, _) = branches.begin(&parse, 1, "Why?", None).unwrap();
         branches.finish(1, token, Ok(clarify_result("Because.", Vec::new())));
         branches.set_draft(1, "next question".to_owned());
-        let (token, request) = branches.begin(&parse, 1, "next question").unwrap();
+        let (token, request) = branches.begin(&parse, 1, "next question", None).unwrap();
         assert_eq!(request.turns.len(), 1);
         branches.finish(1, token, Err(ApiError::new("timeout", "too slow")));
         let branch = branches.get(1).unwrap();
@@ -697,7 +717,7 @@ mod tests {
     fn malformed_results_become_errors_not_turns() {
         let parse = parse_result();
         let mut branches = Branches::default();
-        let (token, _) = branches.begin(&parse, 1, "Why?").unwrap();
+        let (token, _) = branches.begin(&parse, 1, "Why?", None).unwrap();
         let blank = clarify_result("  ", Vec::new());
         branches.finish(1, token, Ok(blank));
         let branch = branches.get(1).unwrap();
@@ -802,7 +822,7 @@ mod tests {
     fn panel_blocks_follow_turn_order_then_state() {
         let parse = parse_result();
         let mut branches = Branches::default();
-        let (token, _) = branches.begin(&parse, 1, "Why?").unwrap();
+        let (token, _) = branches.begin(&parse, 1, "Why?", None).unwrap();
         let blocks = {
             let branch = branches.get(1);
             let view = build_branch_view(1, &[], &parse);
@@ -820,7 +840,7 @@ mod tests {
                 vec![source_citation(1, 7, 22)],
             )),
         );
-        let (token, _) = branches.begin(&parse, 1, "And then?").unwrap();
+        let (token, _) = branches.begin(&parse, 1, "And then?", None).unwrap();
         branches.finish(
             1,
             token,

@@ -222,6 +222,7 @@ impl ClarifyFixture {
                 .collect(),
             question: self.question.clone(),
             author: None,
+            project_id: None,
         }
     }
 

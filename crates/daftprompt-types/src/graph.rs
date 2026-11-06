@@ -206,6 +206,11 @@ pub struct Run {
     /// Whether the follow-up's extraction replaced the original one.
     #[serde(default)]
     pub consistency_used: bool,
+    /// The registered project the access policy granted this run, when the
+    /// request named one. Recorded for provenance; absent for text-only runs
+    /// and for a server-wide default project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 /// One node an agent run took as input.

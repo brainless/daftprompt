@@ -18,6 +18,11 @@ pub struct ParseRequest {
     /// supply it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceMetadata>,
+    /// A registered project (`POST /projects`) to ground this request in. The
+    /// server resolves it against its project registry and access policy;
+    /// a raw filesystem path is never accepted from a client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 impl ParseRequest {
@@ -27,6 +32,7 @@ impl ParseRequest {
             text: text.into(),
             content_type: None,
             source: None,
+            project_id: None,
         }
     }
 
@@ -36,6 +42,7 @@ impl ParseRequest {
             text: text.into(),
             content_type: None,
             source: Some(source),
+            project_id: None,
         }
     }
 
@@ -105,6 +112,11 @@ pub struct ClarifyRequest {
     /// The human identity asking. Otherwise the question author is `unknown`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
+    /// A registered project (`POST /projects`) to ground this request in. The
+    /// server resolves it against its project registry and access policy;
+    /// a raw filesystem path is never accepted from a client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 impl ClarifyRequest {

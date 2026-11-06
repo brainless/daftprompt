@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 
 use crate::clarify::{BlockKind, BranchMark, PanelBlock};
 use crate::fonts::{self, Role};
+use crate::projects::MenuEntry;
 use crate::view::{Block, LabelView, SpanView};
 
 /// Source Serif 4 reads small next to Inter at the same size, so source text is
@@ -939,6 +940,138 @@ pub fn draw_panel_content(
 }
 
 /// Draw a non-success state: idle, loading, or an explicit error.
+/// Text buffer ids for the project list; far from layout widget ids.
+const MENU_BUFFER_BASE: u64 = 0x4d45_4e55_0000_0000;
+const MENU_ROW_HEIGHT: f32 = 32.0;
+const MENU_ROW_HEIGHT_WITH_PATH: f32 = 46.0;
+
+/// The height of one picker row.
+pub fn menu_row_height(entry: &MenuEntry) -> f32 {
+    if entry.subtitle.is_some() {
+        MENU_ROW_HEIGHT_WITH_PATH
+    } else {
+        MENU_ROW_HEIGHT
+    }
+}
+
+/// Draw the project list in `area` and return the index of the clicked row.
+///
+/// akar paints all text above all non-foreground quads, so a floating list
+/// would show the composer text through it. The list therefore replaces the
+/// sidebar body while open (the caller skips drawing everything beneath it)
+/// and needs only ordinary quads. Rows list the project name with its folder
+/// underneath; the current entry gets an accent bar.
+pub fn draw_project_menu(
+    core: &mut AkarCore,
+    area: [f32; 4],
+    entries: &[MenuEntry],
+    theme: &AkarTheme,
+) -> Option<usize> {
+    let mut clicked = None;
+    let mut y = area[1];
+    for (index, entry) in entries.iter().enumerate() {
+        let height = menu_row_height(entry);
+        let row = [area[0], y, area[2], height];
+        y += height;
+        if row[1] + row[3] > area[1] + area[3] {
+            break;
+        }
+        if core.input.is_hovering(row) {
+            core.draw_list.push_quad(QuadCall {
+                rect: row,
+                fill: color_to_f32(theme.base_300),
+                border_color: [0.0; 4],
+                corner_radii: [theme.radius_field; 4],
+                border_width: 0.0,
+                z: Z_BASE,
+                shadow_blur: 0.0,
+                shadow_spread: 0.0,
+                shadow_color: [0.0; 4],
+                shadow_offset: [0.0; 2],
+                _pad: [0.0; 2],
+            });
+        }
+        if core.input.is_clicked(row) {
+            clicked = Some(index);
+        }
+        if entry.selected {
+            core.draw_list.push_quad(QuadCall {
+                rect: [row[0], row[1] + 6.0, 3.0, row[3] - 12.0],
+                fill: color_to_f32(theme.primary),
+                border_color: [0.0; 4],
+                corner_radii: [1.5; 4],
+                border_width: 0.0,
+                z: Z_BASE,
+                shadow_blur: 0.0,
+                shadow_spread: 0.0,
+                shadow_color: [0.0; 4],
+                shadow_offset: [0.0; 2],
+                _pad: [0.0; 2],
+            });
+        }
+
+        let title_size = theme.font_size_base;
+        let title_y = if entry.subtitle.is_some() {
+            row[1] + 6.0
+        } else {
+            row[1] + (row[3] - title_size) * 0.5 - 1.0
+        };
+        let title = core.text_pipeline.set_text_transient(
+            MENU_BUFFER_BASE + index as u64 * 2,
+            &entry.title,
+            glyphon::Metrics::new(title_size, title_size * 1.2),
+            Some(row[2] - 20.0),
+            None,
+            Some(fonts::current().attrs(Role::Ui, 500)),
+        );
+        core.draw_list.push_text(TextCall {
+            buffer_id: title,
+            x: row[0] + 12.0,
+            y: title_y,
+            clip: row,
+            color: color_to_f32(theme.base_content),
+            z: Z_BASE,
+        });
+        if let Some(subtitle) = &entry.subtitle {
+            let size = 11.0;
+            let buffer = core.text_pipeline.set_text_transient(
+                MENU_BUFFER_BASE + index as u64 * 2 + 1,
+                subtitle,
+                glyphon::Metrics::new(size, size * 1.3),
+                Some(row[2] - 20.0),
+                None,
+                Some(fonts::current().attrs(Role::Ui, 400)),
+            );
+            core.draw_list.push_text(TextCall {
+                buffer_id: buffer,
+                x: row[0] + 12.0,
+                y: row[1] + 6.0 + title_size * 1.2 + 3.0,
+                clip: row,
+                color: color_to_f32(theme.muted_content),
+                z: Z_BASE,
+            });
+        }
+    }
+    clicked
+}
+
+/// A thin accent frame around the window while files are dragged over it.
+pub fn draw_drop_frame(core: &mut AkarCore, width: f32, height: f32, theme: &AkarTheme) {
+    core.draw_list.push_quad(QuadCall {
+        rect: [2.0, 2.0, width - 4.0, height - 4.0],
+        fill: [0.0; 4],
+        border_color: color_to_f32(theme.primary),
+        corner_radii: [6.0; 4],
+        border_width: 3.0,
+        z: akar_core::Z_TEXT_FOREGROUND,
+        shadow_blur: 0.0,
+        shadow_spread: 0.0,
+        shadow_color: [0.0; 4],
+        shadow_offset: [0.0; 2],
+        _pad: [0.0; 2],
+    });
+}
+
 pub fn draw_notice(
     core: &mut AkarCore,
     layout: &Layout,

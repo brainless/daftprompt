@@ -84,6 +84,7 @@ async fn live_multi_turn_tool_calls_and_submit() {
         turns: Vec::new(),
         question: "What does token bucket mean here? Check the project code.".to_owned(),
         author: None,
+        project_id: None,
     };
     let explainer = Explainer::from_rig_model(config, model).with_project(Arc::new(project));
     let result = explainer.clarify(request).await.expect("clarify");

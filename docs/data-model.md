@@ -75,7 +75,8 @@ CREATE TABLE run (
   status         TEXT NOT NULL,              -- running | done | failed
   attempts       INTEGER NOT NULL DEFAULT 1,  -- attempts used, including invalid output
   consistency_followup INTEGER NOT NULL DEFAULT 0,  -- a sibling-consistency follow-up call ran (not counted in attempts)
-  consistency_used     INTEGER NOT NULL DEFAULT 0  -- its result replaced the original extraction
+  consistency_used     INTEGER NOT NULL DEFAULT 0, -- its result replaced the original extraction
+  project_id     TEXT REFERENCES project(id)  -- project the access policy granted, if the request named one
 );
 
 CREATE TABLE run_input (
@@ -96,6 +97,47 @@ CREATE TABLE tool_call (
 ```
 
 A run's outputs are the nodes and labels whose `run_id` points to it.
+
+### Persisted tables
+
+Only the project registry is persisted so far. The schema is created by numbered
+migrations tracked in SQLite's `PRAGMA user_version`; the database file lives
+at `<OS user data dir>/daftprompt/daftprompt.db`.
+
+```sql
+-- A named local folder. Registry only: the folder's files are never copied.
+CREATE TABLE project (
+  id              TEXT PRIMARY KEY,         -- Rust-generated, e.g. project-<hex>-<hex>
+  name            TEXT NOT NULL,
+  root_path       TEXT NOT NULL UNIQUE,     -- absolute, canonicalized
+  created_at      TEXT NOT NULL,
+  last_opened_at  TEXT NOT NULL
+);
+```
+
+The graph tables above (`payload`, `node`, `label`, `run`, `tool_call`, ...) are
+not persisted yet: parse and clarify results remain in memory. When they are
+added, nodes and runs will gain a `project_id` referencing `project(id)`. Until
+then `Run.project_id` is carried in the in-memory result only.
+
+### Access control (not implemented)
+
+The registry has no owner or user columns: there is one local user, and
+`daftprompt_core::access` (`Principal`, `AgentKind`, `RootPolicy`,
+`ProjectScope`) is the only seam. A hosted server would extend the schema, with
+a new numbered migration, along these lines:
+
+- `project.owner_id` (a user or principal id), so listing and lookup filter by
+  the caller and a project invisible to a user reports `not_found`.
+- A `policy` table of rules, for example `(id, subject_kind, subject_id,
+  agent, project_id, subdirectory, tool_limits)`, where the subject is a user
+  or a team. A rule grants a project, optionally for one agent only and
+  optionally narrowed to a subdirectory or tighter tool limits; a `RootPolicy`
+  implementation evaluates the rules and returns the narrowed `ProjectScope`.
+- `team` and `team_member` tables if teams are managed here rather than by an
+  identity provider.
+
+The scope an agent receives never exceeds the project's own `root_path`.
 
 ## Vocabulary
 

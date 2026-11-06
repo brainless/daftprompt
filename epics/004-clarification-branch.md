@@ -71,7 +71,7 @@ Rust records which segments were included in the run input so a reader can see e
 
 ## Project tools
 
-Tools are available only when `DAFTPROMPT_PROJECT_ROOT` is set. All paths are relative to the root.
+Tools are available when the request names a registered project (`project_id`, resolved through the access policy) or, failing that, when `DAFTPROMPT_PROJECT_ROOT` is set. All paths are relative to the root.
 
 | tool | arguments | returns |
 |------|-----------|---------|
