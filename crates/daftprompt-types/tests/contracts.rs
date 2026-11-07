@@ -590,3 +590,31 @@ fn briefing_contracts_have_the_documented_json_shape() {
         serde_json::json!({"kind": "commit", "hash": "h"})
     );
 }
+
+#[test]
+fn commands_extraction_round_trips_and_has_a_schema() {
+    use daftprompt_types::{CommandKind, CommandsExtraction};
+
+    let parsed: CommandsExtraction = serde_json::from_value(serde_json::json!({
+        "summary": "Build it [1].",
+        "citations": [{"kind": "file", "path": "README.md", "start_line": 1, "end_line": 2}],
+        "commands": [
+            {"label": "build", "command": "cargo build", "kind": "build", "candidate": 1},
+            {"label": "site", "command": "make site", "working_dir": "web", "kind": "dev", "citations": [1]}
+        ]
+    }))
+    .unwrap();
+    assert_eq!(parsed.commands[0].kind, CommandKind::Build);
+    assert_eq!(parsed.commands[0].candidate, Some(1));
+    assert_eq!(parsed.commands[1].working_dir.as_deref(), Some("web"));
+    assert!(
+        serde_json::from_value::<CommandsExtraction>(serde_json::json!({
+            "summary": "x", "commands": [{"label": "a", "command": "b", "kind": "typecheck"}]
+        }))
+        .is_err()
+    );
+
+    let schema = serde_json::to_value(schemars::schema_for!(CommandsExtraction)).unwrap();
+    assert!(schema["properties"]["commands"].is_object());
+    assert!(schema["$defs"]["CommandKind"].is_object());
+}

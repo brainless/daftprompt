@@ -410,9 +410,9 @@ citations. Files outside the root are never exposed, but do not point the root
 at a directory holding secrets, and do not bind the service to a non-loopback
 address without your own access control.
 
-## Agents and project briefings (Epic 006, Task A)
+## Agents and project briefings (Epic 006, Tasks A to C)
 
-[Epic 006](../epics/006-project-briefing.md) adds read-only agents that brief the user on a registered project. Task A provides `GET /agents` and the first agent, the **Chronicler**, which reads git history. `GET /projects/{id}/profile`, `POST /projects/{id}/overview` (Surveyor) and `POST /projects/{id}/commands` (Operator) are planned and not implemented yet.
+[Epic 006](../epics/006-project-briefing.md) adds read-only agents that brief the user on a registered project. Task A provides `GET /agents` and the **Chronicler**, which reads git history. Task B adds `GET /projects/{id}/profile` and the **Surveyor** (`POST /projects/{id}/overview`). Task C adds the **Operator** (`POST /projects/{id}/commands`), which lists the commands the project supports. Commands are discovered, never run.
 
 ### `GET /agents`
 
@@ -488,6 +488,131 @@ Credentials are the provider's own variables, shared with Scribe and Explainer. 
 ```text
 daftprompt-api POST /projects/{id}/history: chronicler provider neuralwatt, model glm-5.3-flash
 ```
+
+The Surveyor is configured the same way, independently:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `DAFTPROMPT_SURVEYOR_PROVIDER` | `neuralwatt` | Provider recorded as `run.provider` |
+| `DAFTPROMPT_SURVEYOR_MODEL` | `glm-5.3-flash` | Model recorded as `run.model` |
+
+```text
+daftprompt-api POST /projects/{id}/overview: surveyor provider neuralwatt, model glm-5.3-flash
+```
+
+### `GET /projects/{id}/profile`
+
+The deterministic `ProjectProfile` of the project folder, computed by Rust with no model call (so it works even when no Surveyor is configured). The project is resolved for `AgentKind::Surveyor`: `404 not_found`, `403 forbidden`, `422 project_unavailable`.
+
+```bash
+curl -sS http://127.0.0.1:8080/projects/project-18f3a2-1/profile
+```
+
+```json
+{
+  "languages": [
+    {
+      "language": "rust",
+      "projects": [
+        {
+          "dir": "",
+          "name": null,
+          "package_manager": "cargo",
+          "toolchain": "nightly-2026-10-25",
+          "workspace": true,
+          "packages": ["daftprompt-api", "daftprompt-core", "daftprompt-gui", "daftprompt-types"],
+          "files": ["Cargo.toml", "rust-toolchain.toml"]
+        }
+      ]
+    }
+  ],
+  "key_files": ["AGENTS.md", "docs/PRD.md", "docs/api.md", "Cargo.toml", "rust-toolchain.toml"]
+}
+```
+
+- `languages[].language` is `rust`, `typescript` (also JavaScript) or `python`; a `truncated: true` flag appears when a search or the project cap hit a limit. A language that is not used is absent; an unrecognized folder gives `"languages": []`.
+- Each `projects[]` entry is one manifest directory (`dir` is root-relative, `""` is the root), so a monorepo lists each project with its own `package_manager` (`cargo`, `npm`, `pnpm`, `yarn`, `bun`, `uv`, `poetry`, `pip`, or `null`). Members of a declared workspace are folded into the workspace root's `packages`. `toolchain` is the Rust channel, `typescript`/`javascript`, or Python's `requires-python`. `files` is the evidence (manifests and lockfiles).
+- `key_files` are what Surveyor reads first: root README*/DEVELOP*/CONTRIBUTING*/ARCHITECTURE*, AGENTS.md, CLAUDE.md, then, in this priority order under the cap of 40: top-level docs, text files directly in `docs/`, each language's manifests (lockfiles excluded), and finally text files in nested `docs/**` folders. At most 20 files are taken from `docs/` in all.
+- Detection uses the project tools' rules: hidden, ignored and binary files are invisible (so a binary `bun.lockb` is not seen; `bun.lock` and the `packageManager` field are), vendored directories (`node_modules`, `target`, `vendor`, `dist`, `build`, virtualenvs) are skipped, manifests deeper than 4 directories are ignored, and malformed manifests still detect the language with less detail.
+
+### `POST /projects/{id}/overview` (Surveyor)
+
+Summarizes the project's files and documentation. The body and the errors are those of `/history`, resolved for `AgentKind::Surveyor` (`500 internal_error` when no Surveyor is configured). The default task is a **project summary**: what it is, the stack, the layout, and where to read further. The model gets the computed profile and key-file list as context and has `list_files`, `search` and `read_file`.
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/projects/project-18f3a2-1/overview
+curl -sS -X POST http://127.0.0.1:8080/projects/project-18f3a2-1/overview \
+  -H 'content-type: application/json' \
+  -d '{"prompt": "how is it tested?", "author": "@ada"}'
+```
+
+The response is the same `BriefingResult` as `/history`, with these differences: `citations` are files only (`"location": { "kind": "file", "path", "start_line", "end_line" }`, which must lie within lines `read_file` returned in the same run; a commit citation is rejected and retried), the context target is `file` with the content hash and a whole-line range, `profile` holds the `ProjectProfile` above (it is `null` for `/history`), `run.agent` is `surveyor`, and `notices` may contain `truncated`.
+
+### `POST /projects/{id}/commands` (Operator)
+
+Lists the commands the project supports (setup, build, run, dev server, test, lint, format) with a short summary. **Commands are never run, copied or executed by the service.** The body and the errors are those of `/history`, resolved for `AgentKind::Operator` (`404 not_found`, `403 forbidden`, `422 project_unavailable`, `500 internal_error` when no Operator is configured). An empty body is the default task; a `prompt` replaces it.
+
+The Operator is configured independently:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `DAFTPROMPT_OPERATOR_PROVIDER` | `neuralwatt` | Provider recorded as `run.provider` |
+| `DAFTPROMPT_OPERATOR_MODEL` | `glm-5.3-flash` | Model recorded as `run.model` |
+
+```text
+daftprompt-api POST /projects/{id}/commands: operator provider neuralwatt, model glm-5.3-flash
+```
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/projects/project-18f3a2-1/commands
+curl -sS -X POST http://127.0.0.1:8080/projects/project-18f3a2-1/commands \
+  -H 'content-type: application/json' \
+  -d '{"prompt": "how do I run the tests?", "author": "@ada"}'
+```
+
+How it works: Rust parses the manifests into **command candidates** (no model call): Rust gets `cargo build`, `test`, `clippy` and `fmt` (with `--workspace` for a workspace) and `cargo run -p <pkg>` per binary package (`--bin` for named `[[bin]]` targets); TypeScript/JavaScript gets an install command and one command per `package.json` script, run with the detected package manager (`npm run x`, `pnpm x`, `yarn x`, `bun run x`); Python gets `uv sync` or `poetry install` or, for pip, `python3 -m venv .venv` and `.venv/bin/pip install ...` as separate commands, `[project.scripts]` entries run through the tool, `manage.py runserver` and `test`, and `pytest` when it is a dependency or configured. Each candidate has a `working_dir` (the project directory, or a workspace member's own directory for `package.json` scripts) and cites the manifest lines it came from. The model receives the profile and the numbered candidate list, has `list_files`, `search` and `read_file`, and submits the commands to offer. It picks and labels candidates (`candidate` is the 1-based number, and `command` and `working_dir` must equal the candidate's) and may add a documented command, such as a README "how to run" step, only with file citations.
+
+The response is a `CommandsResult`: the `BriefingResult` fields of `/overview` (flattened) plus `commands`.
+
+```json
+{
+  "project_id": "project-18f3a2-1",
+  "summary_payload": { "...": "..." },
+  "citations": [
+    { "index": 1, "context_id": "ctx-...", "location": { "kind": "file", "path": "README.md", "start_line": 10, "end_line": 12 } },
+    { "index": 2, "context_id": "ctx-...", "location": { "kind": "file", "path": "Cargo.toml", "start_line": 1, "end_line": 1 } }
+  ],
+  "commands": [
+    {
+      "id": "cmd-18f3a2c4-0",
+      "label": "build",
+      "command": "cargo build --workspace",
+      "working_dir": "",
+      "kind": "build",
+      "language": "rust",
+      "origin": "detected",
+      "citation_indexes": [2]
+    },
+    {
+      "id": "cmd-18f3a2c4-1",
+      "label": "site",
+      "command": "make site",
+      "working_dir": "web",
+      "kind": "run",
+      "language": null,
+      "origin": "documented",
+      "citation_indexes": [1]
+    }
+  ]
+}
+```
+
+- `kind` is `setup`, `build`, `run`, `dev`, `test`, `lint`, `format` or `other` (a type check is `lint`).
+- `origin` is `detected` (a manifest candidate; `language` is set) or `documented` (backed by the model's file citations; `language` is `null`).
+- `working_dir` is root-relative; `""` is the project root.
+- `citation_indexes` are 1-based `index` values of the result's `citations`. They are never empty: a detected command points at a file citation for its manifest lines that Rust appended after the model's citations (computed from the manifest, with the content hash and a whole-line range); a documented command points at the model's own validated citations.
+- Validation (invalid output is retried, then `422 invalid_output`): every command is a candidate or cites at least one file; `working_dir` is a directory inside the root (no absolute path, `..` or hidden component); labels are 24 characters or fewer and unique; no duplicate `(working_dir, command)` pair; at most 12 commands (`OperatorConfig::max_commands`); every `[n]` marker and citation index resolves; citations are files only and must lie within lines `read_file` returned in the same run. A command is one line, never chained with `&&`.
+- The `run.agent` is `operator`; `profile` and `notices` are as for `/overview`.
 
 The provider factory itself (`daftprompt_core::llm::build_model`) reads the provider variables listed above; the API no longer contains it.
 

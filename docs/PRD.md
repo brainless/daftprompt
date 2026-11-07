@@ -68,7 +68,7 @@ Implemented scope is stateless and targets extracted spans only. Later work: cla
 
 ## Project briefing (planned)
 
-[Epic 006](../epics/006-project-briefing.md) plans three read-only agents that brief the user when a project opens: **Chronicler** (git history), **Surveyor** (files and documentation) and **Operator** (the commands the project supports, discovered and never run). Each accepts an optional prompt in place of its default task and cites evidence that Rust validates. Task A (the shared agent runner, the git tools, `GET /agents`, and the Chronicler behind `POST /projects/{id}/history`) is implemented; the rest follows.
+[Epic 006](../epics/006-project-briefing.md) plans three read-only agents that brief the user when a project opens: **Chronicler** (git history), **Surveyor** (files and documentation) and **Operator** (the commands the project supports, discovered and never run). Each accepts an optional prompt in place of its default task and cites evidence that Rust validates. Task A (the shared agent runner, the git tools, `GET /agents`, and the Chronicler behind `POST /projects/{id}/history`) is implemented, as are the language registry and the Surveyor (Task B) and the Operator behind `POST /projects/{id}/commands` (Task C); the GUI follows.
 
 ## Projects and storage
 

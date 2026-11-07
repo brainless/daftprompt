@@ -45,6 +45,7 @@ pub(crate) fn build(input: Built<'_>) -> Result<BriefingResult, ParseError> {
         calls: input.calls,
         submitted: input.extraction,
         notices,
+        profile: None,
         run_id: input.run_id,
         started_at: input.started_at,
         attempts: input.attempts,

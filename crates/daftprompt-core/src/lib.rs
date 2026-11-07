@@ -12,6 +12,11 @@
 //!   extracted span with a bounded tool loop and validated citations.
 //! - [`chronicler`]: the git-history briefing agent (Epic 006), built on the shared
 //!   [`project_agent`] runner and the read-only [`git_tools`].
+//! - [`languages`]: deterministic per-language project detection and the
+//!   [`ProjectProfile`](daftprompt_types::ProjectProfile) (Epic 006).
+//! - [`surveyor`]: the files-and-documentation briefing agent (Epic 006).
+//! - [`operator`]: the commands briefing agent (Epic 006): candidates detected by
+//!   [`languages`], picked and labelled by the model, validated by Rust.
 //! - [`llm`]: the provider factory that turns provider and model names into a Rig model.
 //! - [`project_tools`]: read-only `list_files`, `search`, and `read_file` with a
 //!   per-run call ledger, reusable by any agent, plus Rig adapters.
@@ -26,11 +31,14 @@ pub mod chronicler;
 pub mod eval;
 pub mod explainer;
 pub mod git_tools;
+pub mod languages;
 pub mod llm;
+pub mod operator;
 pub mod project_agent;
 pub mod project_tools;
 pub mod scribe;
 pub mod store;
+pub mod surveyor;
 pub mod text;
 
 pub use scribe::{
@@ -51,5 +59,7 @@ pub use explainer::{
     Clarifier, Explainer, ExplainerConfig, ExplainerInput, ExplainerModel, RigExplainer,
 };
 pub use llm::{LlmError, ModelSettings, build_model};
-pub use project_agent::Briefer;
+pub use operator::{Operator, OperatorConfig, OperatorModel, RigOperator};
+pub use project_agent::{Briefer, CommandsBriefer};
 pub use store::{Store, StoreError, default_db_path};
+pub use surveyor::{RigSurveyor, Surveyor, SurveyorConfig, SurveyorModel};

@@ -101,16 +101,19 @@ A run's outputs are the nodes and labels whose `run_id` points to it.
 
 ### Briefing records (Epic 006)
 
-A project briefing (Chronicler now; Surveyor and Operator later) is agent-authored text recorded like an Explainer explanation, with no labels:
+A project briefing (Chronicler, Surveyor and Operator) is agent-authored text recorded like an Explainer explanation, with no labels:
 
 | record | details |
 | --- | --- |
 | Prompt payload and node `P` | Only when the request has a `prompt`. Root node, `author` = request author or `unknown`, one context: the whole prompt payload. |
 | Summary payload and node `S` | `parent_id` = `P`, or none (root) for the default task; `author` `agent`; `run_id` set. Context `seq 0` is the summary payload; `seq 1..n` are the validated citations. |
 | Commit citation | A context with `commit_hash` set to the full commit id Rust resolved from the model's hash or prefix, and no range. In memory this is `ContextTarget::Commit { hash }`; its display form `CitationLocation::Commit { hash, subject }` carries the commit subject. |
-| Run metadata | `run` (agent `chronicler`, `project_id` set), a `run_input` for `P`, one `tool_call` per `git_log`/`git_show` invocation with its output payload, and the accepted `submit`. |
+| File citation | The existing file context (`path`, `content_hash` of the text the agent read, whole-line range). Surveyor and Operator cite files only; Chronicler cites commits only. |
+| Run metadata | `run` (agent `chronicler`, `surveyor` or `operator`, `project_id` set), a `run_input` for `P`, one `tool_call` per tool invocation (`git_log`/`git_show`, or `list_files`/`search`/`read_file`) with its output payload, and the accepted `submit`. |
 
-The commit hash is a reference into the project's git repository, not a copy: nothing from the commit is stored in a payload. The cited commits must have been returned by a git tool in the same run (the `ToolRecorder` ledger records the hashes each call returned). Briefing results are in memory only.
+The commit hash is a reference into the project's git repository, not a copy: nothing from the commit is stored in a payload. The cited commits must have been returned by a git tool in the same run (the `ToolRecorder` ledger records the hashes each call returned). Briefing results are in memory only. A Surveyor result also carries the `ProjectProfile` (detected languages and key files, computed by Rust) as `profile`; it is not a graph record and is not persisted.
+
+The Operator's commands are structured results, not graph nodes (`CommandsResult.commands`, each `ProjectCommand` with `origin` `detected` or `documented`). Each points, through `citation_indexes`, at the summary node's file citation contexts that justify it. For a detected command Rust appends a context for the candidate's manifest lines after the model's citations (the same `path`, `content_hash` and whole-line range as any file citation). A later `project_command` table may persist commands; there is no table or schema change in this task.
 
 ### Persisted tables
 

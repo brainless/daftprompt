@@ -182,3 +182,65 @@ pub enum BriefingCitation {
         hash: String,
     },
 }
+
+/// One complete Operator result, submitted through its `submit` output tool.
+///
+/// The model picks and labels commands the application detected from
+/// manifests, and may add commands documented in the project's files with
+/// file citations. It never produces IDs, hashes or line positions Rust has
+/// not seen the tools return; commands are only ever discovered, never run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CommandsExtraction {
+    /// Non-empty Markdown summary of how the project is run. It may reference
+    /// citations as `[1]`, `[2]`, ... numbered from 1 in `citations` order.
+    pub summary: String,
+    /// Sources the summary and the added commands relied on. File citations
+    /// only.
+    #[serde(default)]
+    pub citations: Vec<BriefingCitation>,
+    /// The commands to offer, at most the configured number.
+    #[serde(default)]
+    pub commands: Vec<ExtractedCommand>,
+}
+
+/// One command proposed by the Operator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExtractedCommand {
+    /// Short button text, at most 24 characters, unique among the commands.
+    pub label: String,
+    /// The command exactly as it would be typed. One line.
+    pub command: String,
+    /// Directory to run it in, relative to the project root. Absent or empty
+    /// means the root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    /// What the command is for.
+    pub kind: CommandKind,
+    /// The 1-based number of the detected candidate this command is, from the
+    /// candidate list in the prompt. When set, `command` and `working_dir`
+    /// must equal the candidate's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate: Option<u32>,
+    /// 1-based indexes into `citations` that justify a command that is not a
+    /// candidate, such as a README "how to run" section.
+    #[serde(default)]
+    pub citations: Vec<u32>,
+}
+
+/// What a command is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandKind {
+    /// Install dependencies or prepare the environment.
+    Setup,
+    Build,
+    /// Run the program or service.
+    Run,
+    /// Run a development server or watcher.
+    Dev,
+    Test,
+    /// Linting and type checking.
+    Lint,
+    Format,
+    Other,
+}

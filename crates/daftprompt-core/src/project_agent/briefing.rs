@@ -6,10 +6,12 @@
 
 use std::collections::BTreeMap;
 
+use serde::Serialize;
+
 use daftprompt_types::{
     AgentTask, BriefingCitation, BriefingExtraction, BriefingNotice, BriefingResult, CitationInfo,
-    CitationLocation, ContextTarget, Node, NodeContext, ParseError, Payload, Run, RunInput,
-    RunStatus, SourceRange, ToolCall,
+    CitationLocation, ContextTarget, Node, NodeContext, ParseError, Payload, ProjectProfile, Run,
+    RunInput, RunStatus, SourceRange, ToolCall,
 };
 
 use crate::project_tools::{RecordedCall, ToolRecorder, normalize_path_text};
@@ -153,7 +155,7 @@ pub struct PromptRecord<'a> {
 }
 
 /// Everything needed to build a [`BriefingResult`].
-pub struct BriefingBuild<'a> {
+pub struct BriefingBuild<'a, S: Serialize + ?Sized = BriefingExtraction> {
     /// `Run.agent`, for example `chronicler`.
     pub agent: &'static str,
     pub prompt_version: &'static str,
@@ -167,15 +169,19 @@ pub struct BriefingBuild<'a> {
     /// The accepted attempt's tool calls.
     pub calls: &'a [RecordedCall],
     /// The accepted submission, recorded as the `submit` call.
-    pub submitted: &'a BriefingExtraction,
+    pub submitted: &'a S,
     pub notices: Vec<BriefingNotice>,
+    /// The deterministic project profile the agent was given, if any.
+    pub profile: Option<ProjectProfile>,
     pub run_id: String,
     pub started_at: String,
     pub attempts: u32,
 }
 
 /// Build the records of one accepted briefing.
-pub fn build_briefing(input: BriefingBuild<'_>) -> Result<BriefingResult, ParseError> {
+pub fn build_briefing<S: Serialize + ?Sized>(
+    input: BriefingBuild<'_, S>,
+) -> Result<BriefingResult, ParseError> {
     let BriefingBuild {
         agent,
         prompt_version,
@@ -188,6 +194,7 @@ pub fn build_briefing(input: BriefingBuild<'_>) -> Result<BriefingResult, ParseE
         calls,
         submitted,
         notices,
+        profile,
         run_id,
         started_at,
         attempts,
@@ -364,6 +371,7 @@ pub fn build_briefing(input: BriefingBuild<'_>) -> Result<BriefingResult, ParseE
         node_contexts,
         citations: citation_infos,
         notices,
+        profile,
         run,
         run_inputs,
         tool_calls,

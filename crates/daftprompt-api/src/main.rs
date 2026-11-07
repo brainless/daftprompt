@@ -17,9 +17,9 @@ use daftprompt_core::llm::{
 };
 use daftprompt_core::project_tools::FsProject;
 use daftprompt_core::{
-    Briefer, Chronicler, ChroniclerConfig, Clarifier, DEFAULT_MAX_ATTEMPTS,
+    Briefer, Chronicler, ChroniclerConfig, Clarifier, CommandsBriefer, DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_INPUT_BYTES, DEFAULT_MAX_SEGMENTS, DEFAULT_TIMEOUT, Explainer, ExplainerConfig,
-    Parser, Scribe, ScribeConfig, Store,
+    Operator, OperatorConfig, Parser, Scribe, ScribeConfig, Store, Surveyor, SurveyorConfig,
 };
 
 /// Loopback only: the experiment has no authentication and no persistence.
@@ -98,6 +98,24 @@ async fn run() -> Result<(), String> {
         chronicler_completion,
     ));
 
+    // Surveyor (files and documentation), likewise.
+    let surveyor_config = SurveyorConfig::from_env();
+    let surveyor_settings = surveyor_config.model_settings();
+    let surveyor_completion = build_model(&surveyor_settings).map_err(|error| error.to_string())?;
+    let surveyor: Arc<dyn Briefer> = Arc::new(Surveyor::from_rig_model(
+        surveyor_config,
+        surveyor_completion,
+    ));
+
+    // Operator (how the project is run), likewise.
+    let operator_config = OperatorConfig::from_env();
+    let operator_settings = operator_config.model_settings();
+    let operator_completion = build_model(&operator_settings).map_err(|error| error.to_string())?;
+    let operator: Arc<dyn CommandsBriefer> = Arc::new(Operator::from_rig_model(
+        operator_config,
+        operator_completion,
+    ));
+
     let api_config = ApiConfig::for_input_limit(settings.max_input_bytes);
     let db_location = settings
         .db_path
@@ -112,6 +130,8 @@ async fn run() -> Result<(), String> {
         AppState::new(parser, api_config)
             .with_clarifier(clarifier)
             .with_chronicler(chronicler)
+            .with_surveyor(surveyor)
+            .with_operator(operator)
             .with_store(Arc::new(store)),
     );
 
@@ -141,6 +161,16 @@ async fn run() -> Result<(), String> {
     println!(
         "daftprompt-api POST /projects/{{id}}/history: chronicler provider {}, model {}",
         chronicler_settings.provider, chronicler_settings.model
+    );
+
+    println!(
+        "daftprompt-api POST /projects/{{id}}/overview: surveyor provider {}, model {}",
+        surveyor_settings.provider, surveyor_settings.model
+    );
+
+    println!(
+        "daftprompt-api POST /projects/{{id}}/commands: operator provider {}, model {}",
+        operator_settings.provider, operator_settings.model
     );
 
     if let Some(path) = &db_location {

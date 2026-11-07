@@ -43,7 +43,12 @@
 //! `GET /agents` lists the configured agents. `POST /projects/{id}/history`
 //! takes an [`AgentTaskRequest`] and answers with a [`BriefingResult`] from the
 //! Chronicler (git history), resolved for [`AgentKind::Chronicler`] like the
-//! other project routes.
+//! other project routes. `POST /projects/{id}/overview` does the same with the
+//! Surveyor (files and documentation, [`AgentKind::Surveyor`]), and
+//! `GET /projects/{id}/profile` answers the deterministic `ProjectProfile`
+//! (languages and key files) with no model call. `POST /projects/{id}/commands`
+//! answers a [`CommandsResult`] from the Operator (the commands the project
+//! supports, discovered and never run, [`AgentKind::Operator`]).
 //!
 //! A request whose JSON envelope is too large is rejected with 413 before it
 //! can reach the parser. A partly valid graph is never returned.
@@ -61,15 +66,15 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use daftprompt_core::{
-    AccessError, AgentKind, Briefer, Clarifier, DEFAULT_MAX_INPUT_BYTES, LocalPolicy, Parser,
-    Principal, ProjectScope, RootPolicy, Store, StoreError, resolve_project,
+    AccessError, AgentKind, Briefer, Clarifier, CommandsBriefer, DEFAULT_MAX_INPUT_BYTES,
+    LocalPolicy, Parser, Principal, ProjectScope, RootPolicy, Store, StoreError, resolve_project,
 };
 use http_body_util::LengthLimitError;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
 pub use daftprompt_types::{
-    AgentInfo, AgentTaskRequest, BriefingResult, ClarifyRequest, ClarifyResult,
+    AgentInfo, AgentTaskRequest, BriefingResult, ClarifyRequest, ClarifyResult, CommandsResult,
     CreateProjectRequest, ParseError, ParseRequest, ParseResult, Project, RenameProjectRequest,
 };
 
@@ -122,6 +127,8 @@ pub struct AppState {
     parser: Arc<dyn Parser>,
     clarifier: Option<Arc<dyn Clarifier>>,
     chronicler: Option<Arc<dyn Briefer>>,
+    surveyor: Option<Arc<dyn Briefer>>,
+    operator: Option<Arc<dyn CommandsBriefer>>,
     store: Option<Arc<Store>>,
     policy: Arc<dyn RootPolicy>,
     config: ApiConfig,
@@ -134,6 +141,8 @@ impl AppState {
             parser,
             clarifier: None,
             chronicler: None,
+            surveyor: None,
+            operator: None,
             store: None,
             policy: Arc::new(LocalPolicy),
             config,
@@ -151,6 +160,20 @@ impl AppState {
     /// route answers `500 internal_error`.
     pub fn with_chronicler(mut self, chronicler: Arc<dyn Briefer>) -> Self {
         self.chronicler = Some(chronicler);
+        self
+    }
+
+    /// Serve `POST /projects/{id}/overview` with `surveyor`. Without one the
+    /// route answers `500 internal_error`.
+    pub fn with_surveyor(mut self, surveyor: Arc<dyn Briefer>) -> Self {
+        self.surveyor = Some(surveyor);
+        self
+    }
+
+    /// Serve `POST /projects/{id}/commands` with `operator`. Without one the
+    /// route answers `500 internal_error`.
+    pub fn with_operator(mut self, operator: Arc<dyn CommandsBriefer>) -> Self {
+        self.operator = Some(operator);
         self
     }
 
@@ -204,6 +227,9 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/projects/{id}/open", post(open_project))
         .route("/projects/{id}/history", post(project_history))
+        .route("/projects/{id}/overview", post(project_overview))
+        .route("/projects/{id}/commands", post(project_commands))
+        .route("/projects/{id}/profile", get(project_profile))
         .with_state(state)
 }
 
@@ -301,6 +327,8 @@ async fn list_agents(State(state): State<AppState>) -> Json<Vec<AgentInfo>> {
         state.parser.info(),
         state.clarifier.as_ref().and_then(|c| c.info()),
         state.chronicler.as_ref().map(|c| c.info()),
+        state.surveyor.as_ref().map(|c| c.info()),
+        state.operator.as_ref().map(|c| c.info()),
     ];
     Json(agents.into_iter().flatten().collect())
 }
@@ -313,34 +341,83 @@ async fn project_history(
     Path(id): Path<String>,
     request: Request,
 ) -> Response {
-    let limit = state.config.max_body_bytes;
-    let body = match to_bytes(request.into_body(), limit).await {
-        Ok(body) => body,
-        Err(error) => return error_response(body_error(&error, limit)),
-    };
-    let task: AgentTaskRequest = if body.iter().all(u8::is_ascii_whitespace) {
-        AgentTaskRequest::default()
-    } else {
-        match serde_json::from_slice(&body) {
-            Ok(task) => task,
-            Err(error) => {
-                return error_response(ParseError::InvalidRequest {
-                    detail: format!(
-                        "the request body is not a valid AgentTaskRequest JSON object: {error}"
-                    ),
-                });
-            }
-        }
-    };
+    let briefer = state.chronicler.clone();
+    briefing(
+        &state,
+        &principal,
+        &id,
+        request,
+        AgentKind::Chronicler,
+        briefer,
+        "the Chronicler",
+    )
+    .await
+}
 
-    let Some(chronicler) = &state.chronicler else {
+/// `POST /projects/{id}/overview`: the Surveyor's briefing of the project's
+/// files and documentation. An empty body means the default task.
+async fn project_overview(
+    State(state): State<AppState>,
+    Caller(principal): Caller,
+    Path(id): Path<String>,
+    request: Request,
+) -> Response {
+    let briefer = state.surveyor.clone();
+    briefing(
+        &state,
+        &principal,
+        &id,
+        request,
+        AgentKind::Surveyor,
+        briefer,
+        "the Surveyor",
+    )
+    .await
+}
+
+/// `POST /projects/{id}/commands`: the Operator's commands for the project.
+/// The body and errors are those of the other briefing routes; the response is
+/// a `CommandsResult`.
+async fn project_commands(
+    State(state): State<AppState>,
+    Caller(principal): Caller,
+    Path(id): Path<String>,
+    request: Request,
+) -> Response {
+    let (task, scope) = match prepare_task(
+        &state,
+        &principal,
+        &id,
+        request,
+        AgentKind::Operator,
+        state.operator.is_some(),
+        "the Operator",
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(response) => return *response,
+    };
+    let Some(operator) = &state.operator else {
         return error_response(ParseError::Internal {
-            detail: "the Chronicler is not configured on this service".to_owned(),
+            detail: "the Operator is not configured on this service".to_owned(),
         });
     };
+    match operator.brief(task, &scope).await {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => error_response(error),
+    }
+}
 
-    // 404, 403 and 422 are answered here, before any model call.
-    let scope = match resolve_scope(&state, &principal, AgentKind::Chronicler, Some(&id)) {
+/// `GET /projects/{id}/profile`: the deterministic `ProjectProfile` of the
+/// project folder. No model is called, so no agent needs to be configured; the
+/// project is still resolved for [`AgentKind::Surveyor`].
+async fn project_profile(
+    State(state): State<AppState>,
+    Caller(principal): Caller,
+    Path(id): Path<String>,
+) -> Response {
+    let scope = match resolve_scope(&state, &principal, AgentKind::Surveyor, Some(&id)) {
         Ok(Some(scope)) => scope,
         Ok(None) => {
             return error_response(ParseError::Internal {
@@ -349,10 +426,102 @@ async fn project_history(
         }
         Err(failure) => return failure.into_response(),
     };
+    // The folder walk is blocking file I/O.
+    let root = scope.root.clone();
+    match tokio::task::spawn_blocking(move || daftprompt_core::languages::profile_root(root)).await
+    {
+        Ok(Ok(profile)) => Json(profile).into_response(),
+        Ok(Err(error)) => ProjectFailure {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            kind: "project_unavailable",
+            detail: format!("the project folder cannot be read: {error}"),
+        }
+        .into_response(),
+        Err(error) => error_response(ParseError::Internal {
+            detail: format!("the profile task failed: {error}"),
+        }),
+    }
+}
 
-    match chronicler.brief(task, &scope).await {
+/// Shared handler of the `BriefingResult` routes. An empty body means the
+/// default task; 404, 403 and 422 are answered before any model call.
+async fn briefing(
+    state: &AppState,
+    principal: &Principal,
+    id: &str,
+    request: Request,
+    agent: AgentKind,
+    briefer: Option<Arc<dyn Briefer>>,
+    name: &str,
+) -> Response {
+    let (task, scope) = match prepare_task(
+        state,
+        principal,
+        id,
+        request,
+        agent,
+        briefer.is_some(),
+        name,
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(response) => return *response,
+    };
+    let Some(briefer) = briefer else {
+        return error_response(ParseError::Internal {
+            detail: format!("{name} is not configured on this service"),
+        });
+    };
+    match briefer.brief(task, &scope).await {
         Ok(result) => Json(result).into_response(),
         Err(error) => error_response(error),
+    }
+}
+
+/// The request body and the resolved project of a briefing route, or the
+/// error response to send. An empty body is the default task.
+async fn prepare_task(
+    state: &AppState,
+    principal: &Principal,
+    id: &str,
+    request: Request,
+    agent: AgentKind,
+    configured: bool,
+    name: &str,
+) -> Result<(AgentTaskRequest, ProjectScope), Box<Response>> {
+    let limit = state.config.max_body_bytes;
+    let body = match to_bytes(request.into_body(), limit).await {
+        Ok(body) => body,
+        Err(error) => return Err(Box::new(error_response(body_error(&error, limit)))),
+    };
+    let task: AgentTaskRequest = if body.iter().all(u8::is_ascii_whitespace) {
+        AgentTaskRequest::default()
+    } else {
+        match serde_json::from_slice(&body) {
+            Ok(task) => task,
+            Err(error) => {
+                return Err(Box::new(error_response(ParseError::InvalidRequest {
+                    detail: format!(
+                        "the request body is not a valid AgentTaskRequest JSON object: {error}"
+                    ),
+                })));
+            }
+        }
+    };
+
+    if !configured {
+        return Err(Box::new(error_response(ParseError::Internal {
+            detail: format!("{name} is not configured on this service"),
+        })));
+    }
+
+    match resolve_scope(state, principal, agent, Some(id)) {
+        Ok(Some(scope)) => Ok((task, scope)),
+        Ok(None) => Err(Box::new(error_response(ParseError::Internal {
+            detail: "the project was not resolved".to_owned(),
+        }))),
+        Err(failure) => Err(Box::new(failure.into_response())),
     }
 }
 

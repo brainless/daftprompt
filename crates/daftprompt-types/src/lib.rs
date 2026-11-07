@@ -22,20 +22,23 @@
 pub mod error;
 pub mod extraction;
 pub mod graph;
+pub mod profile;
 pub mod project;
 pub mod request;
 
 pub use error::ParseError;
 pub use extraction::{
-    AnnotationKind, BriefingCitation, BriefingExtraction, ExplainerCitation, ExplainerExtraction,
-    ExtractedAnnotation, ExtractedSpan, Extraction,
+    AnnotationKind, BriefingCitation, BriefingExtraction, CommandKind, CommandsExtraction,
+    ExplainerCitation, ExplainerExtraction, ExtractedAnnotation, ExtractedCommand, ExtractedSpan,
+    Extraction,
 };
 pub use graph::{
     AgentInfo, AgentTask, BriefingNotice, BriefingNoticeKind, BriefingResult, CitationInfo,
-    CitationLocation, ClarifyResult, ContextTarget, Grounding, Label, LabelKind, LabelStatus, Node,
-    NodeContext, ParseResult, Payload, Run, RunInput, RunStatus, SourceRange, SourceWindow,
-    SpanInfo, ToolCall,
+    CitationLocation, ClarifyResult, CommandOrigin, CommandsResult, ContextTarget, Grounding,
+    Label, LabelKind, LabelStatus, Node, NodeContext, ParseResult, Payload, ProjectCommand, Run,
+    RunInput, RunStatus, SourceRange, SourceWindow, SpanInfo, ToolCall,
 };
+pub use profile::{LanguageDetection, LanguageId, LanguageProject, ProjectProfile};
 pub use project::{CreateProjectRequest, Project, RenameProjectRequest};
 pub use request::{
     AgentTaskRequest, ClarifyRequest, ClarifySource, ClarifyTarget, ClarifyTurn, ContentType,

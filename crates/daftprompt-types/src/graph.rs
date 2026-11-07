@@ -13,6 +13,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::extraction::CommandKind;
+use crate::profile::{LanguageId, ProjectProfile};
 use crate::request::SourceMetadata;
 
 /// Immutable text.
@@ -418,6 +420,10 @@ pub struct BriefingResult {
     /// Validated citations in citation order.
     pub citations: Vec<CitationInfo>,
     pub notices: Vec<BriefingNotice>,
+    /// The deterministic project profile the agent was given (Surveyor and
+    /// Operator); `None` for Chronicler.
+    #[serde(default)]
+    pub profile: Option<ProjectProfile>,
     pub run: Run,
     pub run_inputs: Vec<RunInput>,
     /// Every tool invocation, including `submit`.
@@ -434,4 +440,40 @@ pub struct AgentInfo {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub prompt_version: String,
+}
+
+/// Where a [`ProjectCommand`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandOrigin {
+    /// Detected by Rust from a manifest; the manifest lines are cited.
+    Detected,
+    /// Found in the project's documentation by the Operator, with citations.
+    Documented,
+}
+
+/// One command offered by the Operator. Commands are discovered, never run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectCommand {
+    /// Rust-generated, stable within one result.
+    pub id: String,
+    pub label: String,
+    /// Exactly as it would be typed.
+    pub command: String,
+    /// Root-relative; empty is the project root.
+    pub working_dir: String,
+    pub kind: CommandKind,
+    pub language: Option<LanguageId>,
+    pub origin: CommandOrigin,
+    /// 1-based `index` values of `BriefingResult.citations` that justify the
+    /// command, ascending. Never empty.
+    pub citation_indexes: Vec<u32>,
+}
+
+/// The result of one Operator run: the briefing records plus the commands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandsResult {
+    #[serde(flatten)]
+    pub briefing: BriefingResult,
+    pub commands: Vec<ProjectCommand>,
 }

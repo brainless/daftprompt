@@ -21,7 +21,7 @@ mod briefing;
 use std::sync::Arc;
 use std::time::Duration;
 
-use daftprompt_types::{AgentInfo, AgentTaskRequest, BriefingResult, ParseError};
+use daftprompt_types::{AgentInfo, AgentTaskRequest, BriefingResult, CommandsResult, ParseError};
 use rig::DynModel;
 use rig::agent::{Agent, AgentBuilder};
 use rig::completion::PromptError;
@@ -52,6 +52,20 @@ pub trait Briefer: Send + Sync {
         request: AgentTaskRequest,
         scope: &ProjectScope,
     ) -> BoxFuture<'a, Result<BriefingResult, ParseError>>;
+}
+
+/// The object-safe form of Operator, whose result adds commands to the
+/// briefing records.
+pub trait CommandsBriefer: Send + Sync {
+    /// How the agent is configured, for `GET /agents`.
+    fn info(&self) -> AgentInfo;
+
+    /// Discover the commands of the project the caller's access policy granted.
+    fn brief<'a>(
+        &'a self,
+        request: AgentTaskRequest,
+        scope: &ProjectScope,
+    ) -> BoxFuture<'a, Result<CommandsResult, ParseError>>;
 }
 
 /// The tools of one briefing agent for one attempt.
