@@ -233,9 +233,35 @@ pub struct ProjectCommand {
   - Hardening beyond the list: `--literal-pathspecs` (no pathspec magic), `LC_ALL=C` (stable error text), scrubbed `GIT_DIR`, `GIT_WORK_TREE`, `GIT_EXTERNAL_DIFF`, `GIT_CONFIG_COUNT` and similar variables, `^{commit}` on `git_show` hashes, and NUL-delimited output parsing that drops forged records.
   - `git_show` of a commit that changes nothing under the root (the same commits `git_log` leaves out) answers `not found`, rather than showing its message.
   - `POST /projects/{id}/history` accepts an empty body as the default task.
-- **B. Languages and Surveyor:** the `languages` registry with Rust, TypeScript and Python, `GET /projects/{id}/profile`, Surveyor and `POST /projects/{id}/overview`.
-- **C. Operator:** command candidates, `CommandsExtraction` validation, Operator and `POST /projects/{id}/commands`.
-- **D. GUI:** briefing state, stacked summaries and the command footer.
+- **B. Languages and Surveyor (implemented):** the `languages` registry with Rust, TypeScript and Python, `GET /projects/{id}/profile`, Surveyor and `POST /projects/{id}/overview`.
+
+  Implementation notes and deviations from the text above:
+  - `LanguageId`, `LanguageDetection`, `LanguageProject` and `ProjectProfile` are defined in `daftprompt-types` (not core) because `BriefingResult.profile` needs them; `daftprompt_core::languages` re-exports them. `BriefingResult.profile` is `Option<ProjectProfile>`: Surveyor fills it, Chronicler leaves it `null`.
+  - `command_candidates` is not on the trait yet; it needs the `CommandCandidate` type and is added in Task C.
+  - `LanguageDetection` is `{ language, projects, truncated }`; each `LanguageProject` is a manifest directory with `dir`, `name`, `package_manager`, `toolchain` (Rust channel, `typescript`/`javascript`, or `requires-python`), `workspace`, `packages` (folded workspace members) and `files` (the marker evidence). The epic's `working_dir` for Task C is `dir`.
+  - Limits: nested manifests up to 4 directories deep, vendored directories skipped, 200 markers per search and 50 projects per language, 40 key files. A binary `bun.lockb` is invisible to the file tools, so bun is told by `bun.lock` or the `packageManager` field.
+  - `toml` 0.9 is a new workspace dependency (see `docs/development.md`).
+  - Surveyor rejects a commit citation with an explicit error before the shared validation.
+- **C. Operator (implemented):** command candidates, `CommandsExtraction` validation, Operator and `POST /projects/{id}/commands`.
+
+  Implementation notes and deviations from the text above:
+  - `CommandCandidate { command, working_dir, kind, language, label, evidence }` and `CommandEvidence { path, start_line, end_line }` live in `daftprompt_core::languages` (they carry no wire contract); `command_candidates` is on `LanguageSupport`, with an aggregate `languages::command_candidates(files, &profile)`. The extraction and result types (`CommandsExtraction`, `ExtractedCommand`, `CommandKind`, `CommandsResult`, `ProjectCommand`, `CommandOrigin`) are in `daftprompt-types`.
+  - `ExtractedCommand.candidate` is the 1-based number of the candidate in the prompt. A candidate-backed command must repeat the candidate's `command` and `working_dir` exactly, so `origin: detected` is truthful; to change a command the model omits `candidate` and cites a file instead.
+  - `ProjectCommand.citation_indexes` are the 1-based `CitationInfo.index` values of `CommandsResult.citations`, never empty. Rust appends each detected command's manifest lines (with the content hash it computed from the file) after the model's citations, reusing an identical citation when the model already cited the same lines.
+  - `CommandKind` has no `typecheck`: a `package.json` script such as `typecheck` is `lint`. Script kinds come from the first word of the name (`dev`/`serve`/`watch` is `dev`, `start` is `run`, and so on); a name like `prebuild` is `other`.
+  - A workspace member's `package.json` scripts get the member's directory as `working_dir` (not the root project's `dir`) and the owning project's package manager; the install command is emitted once per project root. Rust `cargo run -p <pkg>` runs from the owning project's directory and uses `--bin` for a named `[[bin]]` target; a package with `src/main.rs` and no `[[bin]]` gets plain `cargo run -p <pkg>`. `src/bin/*.rs` auto-discovered targets are not detected.
+  - Python setup steps are separate commands (`python3 -m venv .venv`, then `.venv/bin/pip install -r requirements.txt` or `-e .`). Commands run through a pip project use `.venv/bin/...`, through uv `uv run ...`, and through poetry `poetry run ...`; `manage.py` with no tool uses `python3`. Script names that are not plain words (spaces, shell characters, a leading `-`) are skipped.
+  - Candidate counts are capped (80 per language, 120 in all), and the Operator offers at most 12 commands (`OperatorConfig::max_commands`).
+  - `GET /agents` lists the Operator through a new object-safe `project_agent::CommandsBriefer` trait (its result type differs from `Briefer`'s). The briefing request handling is shared by both kinds of route.
+  - Key-file priority (a Task B fix): top-level docs, then files directly in `docs/`, then manifests, then nested `docs/**`, so a large `docs/evaluations/` folder cannot crowd out manifests.
+- **D. GUI (implemented):** briefing state, stacked summaries and the command footer.
+
+  Implementation notes and deviations from the text above (details in [gui.md](../docs/gui.md#project-briefing-epic-006)):
+  - Pure state is in `briefing.rs`; view model in `briefing_view.rs`; painting in `briefing_ui.rs`. Slots are stamped with the project id, the generation and a per-section sequence number (so a re-run's older reply is also dropped), which extends the epic's project-and-generation rule.
+  - Markdown is a small subset (headings, paragraphs, lists, fenced code, `**` removed); other inline markup shows as written.
+  - The footer is fixed at the bottom of the main column, not the whole window. Its "+N more" button and each command button open one details card that replaces the body of the main column while open (akar draws all text above quads, so a floating popover would show text through it). The footer also carries a Re-run control.
+  - The app opens on the Project tab; re-choosing the already current project re-runs its briefing.
+  - Added a `Mono` font role (system monospace) for commands and code.
 
 Each task updates `docs/api.md`, `docs/data-model.md` and `docs/development.md` (new dependencies, such as a TOML parser for manifests) as needed.
 

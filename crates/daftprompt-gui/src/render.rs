@@ -657,6 +657,34 @@ fn draw_text_at(
     color: u32,
     viewport: [f32; 4],
 ) {
+    draw_text_weighted(
+        core,
+        widget_id,
+        rect,
+        text,
+        role,
+        400,
+        font_size,
+        line_height,
+        color,
+        viewport,
+    );
+}
+
+/// Wrapped text at `rect`'s width, clipped to `viewport`, at a font weight.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_text_weighted(
+    core: &mut AkarCore,
+    widget_id: u64,
+    rect: [f32; 4],
+    text: &str,
+    role: Role,
+    weight: u16,
+    font_size: f32,
+    line_height: f32,
+    color: u32,
+    viewport: [f32; 4],
+) {
     if text.is_empty() || rect[2] <= 0.0 || !intersects(rect, viewport) {
         return;
     }
@@ -667,7 +695,7 @@ fn draw_text_at(
         glyphon::Metrics::new(font_size, line_height),
         Some(rect[2]),
         None,
-        Some(fonts::current().attrs(role, 400)),
+        Some(fonts::current().attrs(role, weight)),
     );
     core.draw_list.push_text(TextCall {
         buffer_id: buffer,
@@ -768,11 +796,11 @@ fn badge_colors(variant: BadgeVariant, theme: &AkarTheme) -> (u32, u32) {
     }
 }
 
-fn intersects(a: [f32; 4], b: [f32; 4]) -> bool {
+pub(crate) fn intersects(a: [f32; 4], b: [f32; 4]) -> bool {
     a[0] < b[0] + b[2] && a[0] + a[2] > b[0] && a[1] < b[1] + b[3] && a[1] + a[3] > b[1]
 }
 
-fn intersect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+pub(crate) fn intersect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     let x = a[0].max(b[0]);
     let y = a[1].max(b[1]);
     let right = (a[0] + a[2]).min(b[0] + b[2]);
@@ -1089,7 +1117,7 @@ pub fn draw_notice(
     akar_paragraph(core, layout, node, text, Some(style), theme);
 }
 
-fn draw_scrollbar(
+pub(crate) fn draw_scrollbar(
     core: &mut AkarCore,
     rect: [f32; 4],
     scroll_y: f32,
@@ -1129,7 +1157,7 @@ fn draw_scrollbar(
     });
 }
 
-fn color_to_f32(color: u32) -> [f32; 4] {
+pub(crate) fn color_to_f32(color: u32) -> [f32; 4] {
     [
         ((color >> 24) & 0xFF) as f32 / 255.0,
         ((color >> 16) & 0xFF) as f32 / 255.0,

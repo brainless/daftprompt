@@ -355,6 +355,17 @@ fn turn_view(turn: &Turn, parse: &ParseResult) -> TurnView {
     }
 }
 
+/// `path:L5` or `path:L5–L9` for a file citation; an unusable range is said so.
+pub fn file_range_text(path: &str, start_line: u32, end_line: u32) -> String {
+    if start_line == 0 || end_line < start_line {
+        format!("{path} (line range unavailable)")
+    } else if start_line == end_line {
+        format!("{path}:L{start_line}")
+    } else {
+        format!("{path}:L{start_line}–L{end_line}")
+    }
+}
+
 fn citation_line(citation: &CitationInfo, parse: &ParseResult) -> CitationLine {
     let marker = format!("[{}]", citation.index);
     let text =
@@ -363,15 +374,7 @@ fn citation_line(citation: &CitationInfo, parse: &ParseResult) -> CitationLine {
                 path,
                 start_line,
                 end_line,
-            } => {
-                if *start_line == 0 || end_line < start_line {
-                    format!("{path} (line range unavailable)")
-                } else if start_line == end_line {
-                    format!("{path}:L{start_line}")
-                } else {
-                    format!("{path}:L{start_line}–L{end_line}")
-                }
-            }
+            } => file_range_text(path, *start_line, *end_line),
             CitationLocation::Source {
                 start_byte,
                 end_byte,

@@ -202,6 +202,66 @@ paints the list and the drop frame; `api.rs` has `list_projects`,
 `create_project`, `open_project` and decodes the API's `{kind, detail}` bodies
 generically so project error kinds survive.
 
+## Project briefing (epic 006)
+
+The main column has a tab bar, **Project** and **Parse**, above its title, and a
+fixed command footer below. The **Parse** tab is exactly the source view and
+clarify panel described above. A project becoming current (picker, folder dialog,
+drop, or the launch preselection) switches to **Project**; submitting a parse
+switches to **Parse**; the user can click either tab at any time. The app opens
+on Project.
+
+When a project becomes current the GUI sends `POST /projects/{id}/history`,
+`/overview` and `/commands` (empty `{}` body, default tasks) concurrently, each on
+its own worker thread (`ParseClient::history`, `overview`, `commands`, 420 s
+timeout), and polls a fourth channel. Nothing is cached: the briefing re-runs
+every time a project becomes current, including on launch and when the already
+current project is chosen again. "No project" clears it.
+
+`briefing.rs` is the pure state: `Briefing { project_id, generation, history,
+overview, commands }` with each slot `Idle | Loading | Ready | Failed`. Every
+request is stamped with the project id, the generation and a per-section
+sequence number; a reply that no longer matches (another project, an older
+generation, or a section re-run since) is dropped. A section's **Re-run** button
+re-sends only that request and is disabled (`Running…`) while it loads.
+`briefing_view.rs` is the pure view model (blocks, Markdown subset, citations,
+footer overflow math, command details); `briefing_ui.rs` lays out and paints it.
+
+- **Project tab.** The title is the project name and the meta line its folder.
+  Two stacked sections follow: "Recent work" (Chronicler) and "Project overview"
+  (Surveyor). Each shows a loading line, its error in the error colour, or the
+  result: notices first (for example "Not a git repository"), then the summary,
+  then citations as `[n] path:L3–L9` or `[n] commit abc1234 subject` (the line
+  format of the clarify panel). The stack scrolls and is clipped to its viewport
+  like the source view. With no project the tab shows a hint to choose or drop a
+  folder.
+- **Markdown level.** A deliberately small subset: `#` headings (one heading
+  style), paragraphs, `-`/`*`/`+`/`1.` list items (indented items shown as nested,
+  continuation lines joined), and fenced code blocks in the monospace face.
+  `**bold**` markers are removed; other inline markup (backticks, links,
+  emphasis, tables) shows as written. The `[n]` markers in the text are untouched.
+- **Command footer.** A fixed 44 px strip at the bottom of the **main column**
+  (not the whole window: the left column's composer is anchored to the bottom and
+  has its own footer text). It shows one row of buttons, one per command, labelled
+  with `label`; "Finding commands…" while loading; a short error with Re-run on
+  failure; "No commands found for this project." when empty; and a Re-run button at
+  its right end. When the buttons do not fit, the row is cut to the buttons that
+  leave room for a **+N more** button (it never wraps).
+- **Details area.** Clicking a command button (or a row of the "+N more" list)
+  opens a details card showing the label, the command (monospace), working
+  directory ("project root" when empty), kind, origin (detected from a manifest, or
+  documented in the project) and the cited evidence lines. **+N more** opens the
+  same card as a list of all commands. Clicking never runs or copies anything. Escape, the
+  card's **Close** button, clicking the same button again, a press outside the card
+  (that click is swallowed), or switching tab or project closes it.
+- **Why the card replaces the body.** akar paints all text above all ordinary
+  quads, so a floating popover would show the summary or source text through its
+  card (the same limitation as the project picker). The card therefore covers the
+  main column body (the rectangle of the content row), where nothing else draws
+  while it is open; the tab bar, title and footer lie outside it, so no other text
+  can overlap it. The clarify panel is collapsed while the card is open and on the
+  Project tab.
+
 ## Clarification branches (epic 004)
 
 Every span card has a **Clarify** action. It opens a panel beside the source
@@ -311,6 +371,10 @@ The GUI's deterministic tests cover:
   most recent project, picker entries, dropped file vs directory vs several
   items, `project_id` on built parse and clarify requests, and project error
   kinds decoded from `{kind, detail}` bodies;
+- briefing: three slots loading on open, stale and superseded replies dropped,
+  per-section re-run, clearing, tab switching on project open and parse submit,
+  the Markdown subset, citation and notice text, footer overflow math, command
+  details text, block layout stacking and viewport clipping, and the briefing URLs;
 - clarification: request construction from a parse result (first turn, follow-up
   with earlier node ids, blank question, unknown span), one request per branch,
   stale replies, failures keeping earlier turns, malformed results (empty

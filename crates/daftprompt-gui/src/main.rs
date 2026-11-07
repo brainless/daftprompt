@@ -12,6 +12,9 @@
 //! (see `spawn`), stopped when the app quits or the window closes.
 
 mod api;
+mod briefing;
+mod briefing_ui;
+mod briefing_view;
 mod clarify;
 mod clipboard;
 mod fonts;
@@ -37,6 +40,9 @@ use akar_layout::{
 };
 use akar_winit::{ActivationProgress, StartupActivation, process_window_event};
 use api::{ApiError, ParseClient, build_parse_request};
+use briefing::{BriefingMessage, BriefingState, Details, Reply, Request, Section, Tab};
+use briefing_ui::BlockLayout;
+use briefing_view::{Action, Block as ViewBlock};
 use clarify::{Branches, build_branch_view, panel_blocks};
 use clipboard::{ClipboardRequest, SystemClipboard};
 use daftprompt_types::{ClarifyRequest, ClarifyResult, ParseResult};
@@ -60,6 +66,11 @@ use winit::{
 
 const SIDEBAR_WIDTH: f32 = 340.0;
 const PICKER_HEIGHT: f32 = 36.0;
+const TAB_WIDTH: f32 = 104.0;
+const TAB_HEIGHT: f32 = 32.0;
+const FOOTER_HEIGHT: f32 = 44.0;
+/// Padding inside the details card.
+const DETAILS_PADDING: f32 = 16.0;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const CURSOR_BLINK: Duration = Duration::from_millis(500);
 /// The API child is spawned without a readiness wait, so the first project
@@ -139,6 +150,9 @@ enum SelectJob {
     Register(String),
 }
 
+/// `(briefing revision, rounded width)` a cached block layout was built for.
+type BlockKey = (u64, i32);
+
 struct GuiState {
     window: Arc<Window>,
     device: wgpu::Device,
@@ -155,15 +169,31 @@ struct GuiState {
     input_node: NodeId,
     parse_node: NodeId,
     left_footer: NodeId,
+    tab_project: NodeId,
+    tab_parse: NodeId,
     main_title: NodeId,
     main_meta: NodeId,
     main_body: NodeId,
+    main_row: NodeId,
+    footer: NodeId,
     panel_col: NodeId,
     panel_title: NodeId,
     panel_close: NodeId,
     panel_body: NodeId,
     panel_input: NodeId,
     panel_send: NodeId,
+
+    /// The briefing of the current project, the active tab and the open
+    /// command details.
+    briefing: BriefingState,
+    briefing_tx: Sender<BriefingMessage>,
+    briefing_rx: Receiver<BriefingMessage>,
+    /// Cached layouts of the Project tab and of the details area, each with
+    /// the `(briefing revision, width)` it was built for, and their scroll.
+    project_layout: Option<(BlockKey, BlockLayout)>,
+    project_scroll: f32,
+    details_layout: Option<(BlockKey, BlockLayout)>,
+    details_scroll: f32,
 
     /// The selected project and the registry list; every new request reads
     /// its project id from here.
@@ -276,6 +306,7 @@ impl ApplicationHandler for App {
         let (tx, rx) = mpsc::channel();
         let (clarify_tx, clarify_rx) = mpsc::channel();
         let (project_tx, project_rx) = mpsc::channel();
+        let (briefing_tx, briefing_rx) = mpsc::channel();
 
         self.state = Some(GuiState {
             window,
@@ -292,15 +323,26 @@ impl ApplicationHandler for App {
             input_node: nodes.input_node,
             parse_node: nodes.parse_node,
             left_footer: nodes.left_footer,
+            tab_project: nodes.tab_project,
+            tab_parse: nodes.tab_parse,
             main_title: nodes.main_title,
             main_meta: nodes.main_meta,
             main_body: nodes.main_body,
+            main_row: nodes.main_row,
+            footer: nodes.footer,
             panel_col: nodes.panel_col,
             panel_title: nodes.panel_title,
             panel_close: nodes.panel_close,
             panel_body: nodes.panel_body,
             panel_input: nodes.panel_input,
             panel_send: nodes.panel_send,
+            briefing: BriefingState::default(),
+            briefing_tx,
+            briefing_rx,
+            project_layout: None,
+            project_scroll: 0.0,
+            details_layout: None,
+            details_scroll: 0.0,
             projects: Projects::default(),
             project_menu_open: false,
             want_folder_dialog: false,
@@ -420,6 +462,7 @@ impl ApplicationHandler for App {
             if state.parse_view.is_loading()
                 || state.branches.any_pending()
                 || state.projects.is_busy()
+                || state.briefing.is_loading()
             {
                 wake_at = Some(now + POLL_INTERVAL);
                 state.window.request_redraw();
@@ -548,7 +591,11 @@ fn render(state: &mut GuiState) {
         start_folder_dialog(state);
     }
 
-    if state.parse_view.is_loading() || state.branches.any_pending() || state.projects.is_busy() {
+    if state.parse_view.is_loading()
+        || state.branches.any_pending()
+        || state.projects.is_busy()
+        || state.briefing.is_loading()
+    {
         state.window.request_redraw();
     }
 }
@@ -567,9 +614,13 @@ struct LayoutNodes {
     input_node: NodeId,
     parse_node: NodeId,
     left_footer: NodeId,
+    tab_project: NodeId,
+    tab_parse: NodeId,
     main_title: NodeId,
     main_meta: NodeId,
     main_body: NodeId,
+    main_row: NodeId,
+    footer: NodeId,
     panel_col: NodeId,
     panel_title: NodeId,
     panel_close: NodeId,
@@ -707,10 +758,48 @@ fn build_layout() -> (Layout, akar_layout::PageLayout, LayoutNodes) {
         },
     );
 
+    let tab_project = layout.new_leaf(Style {
+        flex_shrink: 0.0,
+        size: Size {
+            width: length(TAB_WIDTH),
+            height: length(TAB_HEIGHT),
+        },
+        ..Default::default()
+    });
+    let tab_parse = layout.new_leaf(Style {
+        flex_shrink: 0.0,
+        size: Size {
+            width: length(TAB_WIDTH),
+            height: length(TAB_HEIGHT),
+        },
+        ..Default::default()
+    });
+    let tab_row = layout.new_with_children(
+        Style {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: Dimension::percent(1.0),
+                height: length(TAB_HEIGHT),
+            },
+            gap: Size {
+                width: length(8.0_f32),
+                height: length(0.0_f32),
+            },
+            ..Default::default()
+        },
+        &[tab_project, tab_parse],
+    );
     let main_title = layout.new_leaf(Style {
         size: Size {
             width: Dimension::percent(1.0),
             height: length(30.0_f32),
+        },
+        margin: Rect {
+            top: length(14.0_f32),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+            left: length(0.0_f32),
         },
         ..Default::default()
     });
@@ -832,7 +921,22 @@ fn build_layout() -> (Layout, akar_layout::PageLayout, LayoutNodes) {
         },
         &[main_body, panel_col],
     );
-    layout.set_children(main, &[main_title, main_meta, main_row]);
+    // The command footer is fixed at the bottom of the main column.
+    let footer = layout.new_leaf(Style {
+        flex_shrink: 0.0,
+        size: Size {
+            width: Dimension::percent(1.0),
+            height: length(FOOTER_HEIGHT),
+        },
+        margin: Rect {
+            top: length(8.0_f32),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+            left: length(0.0_f32),
+        },
+        ..Default::default()
+    });
+    layout.set_children(main, &[tab_row, main_title, main_meta, main_row, footer]);
 
     (
         layout,
@@ -844,9 +948,13 @@ fn build_layout() -> (Layout, akar_layout::PageLayout, LayoutNodes) {
             input_node,
             parse_node,
             left_footer,
+            tab_project,
+            tab_parse,
             main_title,
             main_meta,
             main_body,
+            main_row,
+            footer,
             panel_col,
             panel_title,
             panel_close,
@@ -1091,7 +1199,10 @@ fn draw_project_picker(state: &mut GuiState, theme: &AkarTheme) -> bool {
 
 fn apply_menu_action(state: &mut GuiState, action: &MenuAction) {
     match action {
-        MenuAction::Clear => state.projects.clear(),
+        MenuAction::Clear => {
+            state.projects.clear();
+            state.briefing.clear();
+        }
         MenuAction::Select(id) => spawn_select(state, SelectJob::Open(id.clone())),
         MenuAction::ChooseFolder => {
             state.projects.dismiss_notice();
@@ -1216,7 +1327,7 @@ fn serve_clipboard(state: &mut GuiState) {
     state.window.request_redraw();
 }
 
-fn draw_main(state: &mut GuiState, theme: &AkarTheme) {
+fn draw_parse_tab(state: &mut GuiState, theme: &AkarTheme, show_body: bool) {
     let (title, meta, notice) = match state.parse_view.phase() {
         Phase::Idle => {
             let mut text = "Paste ordinary text in the left column — a chat reply, a plan, a code \
@@ -1303,7 +1414,9 @@ fn draw_main(state: &mut GuiState, theme: &AkarTheme) {
 
     let body_rect = state.layout.rect(state.main_body);
     let mut clicked_span = None;
-    if state.parse_view.phase() == Phase::Success {
+    if !show_body {
+        // The details area covers the body while open.
+    } else if state.parse_view.phase() == Phase::Success {
         if let Some(content) = &mut state.content {
             let marks = state.branches.marks();
             clicked_span = draw_content(
@@ -1339,7 +1452,278 @@ fn draw_main(state: &mut GuiState, theme: &AkarTheme) {
     if let Some(display_id) = clicked_span {
         open_branch(state, display_id);
     }
+}
+
+/// The main column: tab bar, the active tab, the details area when open, the
+/// clarify panel (Parse tab only), and the command footer.
+fn draw_main(state: &mut GuiState, theme: &AkarTheme) {
+    draw_tabs(state, theme);
+    close_details_on_outside_input(state);
+    let details_open = state.briefing.details().is_some();
+    match state.briefing.tab() {
+        Tab::Parse => draw_parse_tab(state, theme, !details_open),
+        Tab::Project => draw_project_header(state, theme),
+    }
+    if details_open {
+        draw_details(state, theme);
+    } else if state.briefing.tab() == Tab::Project {
+        draw_project_body(state, theme);
+    }
     draw_clarify_panel(state, theme);
+    draw_command_footer(state, theme);
+}
+
+fn draw_tabs(state: &mut GuiState, theme: &AkarTheme) {
+    for (node, tab, label) in [
+        (state.tab_project, Tab::Project, "Project"),
+        (state.tab_parse, Tab::Parse, "Parse"),
+    ] {
+        let active = state.briefing.tab() == tab;
+        let mut style = ButtonStyle::empty();
+        style.text_style = Some(ui_style(FontWeight::Medium));
+        if active {
+            style.fill = Some(theme.base_300);
+            style.hover_fill = Some(theme.base_300);
+            style.pressed_fill = Some(theme.base_300);
+            style.border_color = Some(theme.primary);
+        } else {
+            style.border_color = Some(theme.base_300);
+            style.content_color = Some(theme.muted_content);
+        }
+        let button = akar_button_styled(
+            &mut state.core,
+            &state.layout,
+            node,
+            label,
+            ButtonVariant::Outline,
+            &style,
+            theme,
+        );
+        if button.clicked && !active {
+            state.briefing.set_tab(tab);
+            state.window.request_redraw();
+        } else if button.clicked {
+            state.briefing.close_details();
+        }
+    }
+}
+
+/// Escape, or a press outside the details area, the footer and the tab bar,
+/// closes the details. The press's release is swallowed so it does not also
+/// click whatever lies beneath.
+fn close_details_on_outside_input(state: &mut GuiState) {
+    if state.briefing.details().is_none() {
+        return;
+    }
+    let input = &state.core.input;
+    let inside = [
+        state.layout.rect(state.main_row),
+        state.layout.rect(state.footer),
+        state.layout.rect(state.tab_project),
+        state.layout.rect(state.tab_parse),
+    ]
+    .iter()
+    .any(|rect| input.is_hovering(*rect));
+    let escape = input.keys_pressed.contains(&Key::Escape);
+    let outside = input.mouse_buttons_pressed[0] && !inside;
+    if escape || outside {
+        state.briefing.close_details();
+        state.swallow_release |= outside;
+        state.window.request_redraw();
+    }
+}
+
+fn draw_project_header(state: &mut GuiState, theme: &AkarTheme) {
+    let (title, meta) = match state.projects.current() {
+        Some(project) => (
+            truncate_for_display(&project.name, 48),
+            projects::shorten_path(&project.root_path, 90),
+        ),
+        None => ("Project".to_owned(), "No project selected.".to_owned()),
+    };
+    akar_heading(
+        &mut state.core,
+        &state.layout,
+        state.main_title,
+        &title,
+        HeadingLevel::H4,
+        Some(ui_style(FontWeight::Semibold)),
+        theme,
+    );
+    let meta_style = TextStyle {
+        color: Some(theme.muted_content),
+        font_size: Some(theme.font_size_sm),
+        line_height: Some(theme.font_size_sm * 1.5),
+        ..ui_style(FontWeight::Normal)
+    };
+    akar_paragraph(
+        &mut state.core,
+        &state.layout,
+        state.main_meta,
+        &meta,
+        Some(meta_style),
+        theme,
+    );
+}
+
+/// Rebuild a cached block layout when its key changed.
+fn ensure_blocks(
+    slot: &mut Option<(BlockKey, BlockLayout)>,
+    key: BlockKey,
+    width: f32,
+    blocks: impl FnOnce() -> Vec<ViewBlock>,
+    theme: &AkarTheme,
+) {
+    if slot.as_ref().is_none_or(|(have, _)| *have != key) {
+        *slot = Some((key, briefing_ui::build_layout(&blocks(), width, theme)));
+    }
+}
+
+fn draw_project_body(state: &mut GuiState, theme: &AkarTheme) {
+    let Some(briefing) = state.briefing.briefing() else {
+        draw_notice(
+            &mut state.core,
+            &state.layout,
+            state.main_body,
+            "Choose a project in the left column, or drop a folder on the window. daftprompt \
+             then summarizes its recent work and layout, and lists the commands it supports.",
+            theme.muted_content,
+            theme,
+        );
+        return;
+    };
+    let rect = state.layout.rect(state.main_body);
+    if rect[2] <= 8.0 || rect[3] <= 0.0 {
+        return;
+    }
+    let key = (state.briefing.revision(), rect[2].round() as i32);
+    ensure_blocks(
+        &mut state.project_layout,
+        key,
+        rect[2],
+        || briefing_view::project_blocks(briefing),
+        theme,
+    );
+    if let Some((_, layout)) = &state.project_layout {
+        let action = briefing_ui::draw_blocks(
+            &mut state.core,
+            layout,
+            rect,
+            &mut state.project_scroll,
+            theme,
+        );
+        if let Some(action) = action {
+            handle_action(state, action);
+        }
+    }
+}
+
+/// The details area replaces the body of the main column while open. akar
+/// paints all text above all ordinary quads, so a floating popover would show
+/// the summary or the source blocks through its card; here nothing else draws
+/// in this rectangle, and the popover's own text sits on its card.
+fn draw_details(state: &mut GuiState, theme: &AkarTheme) {
+    let Some(details) = state.briefing.details().cloned() else {
+        return;
+    };
+    let Some(blocks) = briefing_view::details_view(state.briefing.briefing(), &details) else {
+        // The command is gone (re-run or project change).
+        state.briefing.close_details();
+        state.window.request_redraw();
+        return;
+    };
+    let card = state.layout.rect(state.main_row);
+    let inner = [
+        card[0] + DETAILS_PADDING,
+        card[1] + DETAILS_PADDING - 2.0,
+        (card[2] - 2.0 * DETAILS_PADDING).max(0.0),
+        (card[3] - 2.0 * DETAILS_PADDING + 4.0).max(0.0),
+    ];
+    if inner[2] <= 8.0 || inner[3] <= 0.0 {
+        return;
+    }
+    briefing_ui::draw_card(&mut state.core, card, theme);
+    let key = (state.briefing.revision(), inner[2].round() as i32);
+    ensure_blocks(&mut state.details_layout, key, inner[2], || blocks, theme);
+    if let Some((_, layout)) = &state.details_layout {
+        let action = briefing_ui::draw_blocks(
+            &mut state.core,
+            layout,
+            inner,
+            &mut state.details_scroll,
+            theme,
+        );
+        if let Some(action) = action {
+            handle_action(state, action);
+        }
+    }
+}
+
+fn draw_command_footer(state: &mut GuiState, theme: &AkarTheme) {
+    let rect = state.layout.rect(state.footer);
+    let status = briefing_view::footer_status(state.briefing.briefing());
+    let action = briefing_ui::draw_footer(
+        &mut state.core,
+        rect,
+        &status,
+        state.briefing.details(),
+        theme,
+    );
+    drop(status);
+    if let Some(action) = action {
+        handle_action(state, action);
+    }
+}
+
+/// Apply a click from the Project tab, the details area or the footer.
+fn handle_action(state: &mut GuiState, action: Action) {
+    match action {
+        Action::Rerun(section) => {
+            if let Some(request) = state.briefing.rerun(section) {
+                spawn_briefing(state, request);
+            }
+        }
+        Action::OpenCommand(id) => toggle_details(state, Details::Command(id)),
+        Action::OpenList => toggle_details(state, Details::List),
+        Action::CloseDetails => state.briefing.close_details(),
+    }
+    state.window.request_redraw();
+}
+
+/// Open `details`, or close the area when it already shows exactly that.
+fn toggle_details(state: &mut GuiState, details: Details) {
+    if state.briefing.details() == Some(&details) {
+        state.briefing.close_details();
+    } else {
+        state.briefing.open_details(details);
+        state.details_scroll = 0.0;
+    }
+}
+
+/// Send one briefing request on a worker thread; the render loop only polls
+/// the channel. Commands are discovered by the API, never run.
+fn spawn_briefing(state: &GuiState, request: Request) {
+    let api = state.api.clone();
+    let tx = state.briefing_tx.clone();
+    thread::spawn(move || {
+        let outcome = match request.section {
+            Section::History => api.history(&request.project_id).map(Reply::Summary),
+            Section::Overview => api.overview(&request.project_id).map(Reply::Summary),
+            Section::Commands => api.commands(&request.project_id).map(Reply::Commands),
+        };
+        let _ = tx.send(BriefingMessage { request, outcome });
+    });
+}
+
+fn spawn_briefings(state: &mut GuiState, requests: Vec<Request>) {
+    if requests.is_empty() {
+        return;
+    }
+    state.project_scroll = 0.0;
+    state.project_layout = None;
+    for request in requests {
+        spawn_briefing(state, request);
+    }
 }
 
 /// Show `display_id`'s branch, keeping the draft of the one it replaces.
@@ -1380,7 +1764,11 @@ fn reset_branches(state: &mut GuiState) {
 
 fn draw_clarify_panel(state: &mut GuiState, theme: &AkarTheme) {
     // The panel column collapses when no branch is open.
-    let open = state.open_branch.is_some() && state.parse_view.phase() == Phase::Success;
+    // The panel shows only on the Parse tab, and not under the details area.
+    let open = state.open_branch.is_some()
+        && state.parse_view.phase() == Phase::Success
+        && state.briefing.tab() == Tab::Parse
+        && state.briefing.details().is_none();
     if open != state.panel_open_applied {
         state.layout.set_style(state.panel_col, panel_style(open));
         state.panel_open_applied = open;
@@ -1581,6 +1969,7 @@ fn submit(state: &mut GuiState) {
     if state.parse_view.is_loading() {
         return;
     }
+    state.briefing.parse_submitted();
     if state.text.trim().is_empty() {
         state
             .parse_view
@@ -1624,7 +2013,14 @@ fn poll_worker(state: &mut GuiState) {
             }
             ProjectMessage::Selected { token, outcome } => {
                 state.projects.job_finished();
-                state.projects.finish_select(token, outcome);
+                if state.projects.finish_select(token, outcome)
+                    && let Some(id) = state.projects.current_id().map(str::to_owned)
+                {
+                    // Choosing a project always re-runs its briefing, even
+                    // when it was already current: nothing is cached.
+                    let requests = state.briefing.open(&id);
+                    spawn_briefings(state, requests);
+                }
             }
             ProjectMessage::Folder(path) => {
                 state.projects.job_finished();
@@ -1637,6 +2033,13 @@ fn poll_worker(state: &mut GuiState) {
                 }
             }
         }
+    }
+    // Launch preselection, a vanished project and "No project" all arrive as a
+    // change of the current project; follow it.
+    let requests = state.briefing.sync(state.projects.current_id());
+    spawn_briefings(state, requests);
+    while let Ok(message) = state.briefing_rx.try_recv() {
+        state.briefing.apply(message);
     }
     while let Ok(message) = state.rx.try_recv() {
         refresh_projects |= message

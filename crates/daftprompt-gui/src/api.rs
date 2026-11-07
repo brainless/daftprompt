@@ -10,8 +10,8 @@ use std::fmt;
 use std::time::Duration;
 
 use daftprompt_types::{
-    ClarifyRequest, ClarifyResult, CreateProjectRequest, ParseError, ParseRequest, ParseResult,
-    Project,
+    BriefingResult, ClarifyRequest, ClarifyResult, CommandsResult, CreateProjectRequest,
+    ParseError, ParseRequest, ParseResult, Project,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -24,6 +24,10 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// `/clarify` allows up to 120 seconds per attempt and three attempts.
 const DEFAULT_CLARIFY_TIMEOUT: Duration = Duration::from_secs(420);
+
+/// A briefing agent makes several model calls with tools; the API bounds each
+/// attempt itself, so this only has to outlast three of them.
+const BRIEFING_TIMEOUT: Duration = Duration::from_secs(420);
 
 /// Project calls only touch the local registry and the file system.
 const PROJECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -39,6 +43,11 @@ pub fn clarify_url(parse_url: &str) -> String {
 /// way as [`clarify_url`].
 pub fn projects_url(parse_url: &str) -> String {
     sibling_url(parse_url, "projects")
+}
+
+/// A briefing route of one project, for example `.../projects/{id}/history`.
+pub fn briefing_url(parse_url: &str, project_id: &str, route: &str) -> String {
+    format!("{}/{project_id}/{route}", projects_url(parse_url))
 }
 
 fn sibling_url(parse_url: &str, route: &str) -> String {
@@ -264,6 +273,35 @@ impl ParseClient {
         exchange(&url, Some(&[]), self.project_timeout, "Project")
     }
 
+    /// `POST /projects/{id}/history`: Chronicler's default task (empty JSON body).
+    pub fn history(&self, project_id: &str) -> Result<BriefingResult, ApiError> {
+        self.briefing(project_id, "history", "BriefingResult")
+    }
+
+    /// `POST /projects/{id}/overview`: Surveyor's default task.
+    pub fn overview(&self, project_id: &str) -> Result<BriefingResult, ApiError> {
+        self.briefing(project_id, "overview", "BriefingResult")
+    }
+
+    /// `POST /projects/{id}/commands`: Operator's default task.
+    pub fn commands(&self, project_id: &str) -> Result<CommandsResult, ApiError> {
+        self.briefing(project_id, "commands", "CommandsResult")
+    }
+
+    fn briefing<T: DeserializeOwned>(
+        &self,
+        project_id: &str,
+        route: &str,
+        what: &str,
+    ) -> Result<T, ApiError> {
+        exchange(
+            &briefing_url(&self.url, project_id, route),
+            Some(b"{}"),
+            BRIEFING_TIMEOUT,
+            what,
+        )
+    }
+
     /// Explain one span. Stateless: the request carries every earlier turn.
     pub fn clarify(&self, request: &ClarifyRequest) -> Result<ClarifyResult, ApiError> {
         post_json(
@@ -335,6 +373,14 @@ fn exchange<T: DeserializeOwned>(
 mod tests {
     use super::*;
     use std::io::{Read, Write};
+
+    #[test]
+    fn briefing_routes_hang_off_the_project() {
+        assert_eq!(
+            briefing_url("http://127.0.0.1:8080/parse", "project-1", "history"),
+            "http://127.0.0.1:8080/projects/project-1/history"
+        );
+    }
     use std::net::TcpListener;
     use std::thread;
 

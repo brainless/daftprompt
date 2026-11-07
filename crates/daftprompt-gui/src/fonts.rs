@@ -28,6 +28,8 @@ const SOURCE_SERIF_REGULAR: &[u8] = include_bytes!("../assets/fonts/SourceSerif4
 pub enum Role {
     Ui,
     Text,
+    /// The system monospace face, for commands.
+    Mono,
 }
 
 /// Loaded family handles and names for the two roles.
@@ -81,6 +83,7 @@ impl Fonts {
         match role {
             Role::Ui => self.ui,
             Role::Text => self.text,
+            Role::Mono => FontFamily::Monospace,
         }
     }
 
@@ -98,6 +101,7 @@ impl Fonts {
         let (name, generic) = match role {
             Role::Ui => (self.ui_name.as_deref(), Family::SansSerif),
             Role::Text => (self.text_name.as_deref(), Family::Serif),
+            Role::Mono => (None, Family::Monospace),
         };
         Attrs::new()
             .family(name.map_or(generic, Family::Name))
