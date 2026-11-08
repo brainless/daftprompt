@@ -52,6 +52,41 @@ pub struct ProjectToolConfig {
     pub max_file_bytes: u64,
 }
 
+impl ProjectToolConfig {
+    /// Every limit, for the agent's cache key.
+    pub(crate) fn cache_settings(&self) -> serde_json::Value {
+        serde_json::json!({
+            "max_tool_calls": self.max_tool_calls,
+            "max_list_files": self.max_list_files,
+            "max_search_matches": self.max_search_matches,
+            "max_scan_files": self.max_scan_files,
+            "max_read_lines": self.max_read_lines,
+            "max_output_bytes": self.max_output_bytes,
+            "max_line_bytes": self.max_line_bytes,
+            "max_file_bytes": self.max_file_bytes,
+        })
+    }
+}
+
+impl ProjectToolConfig {
+    /// The limits [`cache_settings`](Self::cache_settings) recorded, or `None`
+    /// when any is missing or out of range.
+    pub(crate) fn from_cache_settings(settings: &serde_json::Value) -> Option<Self> {
+        let number = |key: &str| settings.get(key)?.as_u64();
+        let count = |key: &str| number(key).and_then(|n| usize::try_from(n).ok());
+        Some(Self {
+            max_tool_calls: count("max_tool_calls")?,
+            max_list_files: count("max_list_files")?,
+            max_search_matches: count("max_search_matches")?,
+            max_scan_files: count("max_scan_files")?,
+            max_read_lines: count("max_read_lines")?,
+            max_output_bytes: count("max_output_bytes")?,
+            max_line_bytes: count("max_line_bytes")?,
+            max_file_bytes: number("max_file_bytes")?,
+        })
+    }
+}
+
 impl Default for ProjectToolConfig {
     fn default() -> Self {
         Self {

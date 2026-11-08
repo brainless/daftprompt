@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 fn scope() -> ProjectScope {
     ProjectScope {
         project_id: "project-1".to_owned(),
+        project_path_id: "path-1".to_owned(),
         root: PathBuf::from("/does/not/matter"),
     }
 }
@@ -308,6 +309,7 @@ async fn a_custom_prompt_replaces_the_task_and_creates_the_prompt_node() {
     let request = AgentTaskRequest {
         prompt: Some("  what does it import?  ".to_owned()),
         author: Some("ada".to_owned()),
+        ..Default::default()
     };
     let result = run(&stub, request).await.unwrap();
 
@@ -335,6 +337,7 @@ async fn an_oversized_prompt_is_rejected_before_any_model_call() {
     let request = AgentTaskRequest {
         prompt: Some("x".repeat(3000)),
         author: None,
+        ..Default::default()
     };
     let error = run(&stub, request).await.unwrap_err();
     assert!(

@@ -55,6 +55,22 @@ pub struct GitToolConfig {
     pub max_process_bytes: usize,
 }
 
+impl GitToolConfig {
+    /// Every limit, for the agent's cache key.
+    pub(crate) fn cache_settings(&self) -> serde_json::Value {
+        serde_json::json!({
+            "max_tool_calls": self.max_tool_calls,
+            "default_log_commits": self.default_log_commits,
+            "max_log_commits": self.max_log_commits,
+            "max_log_body_bytes": self.max_log_body_bytes,
+            "max_patch_bytes": self.max_patch_bytes,
+            "max_output_bytes": self.max_output_bytes,
+            "timeout_ms": self.timeout.as_millis() as u64,
+            "max_process_bytes": self.max_process_bytes,
+        })
+    }
+}
+
 impl Default for GitToolConfig {
     fn default() -> Self {
         Self {
@@ -86,6 +102,16 @@ pub enum GitError {
     Timeout(Duration),
     #[error("git failed: {0}")]
     Failed(String),
+}
+
+/// Where a project root sits in a Git history: the full `HEAD` commit hash
+/// and the root's repository-relative path. Never a branch name or an
+/// abbreviated hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoIdentity {
+    pub commit_hash: String,
+    /// `/`-separated, no trailing slash; empty when the root is the top.
+    pub subpath: String,
 }
 
 /// A validated `git_log` query.

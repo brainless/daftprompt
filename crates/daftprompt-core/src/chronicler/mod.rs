@@ -38,9 +38,10 @@ pub use model::{
 pub use prompt::{PROMPT_VERSION, SYSTEM_PROMPT};
 
 use crate::access::ProjectScope;
-use crate::git_tools::{GitHistory, SubprocessGit};
+use crate::git_tools::{GitHistory, GitToolbox, SubprocessGit};
 use crate::project_agent::{Briefer, RunLimits, Toolset, run_attempts};
 use crate::scribe::support;
+use crate::store::ReuseInputsV1;
 
 /// Builds the git backend for a granted project.
 type HistoryFactory = dyn Fn(&ProjectScope) -> Arc<dyn GitHistory> + Send + Sync;
@@ -220,6 +221,53 @@ impl<M: ChroniclerModel> Chronicler<M> {
         })
     }
 
+    /// Repeat the recorded `git_log` call against `scope` and compare its
+    /// output hash with the stored one. This catches a different repository
+    /// view (a shallow clone, other history limits) at the same `HEAD`. The
+    /// working tree is not consulted: dirtiness does not change history.
+    pub async fn verify_reuse(
+        &self,
+        inputs: &ReuseInputsV1,
+        scope: &ProjectScope,
+    ) -> Result<(), String> {
+        let ReuseInputsV1::Chronicler {
+            git_log_args,
+            git_log_output_hash,
+        } = inputs
+        else {
+            return Err("the stored inputs are not a Chronicler's".to_owned());
+        };
+        let toolbox = GitToolbox::new((self.history)(scope), self.config.tools.clone());
+        let args = git_log_args.clone();
+        let response = tokio::task::spawn_blocking(move || toolbox.call("git_log", args))
+            .await
+            .map_err(|error| format!("the history check failed: {error}"))?;
+        if response.is_error {
+            return Err("the history could not be read for comparison".to_owned());
+        }
+        if support::content_hash(&response.text) != *git_log_output_hash {
+            return Err("the history differs from the stored response's".to_owned());
+        }
+        Ok(())
+    }
+
+    /// A hash of everything that determines this agent's output for a task:
+    /// see [`Briefer::cache_identity`]. Only the active summary prompt is
+    /// included; the preserved tool path is not reachable.
+    pub fn cache_identity(&self) -> String {
+        let settings = self.config.model_settings();
+        crate::project_agent::config_key(
+            "chronicler",
+            &settings.provider,
+            &settings.model,
+            &[(
+                prompt::SUMMARY_PROMPT_VERSION,
+                prompt::SUMMARY_SYSTEM_PROMPT,
+            )],
+            self.config.cache_settings(),
+        )
+    }
+
     /// How this agent is configured, for `GET /agents`.
     pub fn info(&self) -> AgentInfo {
         AgentInfo {
@@ -273,6 +321,10 @@ where
         Chronicler::info(self)
     }
 
+    fn cache_identity(&self) -> String {
+        Chronicler::cache_identity(self)
+    }
+
     fn brief<'a>(
         &'a self,
         request: AgentTaskRequest,
@@ -280,5 +332,14 @@ where
     ) -> BoxFuture<'a, Result<BriefingResult, ParseError>> {
         let scope = scope.clone();
         Box::pin(async move { Chronicler::brief(self, request, &scope).await })
+    }
+
+    fn verify_reuse<'a>(
+        &'a self,
+        inputs: &'a ReuseInputsV1,
+        scope: &ProjectScope,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        let scope = scope.clone();
+        Box::pin(async move { Chronicler::verify_reuse(self, inputs, &scope).await })
     }
 }

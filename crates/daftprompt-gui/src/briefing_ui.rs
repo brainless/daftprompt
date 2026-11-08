@@ -26,6 +26,7 @@ use crate::render::{
 /// Text buffer ids for this module, far from layout widget ids and the menu's.
 const BLOCK_BUFFER_BASE: u64 = 0x4252_4946_0000_0000;
 const FOOTER_BUFFER_BASE: u64 = 0x464f_4f54_0000_0000;
+const PATH_BUFFER_BASE: u64 = 0x5041_5448_0000_0000;
 
 const ITEM_GAP: f32 = 6.0;
 const TITLE_HEIGHT: f32 = 30.0;
@@ -503,6 +504,75 @@ pub fn draw_footer(
     action
 }
 
+const PATH_LABEL_WIDTH: f32 = 44.0;
+
+/// Which of `widths` to draw in `available` space, in order. A selected chip
+/// that does not fit replaces the last one that does, so the current choice is
+/// always visible.
+pub fn visible_chips(widths: &[f32], selected: Option<usize>, available: f32) -> Vec<usize> {
+    let keep = visible_buttons(widths, available, FOOTER_BUTTON_GAP).min(widths.len());
+    let mut shown: Vec<usize> = (0..keep).collect();
+    if let Some(selected) = selected
+        && selected >= keep
+        && keep > 0
+    {
+        shown[keep - 1] = selected;
+    } else if let Some(selected) = selected
+        && selected >= keep
+    {
+        shown.push(selected);
+    }
+    shown
+}
+
+/// Draw the path selector in `rect`: a "Path" label and one button per
+/// registered path, the current one highlighted. Returns the index of a
+/// clicked chip.
+pub fn draw_path_selector(
+    core: &mut AkarCore,
+    rect: [f32; 4],
+    chips: &[crate::projects::PathChip],
+    theme: &AkarTheme,
+) -> Option<usize> {
+    if rect[2] <= 0.0 || rect[3] <= 0.0 || chips.is_empty() {
+        return None;
+    }
+    footer_text(
+        core,
+        PATH_BUFFER_BASE,
+        [rect[0], rect[1], PATH_LABEL_WIDTH, rect[3]],
+        "Path",
+        theme.muted_content,
+        theme.font_size_sm,
+    );
+    let widths: Vec<f32> = chips.iter().map(|c| button_width(&c.label)).collect();
+    let selected = chips.iter().position(|chip| chip.selected);
+    let available = (rect[2] - PATH_LABEL_WIDTH).max(0.0);
+    let mut x = rect[0] + PATH_LABEL_WIDTH;
+    let mut clicked = None;
+    for index in visible_chips(&widths, selected, available) {
+        let button = [x, rect[1], widths[index], rect[3]];
+        x += widths[index] + FOOTER_BUTTON_GAP;
+        let look = if chips[index].selected {
+            Look::Active
+        } else {
+            Look::Outline
+        };
+        if draw_button(
+            core,
+            PATH_BUFFER_BASE + 1 + index as u64,
+            button,
+            &chips[index].label,
+            look,
+            rect,
+            theme,
+        ) {
+            clicked = Some(index);
+        }
+    }
+    clicked
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -570,5 +640,42 @@ mod tests {
         );
         assert!(action.is_none());
         assert!(core.draw_list.text_calls().is_empty());
+    }
+
+    #[test]
+    fn a_selected_chip_that_does_not_fit_replaces_the_last_visible_one() {
+        let widths = [100.0, 100.0, 100.0, 100.0];
+        assert_eq!(visible_chips(&widths, Some(0), 1000.0), [0, 1, 2, 3]);
+        let shown = visible_chips(&widths, Some(3), 230.0);
+        assert!(shown.contains(&3), "the selection stays visible: {shown:?}");
+        assert!(shown.len() < 4);
+    }
+
+    #[test]
+    fn the_selector_draws_one_chip_per_path_and_reports_none_unclicked() {
+        let chips = vec![
+            crate::projects::PathChip {
+                path_id: "d".into(),
+                label: "app (default)".into(),
+                selected: true,
+            },
+            crate::projects::PathChip {
+                path_id: "w".into(),
+                label: "app-feature".into(),
+                selected: false,
+            },
+        ];
+        let mut core = AkarCore::mock();
+        core.begin_frame(800, 600, 1.0);
+        let clicked = draw_path_selector(
+            &mut core,
+            [0.0, 0.0, 600.0, 24.0],
+            &chips,
+            &DAFTPROMPT_THEME,
+        );
+        assert!(clicked.is_none());
+        // At least the label and both chips.
+        assert!(core.draw_list.text_calls().len() >= 3);
+        assert!(draw_path_selector(&mut core, [0.0; 4], &chips, &DAFTPROMPT_THEME).is_none());
     }
 }

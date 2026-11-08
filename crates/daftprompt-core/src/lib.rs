@@ -22,7 +22,8 @@
 //!   per-run call ledger, reusable by any agent, plus Rig adapters.
 //! - [`access`]: which registered project folders a caller may give an agent: the
 //!   principal, a root policy, and the per-call project resolver.
-//! - [`store`]: the SQLite database, its migrations, and the project registry.
+//! - [`store`]: the SQLite database, its migrations, the project registry, and
+//!   stored agent response snapshots.
 //! - [`eval`]: the manually annotated fixture set and the scoring rules used by
 //!   the opt-in live Scribe evaluation.
 
@@ -61,6 +62,8 @@ pub use explainer::{
 };
 pub use llm::{LlmError, ModelSettings, build_model};
 pub use operator::{Operator, OperatorConfig, OperatorModel, RigOperator};
-pub use project_agent::{Briefer, CommandsBriefer};
+pub use project_agent::{
+    Briefer, BriefingAgent, BriefingError, BriefingService, CommandsBriefer, ScopeOrigin,
+};
 pub use store::{Store, StoreError, default_db_path};
 pub use surveyor::{RigSurveyor, Surveyor, SurveyorConfig, SurveyorModel};

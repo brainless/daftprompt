@@ -37,9 +37,11 @@ pub use prompt::{PROMPT_VERSION, SYSTEM_PROMPT};
 
 use crate::access::ProjectScope;
 use crate::languages;
-use crate::project_agent::{Briefer, RunLimits, Toolset, run_attempts};
+use crate::project_agent::reuse::{capture_files, verify_files};
+use crate::project_agent::{Briefer, Captured, RunLimits, Toolset, run_attempts};
 use crate::project_tools::{FsProject, ProjectFiles};
 use crate::scribe::support;
+use crate::store::ReuseInputsV1;
 
 /// Builds the read-only file backend for a granted project.
 type ProjectFactory =
@@ -94,6 +96,19 @@ impl<M: SurveyorModel> Surveyor<M> {
         request: AgentTaskRequest,
         scope: &ProjectScope,
     ) -> Result<BriefingResult, ParseError> {
+        self.brief_captured(request, scope)
+            .await
+            .map(|(result, _)| result)
+    }
+
+    /// [`brief`](Self::brief), also returning the inputs a later freshness
+    /// check repeats. They are `None` when the run's observations were not
+    /// completely recorded, which makes the response a miss forever.
+    pub async fn brief_captured(
+        &self,
+        request: AgentTaskRequest,
+        scope: &ProjectScope,
+    ) -> Result<Captured<BriefingResult>, ParseError> {
         check_request(&request, &self.config)?;
         let files = (self.project)(scope)?;
         let profile = languages::profile(files.as_ref());
@@ -136,7 +151,17 @@ impl<M: SurveyorModel> Surveyor<M> {
         .await?;
 
         let calls = completed.toolset.files().recorder().calls();
-        graph::build(graph::Built {
+        let inputs = capture_files(
+            &profile,
+            &preloaded,
+            &calls,
+            &self.config.tools,
+            &scope.root,
+        )
+        .map(ReuseInputsV1::Surveyor)
+        .map_err(|reason| eprintln!("daftprompt: surveyor response not reusable: {reason}"))
+        .ok();
+        let result = graph::build(graph::Built {
             request: &request,
             extraction: &completed.extraction,
             citations: &completed.validated,
@@ -147,7 +172,36 @@ impl<M: SurveyorModel> Surveyor<M> {
             run_id,
             started_at,
             attempts: completed.attempts,
-        })
+        })?;
+        Ok((result, inputs))
+    }
+
+    /// Repeat the recorded observations against `scope` (the requested path,
+    /// never the one that produced the response); see
+    /// [`Briefer::verify_reuse`]. Nothing is executed and no model is called.
+    pub async fn verify_reuse(
+        &self,
+        inputs: &ReuseInputsV1,
+        scope: &ProjectScope,
+    ) -> Result<(), String> {
+        let ReuseInputsV1::Surveyor(inputs) = inputs else {
+            return Err("the stored inputs are not a Surveyor's".to_owned());
+        };
+        let files = (self.project)(scope).map_err(|error| error.to_string())?;
+        verify_files(files, inputs, None).await
+    }
+
+    /// A hash of everything that determines this agent's output for a task:
+    /// see [`Briefer::cache_identity`].
+    pub fn cache_identity(&self) -> String {
+        let settings = self.config.model_settings();
+        crate::project_agent::config_key(
+            "surveyor",
+            &settings.provider,
+            &settings.model,
+            &[(PROMPT_VERSION, SYSTEM_PROMPT)],
+            self.config.cache_settings(),
+        )
     }
 
     /// How this agent is configured, for `GET /agents`.
@@ -215,6 +269,10 @@ where
         Surveyor::info(self)
     }
 
+    fn cache_identity(&self) -> String {
+        Surveyor::cache_identity(self)
+    }
+
     fn brief<'a>(
         &'a self,
         request: AgentTaskRequest,
@@ -222,5 +280,23 @@ where
     ) -> BoxFuture<'a, Result<BriefingResult, ParseError>> {
         let scope = scope.clone();
         Box::pin(async move { Surveyor::brief(self, request, &scope).await })
+    }
+
+    fn brief_captured<'a>(
+        &'a self,
+        request: AgentTaskRequest,
+        scope: &ProjectScope,
+    ) -> BoxFuture<'a, Result<Captured<BriefingResult>, ParseError>> {
+        let scope = scope.clone();
+        Box::pin(async move { Surveyor::brief_captured(self, request, &scope).await })
+    }
+
+    fn verify_reuse<'a>(
+        &'a self,
+        inputs: &'a ReuseInputsV1,
+        scope: &ProjectScope,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        let scope = scope.clone();
+        Box::pin(async move { Surveyor::verify_reuse(self, inputs, &scope).await })
     }
 }

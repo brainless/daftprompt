@@ -223,6 +223,7 @@ impl ClarifyFixture {
             question: self.question.clone(),
             author: None,
             project_id: None,
+            project_path_id: None,
         }
     }
 

@@ -12,7 +12,7 @@ use daftprompt_core::{
     AccessError, AgentKind, BoxFuture, Explainer, ExplainerConfig, ExtractionModel, ModelError,
     ModelInput, Principal, ProjectScope, RootPolicy, Scribe, ScribeConfig, Store,
 };
-use daftprompt_types::{ExplainerCitation, ExplainerExtraction, Extraction, Project};
+use daftprompt_types::{ExplainerCitation, ExplainerExtraction, Extraction, Project, ProjectPath};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
@@ -75,12 +75,29 @@ impl RootPolicy for DenyAll {
         _principal: &Principal,
         agent: AgentKind,
         project: &Project,
+        _path: &ProjectPath,
     ) -> Result<ProjectScope, AccessError> {
         Err(AccessError::Denied(format!(
             "{} may not use project {}",
             agent.as_str(),
             project.id
         )))
+    }
+}
+
+/// Records the path id of every grant.
+struct Recording(Mutex<Vec<String>>);
+
+impl RootPolicy for Recording {
+    fn grant(
+        &self,
+        principal: &Principal,
+        agent: AgentKind,
+        project: &Project,
+        path: &ProjectPath,
+    ) -> Result<ProjectScope, AccessError> {
+        self.0.lock().unwrap().push(path.id.clone());
+        daftprompt_core::LocalPolicy.grant(principal, agent, project, path)
     }
 }
 
@@ -261,4 +278,70 @@ async fn clarify_with_a_denying_policy_is_forbidden_before_any_model_call() {
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(json["kind"], "forbidden");
     assert!(fx.prompts.lock().unwrap().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// project_path_id
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn bodies_without_a_path_id_use_the_default_and_a_path_id_selects_another() {
+    let recording = Arc::new(Recording(Mutex::default()));
+    let fx = fixture(Some(recording.clone()));
+    let second = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(second.path().join("src")).unwrap();
+    std::fs::write(second.path().join("src/limit.rs"), LIMITER).unwrap();
+    let (status, added) = post(
+        &fx.app,
+        &format!("/projects/{}/paths", fx.project.id),
+        json!({ "path": second.path() }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let second_id = added["id"].as_str().unwrap().to_owned();
+
+    // Old-style bodies: parse and clarify resolve the persisted default.
+    let (status, _) = post(&fx.app, "/parse", parse_body(Some(&fx.project.id))).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = post(&fx.app, "/clarify", clarify_body(Some(&fx.project.id))).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // An explicit path id reaches the policy.
+    let mut body = parse_body(Some(&fx.project.id));
+    body["project_path_id"] = json!(second_id);
+    let (status, _) = post(&fx.app, "/parse", body).await;
+    assert_eq!(status, StatusCode::OK);
+    let mut body = clarify_body(Some(&fx.project.id));
+    body["project_path_id"] = json!(second_id);
+    let (status, _) = post(&fx.app, "/clarify", body).await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert_eq!(
+        *recording.0.lock().unwrap(),
+        [
+            fx.project.default_path_id.clone(),
+            fx.project.default_path_id.clone(),
+            second_id.clone(),
+            second_id,
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_wrong_or_orphan_path_id_is_rejected_before_the_policy() {
+    let recording = Arc::new(Recording(Mutex::default()));
+    let fx = fixture(Some(recording.clone()));
+
+    let mut body = parse_body(Some(&fx.project.id));
+    body["project_path_id"] = json!("path-nope");
+    let (status, json) = post(&fx.app, "/parse", body).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json["kind"], "not_found");
+
+    let mut body = parse_body(None);
+    body["project_path_id"] = json!(fx.project.default_path_id);
+    let (status, json) = post(&fx.app, "/parse", body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json["kind"], "invalid_request");
+    assert!(recording.0.lock().unwrap().is_empty());
 }

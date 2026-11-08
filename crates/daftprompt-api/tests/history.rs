@@ -16,7 +16,7 @@ use daftprompt_core::{
     ScribeConfig, Store,
 };
 use daftprompt_types::{
-    BriefingCitation, BriefingExtraction, ExplainerExtraction, Extraction, Project,
+    BriefingCitation, BriefingExtraction, ExplainerExtraction, Extraction, Project, ProjectPath,
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -86,6 +86,7 @@ impl RootPolicy for DenyAll {
         _principal: &Principal,
         agent: AgentKind,
         project: &Project,
+        _path: &ProjectPath,
     ) -> Result<ProjectScope, AccessError> {
         Err(AccessError::Denied(format!(
             "{} may not use project {}",
@@ -104,11 +105,12 @@ impl RootPolicy for NoChronicler {
         principal: &Principal,
         agent: AgentKind,
         project: &Project,
+        path: &ProjectPath,
     ) -> Result<ProjectScope, AccessError> {
         if agent == AgentKind::Chronicler {
             return Err(AccessError::Denied("no history for you".to_owned()));
         }
-        daftprompt_core::LocalPolicy.grant(principal, agent, project)
+        daftprompt_core::LocalPolicy.grant(principal, agent, project, path)
     }
 }
 

@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 fn scope() -> ProjectScope {
     ProjectScope {
         project_id: "project-1".to_owned(),
+        project_path_id: "path-1".to_owned(),
         root: PathBuf::from("/does/not/matter"),
     }
 }
@@ -319,6 +320,7 @@ async fn a_user_prompt_becomes_a_root_prompt_node() {
     let request = AgentTaskRequest {
         prompt: Some("how do I run the tests?".to_owned()),
         author: Some("ada".to_owned()),
+        ..Default::default()
     };
     let result = operator(&stub).brief(request, &scope()).await.unwrap();
     assert_eq!(result.briefing.task, AgentTask::Prompt);
@@ -587,6 +589,7 @@ async fn oversized_prompts_are_rejected_before_any_model_call() {
     let request = AgentTaskRequest {
         prompt: Some("x".repeat(5000)),
         author: None,
+        ..Default::default()
     };
     let error = operator(&stub).brief(request, &scope()).await.unwrap_err();
     assert!(matches!(error, ParseError::OversizedInput { .. }));

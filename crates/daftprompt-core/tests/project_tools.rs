@@ -3,7 +3,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use daftprompt_core::project_tools::{
-    InMemoryProject, LIST_FILES, ProjectToolConfig, ProjectToolbox, READ_FILE, SEARCH, rig_tools,
+    FsProject, InMemoryProject, LIST_FILES, ProjectToolConfig, ProjectToolbox, READ_FILE, SEARCH,
+    rig_tools,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -492,4 +493,67 @@ async fn rig_adapters_share_the_toolbox() {
         .unwrap();
     assert!(out.starts_with("error: access denied"));
     assert_eq!(tb.recorder().call_count(), 2);
+}
+
+/// Epic 007 Task C2 precondition: whatever happens to a call, the ledger holds
+/// an output that can be compared later, and none shows the machine root.
+#[test]
+fn every_outcome_is_recorded_with_a_root_relative_comparable_output() {
+    let (dir, _) = project();
+    write(dir.path(), "wide/a.txt", "needle\n".repeat(80));
+    write(dir.path(), "bin.dat", [0u8, 159, 146, 150]);
+    write(dir.path(), "latin.txt", [0xe9u8, b'\n']);
+    let root = dir.path().canonicalize().unwrap();
+    let root = root.to_string_lossy().into_owned();
+    let tb = ProjectToolbox::new(
+        Arc::new(FsProject::new(dir.path()).unwrap()),
+        ProjectToolConfig {
+            max_list_files: 2,
+            max_search_matches: 3,
+            max_read_lines: 4,
+            max_tool_calls: 14,
+            ..Default::default()
+        },
+    );
+    let attempts = [
+        (LIST_FILES, json!({})),
+        (LIST_FILES, json!({"directory": "nope"})),
+        (SEARCH, json!({"query": "needle"})),
+        (SEARCH, json!({"query": ""})),
+        (READ_FILE, json!({"path": "wide/a.txt"})),
+        (READ_FILE, json!({"path": "wide/a.txt", "start_line": 99})),
+        (READ_FILE, json!({"path": "bin.dat"})),
+        (READ_FILE, json!({"path": "latin.txt"})),
+        (READ_FILE, json!({"path": "../outside"})),
+        (READ_FILE, json!({"path": ".env"})),
+        (READ_FILE, json!({"path": "missing.txt"})),
+        (READ_FILE, json!({"path": "wide"})),
+        ("bogus", json!({})),
+        (READ_FILE, json!(null)),
+    ];
+    for (tool, args) in &attempts {
+        tb.call(tool, args.clone());
+    }
+    let calls = tb.recorder().calls();
+    assert_eq!(calls.len(), attempts.len());
+    for (call, (tool, args)) in calls.iter().zip(&attempts) {
+        assert_eq!(&call.name, tool);
+        assert_eq!(&call.args, args, "arguments are kept as received");
+        assert!(!call.output.is_empty(), "{tool}: an empty output");
+        assert_eq!(
+            call.is_error,
+            call.output.starts_with("error: "),
+            "{call:?}"
+        );
+        assert!(!call.output.contains(&root), "{tool}: {}", call.output);
+    }
+    // Truncation is recorded as a flag and as text, and errors as text.
+    assert!(calls[0].truncated && calls[0].output.contains("[truncated"));
+    assert!(calls[2].truncated && calls[2].output.contains("[truncated"));
+    assert!(calls[4].truncated && calls[4].output.contains("[truncated"));
+    assert!(calls[1].is_error && calls[1].output.contains("not found"));
+    assert!(calls[6].is_error && calls[6].output.contains("binary"));
+    assert!(calls[7].is_error && calls[7].output.contains("UTF-8"));
+    assert!(calls.iter().skip(8).take(4).all(|c| c.is_error));
+    assert!(calls[12].is_error && calls[13].is_error);
 }

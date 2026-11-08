@@ -88,6 +88,18 @@ impl ParseView {
         true
     }
 
+    /// Abandon `submission` without showing its outcome, because the project
+    /// or path it was made for is no longer selected. Returns whether it was
+    /// the one in flight; the pane goes back to idle.
+    pub fn cancel(&mut self, submission: u64) -> bool {
+        if self.active_submission != Some(submission) {
+            return false;
+        }
+        self.active_submission = None;
+        self.phase = Phase::Idle;
+        true
+    }
+
     /// Show a client-side failure, such as empty input. Never interrupts an
     /// in-flight submission.
     pub fn fail_local(&mut self, error: ApiError) -> bool {
@@ -378,6 +390,22 @@ mod tests {
         ContextTarget, Label, Node, NodeContext, ParseResult, Payload, Run, RunInput, RunStatus,
         SpanInfo, ToolCall,
     };
+
+    #[test]
+    fn a_cancelled_submission_goes_idle_and_its_late_reply_is_ignored() {
+        let mut view = ParseView::default();
+        let submission = view.begin().unwrap();
+        assert!(view.cancel(submission));
+        assert_eq!(view.phase(), Phase::Idle);
+        assert!(!view.finish(submission, Ok(sample_result())));
+        assert!(view.result().is_none());
+        // Only the submission in flight can be cancelled.
+        assert!(!view.cancel(submission));
+        let next = view.begin().unwrap();
+        assert!(!view.cancel(submission));
+        assert!(view.is_loading());
+        assert!(view.cancel(next));
+    }
 
     fn sample_result() -> ParseResult {
         let text = "Intro\nQ?\nA\n";

@@ -12,13 +12,24 @@
 
 use std::path::{Path, PathBuf};
 
-use daftprompt_types::Project;
+use daftprompt_types::{Project, ProjectPath};
 
 use crate::api::ApiError;
 use crate::view::truncate_for_display;
 
 /// Projects shown in the picker; the API returns them most recently opened first.
 pub const MENU_PROJECT_LIMIT: usize = 8;
+
+/// The project and path a request was made for. Every request that depends on
+/// the selection carries one, and its reply is dropped unless the stamp still
+/// equals the current selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stamp {
+    pub project_id: String,
+    /// `None` only for an API that reports no paths; the server then uses the
+    /// default.
+    pub path_id: Option<String>,
+}
 
 /// A result a worker thread reports back to the render loop.
 pub enum ProjectMessage {
@@ -101,6 +112,9 @@ pub fn classify_drop(paths: &[PathBuf], is_dir: impl Fn(&Path) -> bool) -> DropA
 pub struct Projects {
     list: Vec<Project>,
     current: Option<Project>,
+    /// The path the user picked in the selector. Ignored unless it belongs to
+    /// the current project; the default path applies otherwise.
+    selected_path: Option<String>,
     /// The user picked something, so the startup preselection must not run.
     chosen: bool,
     /// The latest selection request; older replies are ignored.
@@ -120,6 +134,65 @@ impl Projects {
     /// The id every new parse or clarify request carries.
     pub fn current_id(&self) -> Option<&str> {
         self.current.as_ref().map(|project| project.id.as_str())
+    }
+
+    /// The path requests run against: the user's pick, else the project's
+    /// default. `None` when the project reports no paths.
+    pub fn current_path_id(&self) -> Option<&str> {
+        let project = self.current.as_ref()?;
+        let picked = self
+            .selected_path
+            .as_deref()
+            .filter(|id| project.paths.iter().any(|path| path.id == *id));
+        picked.or_else(|| {
+            Some(project.default_path_id.as_str())
+                .filter(|id| !id.is_empty() && project.paths.iter().any(|path| path.id == *id))
+        })
+    }
+
+    /// The registered paths of the current project, the default first.
+    pub fn current_paths(&self) -> &[ProjectPath] {
+        self.current
+            .as_ref()
+            .map_or(&[], |project| project.paths.as_slice())
+    }
+
+    /// The selection every new request is stamped with.
+    pub fn stamp(&self) -> Option<Stamp> {
+        let project = self.current.as_ref()?;
+        Some(Stamp {
+            project_id: project.id.clone(),
+            path_id: self.current_path_id().map(str::to_owned),
+        })
+    }
+
+    /// Choose one of the current project's paths. Returns whether the
+    /// selection changed; an unknown id is ignored.
+    pub fn select_path(&mut self, path_id: &str) -> bool {
+        if !self.current_paths().iter().any(|path| path.id == path_id)
+            || self.current_path_id() == Some(path_id)
+        {
+            return false;
+        }
+        self.selected_path = Some(path_id.to_owned());
+        true
+    }
+
+    /// The selector's chips, or nothing when there is no choice to make.
+    pub fn path_chips(&self) -> Vec<PathChip> {
+        let paths = self.current_paths();
+        if paths.len() < 2 {
+            return Vec::new();
+        }
+        let current = self.current_path_id();
+        paths
+            .iter()
+            .map(|path| PathChip {
+                path_id: path.id.clone(),
+                label: path_label(path),
+                selected: current == Some(path.id.as_str()),
+            })
+            .collect()
     }
 
     #[cfg(test)]
@@ -187,6 +260,9 @@ impl Projects {
         }
         match outcome {
             Ok(project) => {
+                if self.current_id() != Some(project.id.as_str()) {
+                    self.selected_path = None;
+                }
                 self.list.retain(|known| known.id != project.id);
                 self.list.insert(0, project.clone());
                 self.current = Some(project);
@@ -204,6 +280,7 @@ impl Projects {
     pub fn clear(&mut self) {
         self.token = self.token.wrapping_add(1);
         self.current = None;
+        self.selected_path = None;
         self.chosen = true;
         self.notice = None;
     }
@@ -229,6 +306,7 @@ impl Projects {
             self.current = Some(fresh.clone());
         } else if self.selecting == 0 && self.current.is_some() {
             self.current = None;
+            self.selected_path = None;
             self.set_info("The selected project is no longer registered.");
         }
         self.list = list;
@@ -270,6 +348,29 @@ impl Projects {
     }
 }
 
+/// One option of the path selector.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathChip {
+    pub path_id: String,
+    pub label: String,
+    pub selected: bool,
+}
+
+/// A path's chip text: its folder name, `(default)` for the default path.
+/// The API reports no availability, so a missing folder shows only when a
+/// request for it fails.
+pub fn path_label(path: &ProjectPath) -> String {
+    let name = Path::new(&path.root_path)
+        .file_name()
+        .map_or_else(|| path.root_path.clone(), |n| n.to_string_lossy().into());
+    let name = truncate_for_display(&name, 24);
+    if path.is_default {
+        format!("{name} (default)")
+    } else {
+        name
+    }
+}
+
 /// Keep the end of a long path, which is the part that tells projects apart.
 pub fn shorten_path(path: &str, max_chars: usize) -> String {
     let count = path.chars().count();
@@ -291,6 +392,30 @@ mod tests {
             root_path: format!("/work/{name}"),
             created_at: "t0".to_owned(),
             last_opened_at: "t1".to_owned(),
+            paths: Vec::new(),
+            default_path_id: String::new(),
+        }
+    }
+
+    fn path(id: &str, root: &str, is_default: bool) -> ProjectPath {
+        ProjectPath {
+            id: id.to_owned(),
+            project_id: "a".to_owned(),
+            root_path: root.to_owned(),
+            is_default,
+            created_at: "t0".to_owned(),
+            last_opened_at: "t1".to_owned(),
+        }
+    }
+
+    fn with_paths(id: &str, name: &str) -> Project {
+        Project {
+            paths: vec![
+                path("d", &format!("/work/{name}"), true),
+                path("w", &format!("/wt/{name}-feature"), false),
+            ],
+            default_path_id: "d".to_owned(),
+            ..project(id, name)
         }
     }
 
@@ -494,5 +619,81 @@ mod tests {
         )));
         assert!(!Projects::error_means_stale(&api_error("forbidden")));
         assert!(!Projects::error_means_stale(&api_error("connection")));
+    }
+
+    #[test]
+    fn the_default_path_applies_until_another_is_chosen() {
+        let mut projects = Projects::default();
+        let token = projects.begin_select();
+        projects.finish_select(token, Ok(with_paths("a", "alpha")));
+        assert_eq!(projects.current_path_id(), Some("d"));
+        assert!(projects.select_path("w"));
+        assert_eq!(projects.current_path_id(), Some("w"));
+        // Same choice again and unknown ids change nothing.
+        assert!(!projects.select_path("w"));
+        assert!(!projects.select_path("nope"));
+        assert_eq!(
+            projects.stamp(),
+            Some(Stamp {
+                project_id: "a".to_owned(),
+                path_id: Some("w".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn changing_project_resets_the_path_choice() {
+        let mut projects = Projects::default();
+        let token = projects.begin_select();
+        projects.finish_select(token, Ok(with_paths("a", "alpha")));
+        projects.select_path("w");
+        // Re-selecting the same project keeps the choice.
+        let token = projects.begin_select();
+        projects.finish_select(token, Ok(with_paths("a", "alpha")));
+        assert_eq!(projects.current_path_id(), Some("w"));
+        let token = projects.begin_select();
+        projects.finish_select(token, Ok(with_paths("b", "beta")));
+        assert_eq!(projects.current_path_id(), Some("d"));
+    }
+
+    #[test]
+    fn a_removed_path_falls_back_to_the_default() {
+        let mut projects = Projects::default();
+        let token = projects.begin_select();
+        projects.finish_select(token, Ok(with_paths("a", "alpha")));
+        projects.select_path("w");
+        let mut fresh = with_paths("a", "alpha");
+        fresh.paths.truncate(1);
+        projects.apply_list(Ok(vec![fresh]));
+        assert_eq!(projects.current_path_id(), Some("d"));
+    }
+
+    #[test]
+    fn a_project_without_paths_has_no_path_stamp() {
+        let mut projects = Projects::default();
+        projects.apply_list(Ok(vec![project("a", "alpha")]));
+        assert_eq!(projects.current_path_id(), None);
+        assert_eq!(projects.stamp().and_then(|s| s.path_id), None);
+        assert!(projects.path_chips().is_empty());
+    }
+
+    #[test]
+    fn chips_appear_only_with_a_choice_and_mark_the_selection() {
+        let mut projects = Projects::default();
+        let token = projects.begin_select();
+        projects.finish_select(token, Ok(with_paths("a", "alpha")));
+        projects.select_path("w");
+        let chips = projects.path_chips();
+        assert_eq!(chips.len(), 2);
+        assert_eq!(chips[0].label, "alpha (default)");
+        assert!(!chips[0].selected);
+        assert_eq!(chips[1].label, "alpha-feature");
+        assert!(chips[1].selected);
+
+        let mut single = with_paths("s", "solo");
+        single.paths.truncate(1);
+        let token = projects.begin_select();
+        projects.finish_select(token, Ok(single));
+        assert!(projects.path_chips().is_empty());
     }
 }

@@ -17,7 +17,10 @@
 //! Explainer keeps its own loop and is not migrated.
 
 mod briefing;
+mod identity;
 mod preload;
+pub(crate) mod reuse;
+mod service;
 pub(crate) use preload::preload_common_files;
 
 use std::sync::Arc;
@@ -34,6 +37,10 @@ use serde::de::DeserializeOwned;
 
 pub use crate::scribe::{BoxFuture, ModelError};
 
+pub(crate) use identity::config_key;
+pub use identity::{CACHE_POLICY_VERSION, is_default_task, request_key};
+pub use service::{BriefingAgent, BriefingError, BriefingService, ScopeOrigin};
+
 pub use briefing::{
     BriefingBuild, BriefingLimits, PromptRecord, ValidatedCitation, build_briefing,
     validate_briefing,
@@ -41,6 +48,7 @@ pub use briefing::{
 
 use crate::access::ProjectScope;
 use crate::project_tools::ToolRecorder;
+use crate::store::ReuseInputsV1;
 
 /// An object-safe briefing agent for clients that want to erase its model,
 /// such as an HTTP service holding an `Arc<dyn Briefer>`.
@@ -48,12 +56,42 @@ pub trait Briefer: Send + Sync {
     /// How the agent is configured, for `GET /agents`.
     fn info(&self) -> AgentInfo;
 
+    /// The `config_key` of stored responses: a hash of the agent kind,
+    /// provider, model, endpoint, system prompt content and version, limits,
+    /// and the cache-policy version. Credentials are never part of it.
+    fn cache_identity(&self) -> String;
+
     /// Brief the project the caller's access policy granted.
     fn brief<'a>(
         &'a self,
         request: AgentTaskRequest,
         scope: &ProjectScope,
     ) -> BoxFuture<'a, Result<BriefingResult, ParseError>>;
+
+    /// Like [`brief`](Self::brief), also returning the inputs of the agent's
+    /// freshness check, when it recorded them completely. The default
+    /// records none, so the response is never reused.
+    fn brief_captured<'a>(
+        &'a self,
+        request: AgentTaskRequest,
+        scope: &ProjectScope,
+    ) -> BoxFuture<'a, Result<Captured<BriefingResult>, ParseError>> {
+        let run = self.brief(request, scope);
+        Box::pin(async move { Ok((run.await?, None)) })
+    }
+
+    /// Repeat the agent's freshness check of a stored response against the
+    /// requested, authorized `scope` (never the path that produced it).
+    /// `Err` carries the reason for a miss. No model is called.
+    ///
+    /// The default refuses, so an agent without a check is never reused.
+    fn verify_reuse<'a>(
+        &'a self,
+        _inputs: &'a ReuseInputsV1,
+        _scope: &ProjectScope,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async { Err("this agent's responses are not reused yet".to_owned()) })
+    }
 }
 
 /// The object-safe form of Operator, whose result adds commands to the
@@ -62,13 +100,40 @@ pub trait CommandsBriefer: Send + Sync {
     /// How the agent is configured, for `GET /agents`.
     fn info(&self) -> AgentInfo;
 
+    /// The `config_key` of stored responses; see [`Briefer::cache_identity`].
+    fn cache_identity(&self) -> String;
+
     /// Discover the commands of the project the caller's access policy granted.
     fn brief<'a>(
         &'a self,
         request: AgentTaskRequest,
         scope: &ProjectScope,
     ) -> BoxFuture<'a, Result<CommandsResult, ParseError>>;
+
+    /// Like [`brief`](Self::brief), also returning the inputs of the freshness
+    /// check; see [`Briefer::brief_captured`].
+    fn brief_captured<'a>(
+        &'a self,
+        request: AgentTaskRequest,
+        scope: &ProjectScope,
+    ) -> BoxFuture<'a, Result<Captured<CommandsResult>, ParseError>> {
+        let run = self.brief(request, scope);
+        Box::pin(async move { Ok((run.await?, None)) })
+    }
+
+    /// Repeat the freshness check of a stored response against the requested,
+    /// authorized `scope`; see [`Briefer::verify_reuse`].
+    fn verify_reuse<'a>(
+        &'a self,
+        _inputs: &'a ReuseInputsV1,
+        _scope: &ProjectScope,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async { Err("this agent's responses are not reused yet".to_owned()) })
+    }
 }
+
+/// A result and the freshness inputs the agent recorded for it, if complete.
+pub type Captured<T> = (T, Option<ReuseInputsV1>);
 
 /// The tools of one briefing agent for one attempt.
 ///

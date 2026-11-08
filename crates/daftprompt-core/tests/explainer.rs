@@ -118,6 +118,7 @@ fn request(source: &str, needle: &str) -> ClarifyRequest {
         question: "What does the bucket mean here?".to_owned(),
         author: Some("ada".to_owned()),
         project_id: None,
+        project_path_id: None,
     }
 }
 
@@ -806,6 +807,7 @@ async fn a_granted_scope_reads_its_folder_and_records_the_project_id() {
     std::fs::write(folder.path().join("src/limit.rs"), LIMITER).unwrap();
     let scope = ProjectScope {
         project_id: "project-1".to_owned(),
+        project_path_id: "path-1".to_owned(),
         root: folder.path().to_path_buf(),
     };
 
@@ -849,6 +851,7 @@ async fn a_granted_scope_reads_its_folder_and_records_the_project_id() {
 async fn a_scope_over_a_missing_folder_is_rejected_before_any_model_call() {
     let scope = ProjectScope {
         project_id: "project-1".to_owned(),
+        project_path_id: "path-1".to_owned(),
         root: "/definitely/not/a/folder".into(),
     };
     let stub = Arc::new(Stub::always(Vec::new(), answer("ok", vec![])));

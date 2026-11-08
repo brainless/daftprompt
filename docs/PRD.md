@@ -66,9 +66,9 @@ For Markdown, a section with subheadings supplies context rather than one labela
 
 Implemented scope is stateless and targets extracted spans only. Later work: clarifying an arbitrary text selection or unlabelled text, persisting branches and verifying client-supplied node IDs, and promoting a clarification finding into the main record.
 
-## Project briefing (planned)
+## Project briefing
 
-[Epic 006](../epics/006-project-briefing.md) plans three read-only agents that brief the user when a project opens: **Chronicler** (git history), **Surveyor** (files and documentation) and **Operator** (the commands the project supports, discovered and never run). Each accepts an optional prompt in place of its default task. Surveyor and Operator cite evidence that Rust validates; Chronicler uses the preloaded-history path described below. Task A (the shared agent runner, the git tools, `GET /agents`, and the Chronicler behind `POST /projects/{id}/history`) is implemented, as are the language registry and the Surveyor (Task B) and the Operator behind `POST /projects/{id}/commands` (Task C); the GUI follows.
+[Epic 006](../epics/006-project-briefing.md) plans three read-only agents that brief the user when a project opens: **Chronicler** (git history), **Surveyor** (files and documentation) and **Operator** (the commands the project supports, discovered and never run). Each accepts an optional prompt in place of its default task. Surveyor and Operator cite evidence that Rust validates; Chronicler uses the preloaded-history path described below. Task A (the shared agent runner, the git tools, `GET /agents`, and the Chronicler behind `POST /projects/{id}/history`) is implemented, as are the language registry and the Surveyor (Task B) and the Operator behind `POST /projects/{id}/commands` (Task C). The GUI's Project tab requests all three when a project opens (Task D).
 
 Chronicler's active history briefing preloads the latest commits in Rust (configurable, default 10) and asks the model for a plain-text summary without tools. Custom prompts use the same supplied history. The earlier tool-enabled implementation remains available in core but is unused by the API. Responses retain the briefing envelope and read provenance, with no model citations or submission-tool record.
 
@@ -85,6 +85,22 @@ ledger are reused for retries. This adds no storage records or schema changes.
 A project is a named local folder registered in a single per-user SQLite database. The registry (add, list, open, rename, remove) is implemented and exposed over the API; it never modifies the folder. Graph persistence is a later step.
 
 Agents receive a project per call: `/parse` and `/clarify` take a `project_id`, never a filesystem path. The server resolves it through the registry and an access policy (`daftprompt_core::access`) before an agent sees any folder. Locally every registered project is allowed; the same seam is where a hosted server's per-user, team, and per-agent folder rules would plug in. `DAFTPROMPT_PROJECT_ROOT` remains the fallback when a request names no project.
+
+[Epic 007](../epics/007-project-paths-and-agent-storage.md) is implemented: a project
+owns one or more explicitly registered local paths (one is the default), and
+successful Chronicler, Surveyor, and Operator results are stored as versioned
+snapshots that belong to the path that generated them. A default-task request may be
+answered from a stored response of the same or another path of the same project when
+the full `HEAD` commit, repository subpath, request and configuration match and the
+requested path passes the agent's input checks (history output for Chronicler; a
+profile, preload and replayed observations for Surveyor and Operator).
+A reused answer calls no model and is labelled in the response (`cache` metadata
+naming the source path and capture time); an explicit refresh always runs the agent.
+`/parse` and `/clarify` follow the selected path but are not stored. The GUI lists
+registered paths for the open project, requests the briefings for the selected one,
+sends `refresh` only from its re-run controls, drops replies that no longer match the
+selection, and shows reuse unobtrusively. Registering paths is API-only. Graph
+persistence, a history browser, and worktree discovery remain later work.
 
 ## Non-goals (for now)
 

@@ -12,7 +12,9 @@ use daftprompt_core::{
     AccessError, AgentKind, BoxFuture, ExtractionModel, ModelError, ModelInput, Operator,
     OperatorConfig, Principal, ProjectScope, RootPolicy, Scribe, ScribeConfig, Store,
 };
-use daftprompt_types::{CommandKind, CommandsExtraction, ExtractedCommand, Extraction, Project};
+use daftprompt_types::{
+    CommandKind, CommandsExtraction, ExtractedCommand, Extraction, Project, ProjectPath,
+};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -75,6 +77,7 @@ impl RootPolicy for DenyAll {
         _principal: &Principal,
         agent: AgentKind,
         project: &Project,
+        _path: &ProjectPath,
     ) -> Result<ProjectScope, AccessError> {
         Err(AccessError::Denied(format!(
             "{} may not use project {}",
@@ -93,11 +96,12 @@ impl RootPolicy for NoOperator {
         principal: &Principal,
         agent: AgentKind,
         project: &Project,
+        path: &ProjectPath,
     ) -> Result<ProjectScope, AccessError> {
         if agent == AgentKind::Operator {
             return Err(AccessError::Denied("no commands for you".to_owned()));
         }
-        daftprompt_core::LocalPolicy.grant(principal, agent, project)
+        daftprompt_core::LocalPolicy.grant(principal, agent, project, path)
     }
 }
 

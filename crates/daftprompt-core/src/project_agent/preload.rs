@@ -24,6 +24,11 @@ pub(crate) struct PreloadedFiles {
 }
 
 impl PreloadedFiles {
+    /// The seeded calls, in order.
+    pub fn ledger(&self) -> &[RecordedCall] {
+        &self.calls
+    }
+
     /// Seed a fresh attempt without consuming its model-initiated tool budget.
     pub fn seed(&self, recorder: &ToolRecorder) {
         for call in &self.calls {

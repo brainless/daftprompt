@@ -7,8 +7,8 @@
 //! format.
 
 use daftprompt_types::{
-    BriefingNotice, BriefingNoticeKind, BriefingResult, CitationInfo, CitationLocation,
-    CommandKind, CommandOrigin, CommandsResult, ProjectCommand,
+    BriefingNotice, BriefingNoticeKind, BriefingResult, CacheDelivery, CacheKind, CitationInfo,
+    CitationLocation, CommandKind, CommandOrigin, CommandsResult, ProjectCommand, ProjectPath,
 };
 
 use crate::api::ApiError;
@@ -246,10 +246,39 @@ fn summary_blocks(blocks: &mut Vec<Block>, result: &BriefingResult) {
     }
 }
 
+/// The unobtrusive line for a result the API reused instead of running a
+/// model: "Reused from <path> · captured <time>". Nothing for a fresh result
+/// or when there is no metadata.
+pub fn cache_note(cache: Option<&CacheDelivery>, paths: &[ProjectPath]) -> Option<String> {
+    let cache = cache.filter(|cache| cache.kind != CacheKind::Fresh)?;
+    let source = paths
+        .iter()
+        .find(|path| path.id == cache.source_path_id)
+        .map_or_else(
+            || "another path".to_owned(),
+            |path| crate::projects::shorten_path(&path.root_path, 48),
+        );
+    Some(format!(
+        "Reused from {source} \u{b7} captured {}",
+        captured_text(&cache.captured_at)
+    ))
+}
+
+/// `2026-11-08T10:30:00Z` as `2026-11-08 10:30 UTC`; anything else unchanged.
+fn captured_text(rfc3339: &str) -> String {
+    match rfc3339.get(..16) {
+        Some(head) if rfc3339.as_bytes().get(10) == Some(&b'T') => {
+            format!("{} UTC", head.replacen('T', " ", 1))
+        }
+        _ => rfc3339.to_owned(),
+    }
+}
+
 fn section_blocks(
     blocks: &mut Vec<Block>,
     section: Section,
     slot: &Slot<BriefingResult>,
+    note: Option<String>,
     loading: &str,
 ) {
     let busy = slot.is_loading();
@@ -265,24 +294,29 @@ fn section_blocks(
         Slot::Idle => {}
         Slot::Loading => blocks.push(block(BlockKind::Muted, loading)),
         Slot::Failed(error) => blocks.push(block(BlockKind::Error, error_text(error))),
-        Slot::Ready(result) => summary_blocks(blocks, result),
+        Slot::Ready(result) => {
+            blocks.extend(note.map(|note| block(BlockKind::Muted, note)));
+            summary_blocks(blocks, result);
+        }
     }
 }
 
 /// The Project tab: "Recent work" then "Project overview". Empty without a
 /// briefing (the caller shows the hint).
-pub fn project_blocks(briefing: &Briefing) -> Vec<Block> {
+pub fn project_blocks(briefing: &Briefing, paths: &[ProjectPath]) -> Vec<Block> {
     let mut blocks = Vec::new();
     section_blocks(
         &mut blocks,
         Section::History,
         &briefing.history,
+        cache_note(briefing.cache(Section::History), paths),
         "Reading recent git history…",
     );
     section_blocks(
         &mut blocks,
         Section::Overview,
         &briefing.overview,
+        cache_note(briefing.cache(Section::Overview), paths),
         "Surveying the project…",
     );
     blocks
@@ -442,11 +476,12 @@ pub fn details_blocks(details: &CommandDetails) -> Vec<Block> {
 }
 
 /// The details area as a list of every command (the "+N more" button).
-pub fn list_blocks(result: &CommandsResult) -> Vec<Block> {
+pub fn list_blocks(result: &CommandsResult, note: Option<String>) -> Vec<Block> {
     let mut blocks = vec![close_title(format!(
         "All commands ({})",
         result.commands.len()
     ))];
+    blocks.extend(note.map(|note| block(BlockKind::Muted, note)));
     blocks.extend(result.commands.iter().map(|command| {
         block(
             BlockKind::Row(Action::OpenCommand(command.id.clone())),
@@ -461,12 +496,17 @@ pub fn list_blocks(result: &CommandsResult) -> Vec<Block> {
 pub fn details_view(
     briefing: Option<&Briefing>,
     details: &crate::briefing::Details,
+    paths: &[ProjectPath],
 ) -> Option<Vec<Block>> {
-    let Slot::Ready(result) = &briefing?.commands else {
+    let briefing = briefing?;
+    let Slot::Ready(result) = &briefing.commands else {
         return None;
     };
     match details {
-        crate::briefing::Details::List => Some(list_blocks(result)),
+        crate::briefing::Details::List => Some(list_blocks(
+            result,
+            cache_note(briefing.cache(Section::Commands), paths),
+        )),
         crate::briefing::Details::Command(id) => {
             let command = result.commands.iter().find(|c| &c.id == id)?;
             Some(details_blocks(&command_details(
@@ -480,7 +520,7 @@ pub fn details_view(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::briefing::tests::briefing_result;
+    use crate::briefing::tests::{briefing_result, delivered, stamp};
     use crate::briefing::{BriefingMessage, BriefingState, Details, Reply};
 
     fn kinds(blocks: &[Block]) -> Vec<&BlockKind> {
@@ -599,8 +639,8 @@ mod tests {
     #[test]
     fn project_blocks_show_loading_errors_and_results() {
         let mut state = BriefingState::default();
-        let requests = state.open("p1");
-        let blocks = project_blocks(state.briefing().unwrap());
+        let requests = state.open(&stamp("p1"));
+        let blocks = project_blocks(state.briefing().unwrap(), &[]);
         assert_eq!(blocks[0].text, "Recent work");
         assert_eq!(blocks[1].kind, BlockKind::Muted);
         assert_eq!(blocks[2].text, "Project overview");
@@ -617,13 +657,13 @@ mod tests {
         result.citations.push(file_citation(1, "a.rs", 1, 2));
         state.apply(BriefingMessage {
             request: requests[0].clone(),
-            outcome: Ok(Reply::Summary(result)),
+            outcome: Ok(Reply::Summary(delivered(result))),
         });
         state.apply(BriefingMessage {
             request: requests[1].clone(),
             outcome: Err(ApiError::new("timeout", "took too long")),
         });
-        let blocks = project_blocks(state.briefing().unwrap());
+        let blocks = project_blocks(state.briefing().unwrap(), &[]);
         let texts: Vec<_> = blocks.iter().map(|b| b.text.as_str()).collect();
         assert_eq!(texts[1], "Not a git repository");
         assert_eq!(texts[2], "Themes");
@@ -680,14 +720,14 @@ mod tests {
     fn footer_status_follows_the_commands_slot() {
         assert_eq!(footer_status(None), FooterStatus::Hidden);
         let mut state = BriefingState::default();
-        let requests = state.open("p1");
+        let requests = state.open(&stamp("p1"));
         assert_eq!(footer_status(state.briefing()), FooterStatus::Loading);
         state.apply(BriefingMessage {
             request: requests[2].clone(),
-            outcome: Ok(Reply::Commands(CommandsResult {
+            outcome: Ok(Reply::Commands(delivered(CommandsResult {
                 briefing: briefing_result("p1", "x"),
                 commands: Vec::new(),
-            })),
+            }))),
         });
         assert_eq!(footer_status(state.briefing()), FooterStatus::Empty);
         state.rerun(Section::Commands);
@@ -697,23 +737,90 @@ mod tests {
     #[test]
     fn details_view_lists_or_finds_commands() {
         let mut state = BriefingState::default();
-        let requests = state.open("p1");
+        let requests = state.open(&stamp("p1"));
         state.apply(BriefingMessage {
             request: requests[2].clone(),
-            outcome: Ok(Reply::Commands(CommandsResult {
+            outcome: Ok(Reply::Commands(delivered(CommandsResult {
                 briefing: briefing_result("p1", "x"),
                 commands: vec![command("c1", "Test", ""), command("c2", "Build", "web")],
-            })),
+            }))),
         });
-        let list = details_view(state.briefing(), &Details::List).unwrap();
+        let list = details_view(state.briefing(), &Details::List, &[]).unwrap();
         assert_eq!(list[0].text, "All commands (2)");
         assert_eq!(
             list[1].kind,
             BlockKind::Row(Action::OpenCommand("c1".into()))
         );
-        let one = details_view(state.briefing(), &Details::Command("c2".into())).unwrap();
+        let one = details_view(state.briefing(), &Details::Command("c2".into()), &[]).unwrap();
         assert_eq!(one[0].text, "Build");
-        assert!(details_view(state.briefing(), &Details::Command("zz".into())).is_none());
-        assert!(details_view(None, &Details::List).is_none());
+        assert!(details_view(state.briefing(), &Details::Command("zz".into()), &[]).is_none());
+        assert!(details_view(None, &Details::List, &[]).is_none());
+    }
+
+    fn registered(id: &str, root: &str) -> ProjectPath {
+        ProjectPath {
+            id: id.into(),
+            project_id: "p1".into(),
+            root_path: root.into(),
+            is_default: false,
+            created_at: "t".into(),
+            last_opened_at: "t".into(),
+        }
+    }
+
+    fn delivery(kind: CacheKind) -> CacheDelivery {
+        CacheDelivery {
+            requested_path_id: "w".into(),
+            source_path_id: "d".into(),
+            response_id: "r".into(),
+            captured_at: "2026-11-08T10:30:00Z".into(),
+            kind,
+        }
+    }
+
+    #[test]
+    fn cache_note_names_the_source_path_and_capture_time() {
+        let paths = [registered("d", "/work/app"), registered("w", "/wt/app-x")];
+        let note = cache_note(Some(&delivery(CacheKind::OtherPath)), &paths).unwrap();
+        assert_eq!(
+            note,
+            "Reused from /work/app \u{b7} captured 2026-11-08 10:30 UTC"
+        );
+        let same = cache_note(Some(&delivery(CacheKind::SamePath)), &paths);
+        assert!(same.is_some());
+        // A source that is no longer registered is still reported.
+        let gone = cache_note(Some(&delivery(CacheKind::OtherPath)), &[]).unwrap();
+        assert!(gone.starts_with("Reused from another path"));
+    }
+
+    #[test]
+    fn fresh_or_unreported_results_show_no_note() {
+        assert_eq!(cache_note(Some(&delivery(CacheKind::Fresh)), &[]), None);
+        assert_eq!(cache_note(None, &[]), None);
+    }
+
+    #[test]
+    fn reused_sections_show_the_note_under_the_title() {
+        let mut state = BriefingState::default();
+        let requests = state.open(&stamp("p1"));
+        let mut reused = delivered(briefing_result("p1", "text"));
+        reused.cache = Some(delivery(CacheKind::SamePath));
+        state.apply(BriefingMessage {
+            request: requests[0].clone(),
+            outcome: Ok(Reply::Summary(reused)),
+        });
+        let blocks = project_blocks(state.briefing().unwrap(), &[]);
+        assert_eq!(blocks[0].text, "Recent work");
+        assert_eq!(blocks[1].kind, BlockKind::Muted);
+        assert!(blocks[1].text.starts_with("Reused from"));
+    }
+
+    #[test]
+    fn captured_times_that_are_not_rfc3339_pass_through() {
+        assert_eq!(captured_text("yesterday"), "yesterday");
+        assert_eq!(
+            captured_text("2026-11-08T10:30:00Z"),
+            "2026-11-08 10:30 UTC"
+        );
     }
 }

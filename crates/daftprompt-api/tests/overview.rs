@@ -13,7 +13,7 @@ use daftprompt_core::{
     AccessError, AgentKind, BoxFuture, ExtractionModel, ModelError, ModelInput, Principal,
     ProjectScope, RootPolicy, Scribe, ScribeConfig, Store, Surveyor, SurveyorConfig,
 };
-use daftprompt_types::{BriefingCitation, BriefingExtraction, Extraction, Project};
+use daftprompt_types::{BriefingCitation, BriefingExtraction, Extraction, Project, ProjectPath};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -58,6 +58,7 @@ impl RootPolicy for DenyAll {
         _principal: &Principal,
         agent: AgentKind,
         project: &Project,
+        _path: &ProjectPath,
     ) -> Result<ProjectScope, AccessError> {
         Err(AccessError::Denied(format!(
             "{} may not use project {}",
@@ -76,11 +77,12 @@ impl RootPolicy for NoSurveyor {
         principal: &Principal,
         agent: AgentKind,
         project: &Project,
+        path: &ProjectPath,
     ) -> Result<ProjectScope, AccessError> {
         if agent == AgentKind::Surveyor {
             return Err(AccessError::Denied("no survey for you".to_owned()));
         }
-        daftprompt_core::LocalPolicy.grant(principal, agent, project)
+        daftprompt_core::LocalPolicy.grant(principal, agent, project, path)
     }
 }
 

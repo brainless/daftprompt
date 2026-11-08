@@ -122,6 +122,35 @@ fn chat_model(
     Ok(client.chat(model).into())
 }
 
+/// The endpoint `provider` would be called at, for cache keys.
+///
+/// This is the base URL `build_model` uses (an environment override or the
+/// built-in default) with any userinfo, query, and fragment removed. No
+/// credential is read or returned.
+pub fn endpoint_identity(provider: &str) -> String {
+    endpoint_identity_with(provider, env_string)
+}
+
+fn endpoint_identity_with(provider: &str, lookup: impl Fn(&str) -> Option<String>) -> String {
+    let (base_var, default_base) = match provider {
+        PROVIDER_OPENAI => ("OPENAI_BASE_URL", "default"),
+        PROVIDER_NEURALWATT => ("NEURALWATT_BASE_URL", DEFAULT_NEURALWATT_BASE_URL),
+        PROVIDER_CEREBRAS => ("CEREBRAS_BASE_URL", DEFAULT_CEREBRAS_BASE_URL),
+        PROVIDER_GROQ => ("GROQ_BASE_URL", DEFAULT_GROQ_BASE_URL),
+        _ => return "unknown".to_owned(),
+    };
+    let url = lookup(base_var).unwrap_or_else(|| default_base.to_owned());
+    let url = url.split(['?', '#']).next().unwrap_or_default();
+    match url.split_once("://") {
+        Some((scheme, rest)) => {
+            let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+            let host = authority.rsplit('@').next().unwrap_or_default();
+            format!("{scheme}://{host}/{path}")
+        }
+        None => url.to_owned(),
+    }
+}
+
 /// A trimmed, non-empty environment variable.
 pub fn env_string(name: &str) -> Option<String> {
     std::env::var(name)
@@ -140,6 +169,24 @@ mod tests {
         assert_eq!(default_model(PROVIDER_NEURALWATT), "glm-5.3-flash");
         assert_eq!(default_model(PROVIDER_CEREBRAS), "gpt-oss-120b");
         assert_eq!(default_model(PROVIDER_GROQ), "openai/gpt-oss-20b");
+    }
+
+    #[test]
+    fn endpoint_identity_uses_the_base_url_without_credentials() {
+        let none = |_: &str| None;
+        assert_eq!(
+            endpoint_identity_with(PROVIDER_GROQ, none),
+            "https://api.groq.com/openai/v1"
+        );
+        assert_eq!(endpoint_identity_with(PROVIDER_OPENAI, none), "default");
+        assert_eq!(endpoint_identity_with("nope", none), "unknown");
+        let overridden = |name: &str| {
+            (name == "GROQ_BASE_URL")
+                .then(|| "https://user:secret@proxy.test/v1?key=abc".to_owned())
+        };
+        let identity = endpoint_identity_with(PROVIDER_GROQ, overridden);
+        assert_eq!(identity, "https://proxy.test/v1");
+        assert!(!identity.contains("secret") && !identity.contains("abc"));
     }
 
     #[test]
