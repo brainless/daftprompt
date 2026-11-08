@@ -1,7 +1,8 @@
 //! Chronicler: the git-history briefing agent of
 //! [Epic 006](../../../epics/006-project-briefing.md).
 //!
-//! Chronicler reads a project's git history with two read-only tools
+//! The active path preloads recent history and requests a plain-text summary.
+//! The separate, unused `brief_with_tools` path reads history with two read-only tools
 //! (`git_log`, `git_show`) and submits a typed
 //! [`BriefingExtraction`](daftprompt_types::BriefingExtraction) through a
 //! schema-defined output tool: a Markdown summary and the commits it cites.
@@ -26,9 +27,10 @@ use std::sync::Arc;
 use daftprompt_types::{AgentInfo, AgentTaskRequest, BriefingResult, ParseError};
 
 pub use config::{
-    ChroniclerConfig, DEFAULT_MAX_AGENT_TURNS, DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_CITATIONS,
-    DEFAULT_MAX_PROMPT_BYTES, DEFAULT_MAX_SUMMARY_BYTES, DEFAULT_MODEL, DEFAULT_PROVIDER,
-    DEFAULT_TIMEOUT, MODEL_ENV, PROVIDER_ENV,
+    COMMIT_COUNT_ENV, ChroniclerConfig, DEFAULT_COMMIT_COUNT, DEFAULT_MAX_AGENT_TURNS,
+    DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_CITATIONS, DEFAULT_MAX_PROMPT_BYTES,
+    DEFAULT_MAX_SUMMARY_BYTES, DEFAULT_MODEL, DEFAULT_PROVIDER, DEFAULT_TIMEOUT, MODEL_ENV,
+    PROVIDER_ENV,
 };
 pub use model::{
     BoxFuture, ChroniclerInput, ChroniclerModel, ChroniclerTools, ModelError, RigChronicler,
@@ -76,7 +78,7 @@ impl<M: ChroniclerModel> Chronicler<M> {
         &self.config
     }
 
-    /// Brief the project `scope` grants.
+    /// Preserved tool-based path for future use; no API route invokes it.
     ///
     /// The request is validated before any model call: an oversized prompt or
     /// author is rejected, never truncated; a blank prompt means the default
@@ -89,7 +91,7 @@ impl<M: ChroniclerModel> Chronicler<M> {
     ///
     /// A folder that is not a repository, or a machine without `git`, is not
     /// an error: the briefing says so and carries a notice.
-    pub async fn brief(
+    pub async fn brief_with_tools(
         &self,
         request: AgentTaskRequest,
         scope: &ProjectScope,
@@ -121,10 +123,86 @@ impl<M: ChroniclerModel> Chronicler<M> {
 
         let calls = completed.toolset.git().recorder().calls();
         graph::build(graph::Built {
+            tool_based: true,
             request: &request,
             extraction: &completed.extraction,
             citations: &completed.validated,
             git: completed.toolset.git(),
+            calls: &calls,
+            config: &self.config,
+            project_id: scope.project_id.clone(),
+            run_id,
+            started_at,
+            attempts: completed.attempts,
+        })
+    }
+
+    /// Active path: Rust reads history once, then the model returns plain text.
+    /// Custom prompts use the same bounded history; no tools are exposed.
+    pub async fn brief(
+        &self,
+        request: AgentTaskRequest,
+        scope: &ProjectScope,
+    ) -> Result<BriefingResult, ParseError> {
+        check_request(&request, &self.config)?;
+        let started_at = support::now();
+        let run_id = support::new_id("run");
+        let tools = Arc::new(ChroniclerTools::new(
+            (self.history)(scope),
+            self.config.tools.clone(),
+        ));
+        let reader = tools.clone();
+        let count = self
+            .config
+            .commit_count
+            .max(1)
+            .min(self.config.tools.max_log_commits.max(1));
+        let history = tokio::task::spawn_blocking(move || {
+            reader
+                .git()
+                .call("git_log", serde_json::json!({"count": count}))
+                .text
+        })
+        .await
+        .map_err(|error| ParseError::Internal {
+            detail: format!("history read failed: {error}"),
+        })?;
+        let prompt = prompt::render_summary_prompt(request.prompt_text(), &history);
+        let completed = run_attempts(
+            RunLimits {
+                max_turns: 1,
+                max_attempts: self.config.max_attempts,
+                timeout: self.config.timeout,
+            },
+            &prompt,
+            || tools.clone(),
+            |input| {
+                Box::pin(async move {
+                    let summary = self.model.summarize(input.prompt).await?;
+                    Ok(daftprompt_types::BriefingExtraction {
+                        summary,
+                        citations: vec![],
+                    })
+                })
+            },
+            |extraction, _| {
+                if extraction.summary.trim().is_empty()
+                    || extraction.summary.len() > self.config.max_summary_bytes
+                {
+                    Err("the summary is empty or exceeds the output limit".to_owned())
+                } else {
+                    Ok(Vec::new())
+                }
+            },
+        )
+        .await?;
+        let calls = tools.recorder().calls();
+        graph::build(graph::Built {
+            tool_based: false,
+            request: &request,
+            extraction: &completed.extraction,
+            citations: &completed.validated,
+            git: tools.git(),
             calls: &calls,
             config: &self.config,
             project_id: scope.project_id.clone(),
@@ -140,7 +218,7 @@ impl<M: ChroniclerModel> Chronicler<M> {
             kind: "chronicler".to_owned(),
             provider: self.config.provider.clone(),
             model: self.config.model.clone(),
-            prompt_version: PROMPT_VERSION.to_owned(),
+            prompt_version: prompt::SUMMARY_PROMPT_VERSION.to_owned(),
         }
     }
 }

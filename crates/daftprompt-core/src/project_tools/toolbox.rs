@@ -66,7 +66,8 @@ impl ProjectToolbox {
                  ignored, binary, and environment files are never listed. Results are capped.",
                 json!({"type": "object", "properties": {
                     "directory": {"type": "string", "description": "Directory relative to the project root."},
-                    "glob": {"type": "string", "description": "Glob filter on file paths."}
+                    "glob": {"type": "string", "description": "Glob filter on file paths."},
+                    "shallow": {"type": "boolean", "description": "Only immediate files in the directory (default false)."}
                 }}),
             ),
             (
@@ -128,7 +129,8 @@ impl ProjectToolbox {
     }
 
     fn list_files(&self, args: ListFilesArgs) -> Result<Out, ToolError> {
-        let scope = Scope::new(args.directory, args.glob.as_deref())?;
+        let mut scope = Scope::new(args.directory, args.glob.as_deref())?;
+        scope.shallow = args.shallow;
         let listing = self.files.list(&scope, &self.config)?;
         let mut text = String::new();
         let mut shown = 0;

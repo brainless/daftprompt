@@ -16,6 +16,7 @@ use crate::project_agent::{BriefingBuild, PromptRecord, ValidatedCitation, build
 use crate::project_tools::RecordedCall;
 
 pub(crate) struct Built<'a> {
+    pub(crate) tool_based: bool,
     pub(crate) request: &'a AgentTaskRequest,
     pub(crate) extraction: &'a BriefingExtraction,
     pub(crate) citations: &'a [ValidatedCitation],
@@ -32,7 +33,11 @@ pub(crate) fn build(input: Built<'_>) -> Result<BriefingResult, ParseError> {
     let notices = notices(input.git, input.calls);
     build_briefing(BriefingBuild {
         agent: "chronicler",
-        prompt_version: PROMPT_VERSION,
+        prompt_version: if input.tool_based {
+            PROMPT_VERSION
+        } else {
+            super::prompt::SUMMARY_PROMPT_VERSION
+        },
         provider: input.config.provider.clone(),
         model: input.config.model.clone(),
         project_id: input.project_id,
@@ -43,7 +48,7 @@ pub(crate) fn build(input: Built<'_>) -> Result<BriefingResult, ParseError> {
         summary: &input.extraction.summary,
         citations: input.citations,
         calls: input.calls,
-        submitted: input.extraction,
+        submitted: input.tool_based.then_some(input.extraction),
         notices,
         profile: None,
         run_id: input.run_id,

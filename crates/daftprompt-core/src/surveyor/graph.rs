@@ -52,7 +52,7 @@ pub(crate) fn build(input: Built<'_>) -> Result<BriefingResult, ParseError> {
         summary: &input.extraction.summary,
         citations: input.citations,
         calls: input.calls,
-        submitted: input.extraction,
+        submitted: Some(input.extraction),
         notices,
         profile: Some(input.profile),
         run_id: input.run_id,

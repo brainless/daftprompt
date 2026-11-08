@@ -101,12 +101,20 @@ impl<M: OperatorModel> Operator<M> {
         let files = (self.project)(scope)?;
         let profile = languages::profile(files.as_ref());
         let candidates = languages::command_candidates(files.as_ref(), &profile);
-        let prompt = prompt::render_prompt(
+        let mut prompt = prompt::render_prompt(
             request.prompt_text(),
             &profile,
             &candidates,
             self.config.max_commands,
         );
+
+        let preloaded = crate::project_agent::preload_common_files(
+            files.clone(),
+            &profile,
+            self.config.tools.clone(),
+        )
+        .await?;
+        prompt.push_str(&preloaded.context);
 
         let started_at = support::now();
         let run_id = support::new_id("run");
@@ -118,7 +126,11 @@ impl<M: OperatorModel> Operator<M> {
         let completed = run_attempts(
             limits,
             &prompt,
-            || Arc::new(OperatorTools::new(files.clone(), self.config.tools.clone())),
+            || {
+                let tools = Arc::new(OperatorTools::new(files.clone(), self.config.tools.clone()));
+                preloaded.seed(tools.recorder());
+                tools
+            },
             |input| self.model.brief(input),
             |extraction, tools| {
                 validate::validate(

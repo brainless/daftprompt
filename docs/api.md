@@ -426,49 +426,32 @@ curl -sS http://127.0.0.1:8080/agents
 [
   { "kind": "scribe", "provider": "openai", "model": "gpt-4o-mini", "prompt_version": "scribe-v4" },
   { "kind": "explainer", "provider": "neuralwatt", "model": "glm-5.3-flash", "prompt_version": "explainer-v1" },
-  { "kind": "chronicler", "provider": "neuralwatt", "model": "glm-5.3-flash", "prompt_version": "chronicler-v1" }
+  { "kind": "chronicler", "provider": "neuralwatt", "model": "glm-5.3-flash", "prompt_version": "chronicler-summary-v1" }
 ]
 ```
 
 ### `POST /projects/{id}/history` (Chronicler)
 
-Summarizes the project's git history. The body is an `AgentTaskRequest`; an empty body or `{}` runs the default task, **summarize recent work** (themes, notable changes, areas in progress).
+Summarizes recent history supplied by Rust. Before the model call, Rust reads the latest `DAFTPROMPT_CHRONICLER_COMMIT_COUNT` commits (default **10**, newest first). The model receives that bounded log and returns **plain text**, with no tools, JSON schema, or output-submission tool. The existing `git_log`/`git_show` agent is retained as `Chronicler::brief_with_tools`, but no API route invokes it.
 
-| field | meaning |
-| --- | --- |
-| `prompt` | Optional. Replaces the default task, for example `"what changed in auth recently?"`. Blank means absent. At most 2048 bytes (`413 oversized_input`). |
-| `author` | Optional human identity for the prompt node; absent means `unknown`. At most 200 bytes. |
+An empty body or `{}` runs the default task: summarize themes, notable changes, and areas in progress. Optional `prompt` replaces that task but uses the same supplied history; it cannot request additional history. Blank prompts mean absent; the limit is 2048 bytes. Optional `author` records the prompt author (default `unknown`, at most 200 bytes).
 
 ```sh
-# Default task
-curl -sS -X POST http://127.0.0.1:8080/projects/project-18f3a2-1/history
-
-# With a prompt
-curl -sS -X POST http://127.0.0.1:8080/projects/project-18f3a2-1/history \
+curl -sS -X POST http://127.0.0.1:8080/projects/$PROJECT_ID/history
+curl -sS -X POST http://127.0.0.1:8080/projects/$PROJECT_ID/history \
   -H 'content-type: application/json' \
-  -d '{"prompt": "what changed in auth recently?", "author": "ada"}'
+  -d '{"prompt":"What changed in auth?"}'
 ```
 
-The response is a `BriefingResult`:
+The HTTP response remains a `BriefingResult` JSON object. `summary_payload.content` contains the plain-text answer. `citations` is empty; the summary context references only its payload. `tool_calls` records the one **Rust-initiated** `git_log` read, with its output in `tool_payloads`; there is no model tool invocation or synthetic `submit` record. `run.prompt_version` is `chronicler-summary-v1`. Each request reads history afresh; retries reuse that same bounded history. Optional prompt nodes, run metadata, and `project_id` are unchanged.
 
-| field | meaning |
-| --- | --- |
-| `project_id` | The resolved project. |
-| `task` | `{ "kind": "default" }` or `{ "kind": "prompt" }`. |
-| `prompt_payload` | The prompt text; `null` for the default task. |
-| `summary_payload`, `summary_node_id` | The agent's Markdown summary and its node. `[n]` markers refer to `citations`, 1-based. |
-| `nodes`, `node_contexts` | The optional prompt node `P` (root, author = request author or `unknown`) and the summary node `S` (`parent_id` = `P`, or `null` for the default task; `author` `agent`). `S` context `seq 0` is the summary payload; `seq 1..n` are the citations. |
-| `citations` | `CitationInfo[]`. Chronicler cites commits: `{ "index", "context_id", "location": { "kind": "commit", "hash": "<full hash>", "subject": "..." } }`. |
-| `notices` | `{ "kind", "detail" }` with `kind` `not_a_git_repository`, `git_unavailable`, or `truncated`. The first two mean the folder has no readable history; this is a briefing that says so, not an error. |
-| `run`, `run_inputs`, `tool_calls`, `tool_payloads` | Run metadata (agent `chronicler`, `project_id` set), the prompt node as input, every `git_log`/`git_show` call plus `submit`, and their outputs. |
+Git reads run off the async worker. Existing git process/output caps apply, including at most 50 commits by default. The configured count is clamped to these limits; invalid or zero environment values fall back to 10. Missing git, non-repository folders, and truncation retain their notices. The model is instructed to acknowledge unavailable or insufficient history.
 
-Rust validates every citation: a `commit` citation (a hash or a prefix of at least 7 hex characters) must resolve to exactly one commit that `git_log` or `git_show` returned in the same run, and every `[n]` marker must have a citation. Invalid output is retried within the attempt budget (3), then `422 invalid_output`. Nothing is stored; each request recomputes the briefing and no labels are created.
-
-Errors are the existing `{ "kind", "detail" }` shapes. The project is resolved first, for `AgentKind::Chronicler`, so `404 not_found`, `403 forbidden` and `422 project_unavailable` are answered before any model call. After that: `400 invalid_request` (malformed body), `413 oversized_input`, `422 invalid_output`, `502 provider_error`, `504 timeout`, `500 internal_error` (including a service without a Chronicler).
+Empty or oversized summaries are invalid output and retry within the three-attempt budget. Provider HTTP 400 `output_parse_failed` also uses that budget. Exhaustion returns `422 invalid_output`. Other errors retain the existing shapes: `404 not_found`, `403 forbidden`, `422 project_unavailable`, `400 invalid_request`, `413 oversized_input`, `502 provider_error`, `504 timeout`, and `500 internal_error`.
 
 ### Git tools and their limits
 
-The Chronicler's only tools are `git_log` and `git_show` (`daftprompt_core::git_tools`). They are read-only and run `git` as a subprocess without a shell:
+The preserved, unused tool-based Chronicler path exposes `git_log` and `git_show` (`daftprompt_core::git_tools`). They are read-only and run `git` as a subprocess without a shell:
 
 - Arguments come only from validated, typed parameters: hashes are 7 to 64 hex characters, `since` is a short date expression, `path` is a root-relative path with no `..`, absolute, hidden or `.env` component, and nothing starts with `-` (or `:`).
 - Every invocation is `git -C <root> --no-pager -c core.pager=cat -c core.fsmonitor=false -c log.showSignature=false --literal-pathspecs`, with `--no-ext-diff --no-textconv --no-color`, and the environment sets `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0` and `GIT_CONFIG_NOSYSTEM=1`.
@@ -481,6 +464,7 @@ The Chronicler's only tools are `git_log` and `git_show` (`daftprompt_core::git_
 | variable | default | meaning |
 | --- | --- | --- |
 | `DAFTPROMPT_CHRONICLER_PROVIDER` | `neuralwatt` | `openai`, `neuralwatt`, `cerebras`, or `groq`; recorded as `run.provider`. Same default as the Explainer, independent of the other agents |
+| `DAFTPROMPT_CHRONICLER_COMMIT_COUNT` | `10` | Latest commits supplied by Rust; positive integer, clamped to git limits |
 | `DAFTPROMPT_CHRONICLER_MODEL` | `glm-5.3-flash` | Model identifier recorded as `run.model` |
 
 Credentials are the provider's own variables, shared with Scribe and Explainer. Startup builds the Chronicler's client too, so with the defaults `NEURALWATT_API_KEY` must be present. Startup logs its provider and model:
@@ -534,6 +518,18 @@ curl -sS http://127.0.0.1:8080/projects/project-18f3a2-1/profile
 - Each `projects[]` entry is one manifest directory (`dir` is root-relative, `""` is the root), so a monorepo lists each project with its own `package_manager` (`cargo`, `npm`, `pnpm`, `yarn`, `bun`, `uv`, `poetry`, `pip`, or `null`). Members of a declared workspace are folded into the workspace root's `packages`. `toolchain` is the Rust channel, `typescript`/`javascript`, or Python's `requires-python`. `files` is the evidence (manifests and lockfiles).
 - `key_files` are what Surveyor reads first: root README*/DEVELOP*/CONTRIBUTING*/ARCHITECTURE*, AGENTS.md, CLAUDE.md, then, in this priority order under the cap of 40: top-level docs, text files directly in `docs/`, each language's manifests (lockfiles excluded), and finally text files in nested `docs/**` folders. At most 20 files are taken from `docs/` in all.
 - Detection uses the project tools' rules: hidden, ignored and binary files are invisible (so a binary `bun.lockb` is not seen; `bun.lock` and the `packageManager` field are), vendored directories (`node_modules`, `target`, `vendor`, `dist`, `build`, virtualenvs) are skipped, manifests deeper than 4 directories are ignored, and malformed manifests still detect the language with less detail.
+
+### Initial file context (Surveyor and Operator)
+
+Both file agents receive a bounded preload before their first model call:
+
+- Shallow listings of the root, `src/`, and `docs/`: at most 50 immediate file paths each, no recursive tree. Missing folders produce a notice in the initial context.
+- Contents of up to six common root documents, selected from the profile in priority order: README, developer/contributor docs, architecture, and agent instructions. Each excerpt has at most 100 lines and a 4 KiB body budget; existing stricter tool limits apply.
+- The complete serialized preload section is capped at 32 KiB, with a marker when remaining content is omitted. Hidden, ignored, binary, environment, and out-of-root files remain excluded by the existing file backend.
+
+They retain `list_files`, `search`, and `read_file` to fetch more context. `list_files` now accepts optional `shallow: true` to list only immediate files; its default remains recursive. Preload listings do not establish file contents for citations. Preload excerpts do: their exact shown ranges and hashes are recorded in the same ledger used to validate model-requested reads. The ledger includes Rust-initiated preload calls, followed by model calls and `submit`. Preloads are reused across retries and do not consume the model's tool-call allowance.
+
+The output contracts are unchanged, including Operator's structured commands. Active prompt versions are `surveyor-v2` and `operator-v2`.
 
 ### `POST /projects/{id}/overview` (Surveyor)
 

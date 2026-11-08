@@ -17,6 +17,8 @@
 //! Explainer keeps its own loop and is not migrated.
 
 mod briefing;
+mod preload;
+pub(crate) use preload::preload_common_files;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -219,7 +221,27 @@ where
     })
 }
 
-fn prompt_error(error: PromptError) -> ModelError {
+pub(crate) fn prompt_error(error: PromptError) -> ModelError {
+    // Groq can reject a generated answer before returning a completion. This
+    // is invalid model output, despite the provider's HTTP 400 classification.
+    // Match the structured code, never text in the message/failed generation.
+    if error
+        .provider_response_status()
+        .map(|status| status.as_u16())
+        == Some(400)
+        && error
+            .provider_response_json()
+            .ok()
+            .flatten()
+            .and_then(|body| body["error"]["code"].as_str().map(str::to_owned))
+            .as_deref()
+            == Some("output_parse_failed")
+    {
+        return ModelError::Invalid(
+            "the provider could not parse the model's generated output (output_parse_failed)"
+                .to_owned(),
+        );
+    }
     match error {
         PromptError::MaxTurns { max_turns, .. } => ModelError::Invalid(format!(
             "the model did not submit a result within {max_turns} model call(s)"
@@ -228,5 +250,49 @@ fn prompt_error(error: PromptError) -> ModelError {
             "the model called an unavailable tool `{tool_name}`"
         )),
         other => ModelError::Provider(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rig::prelude::ProviderError;
+
+    fn provider_error(status: u16, body: &str) -> PromptError {
+        PromptError::Provider(ProviderError::from_http_response(
+            status.try_into().unwrap(),
+            body,
+        ))
+    }
+
+    #[test]
+    fn provider_output_parse_failure_is_invalid_output() {
+        let error = prompt_error(provider_error(
+            400,
+            r#"{"error":{"code":"output_parse_failed","failed_generation":"private source text"}}"#,
+        ));
+        let ModelError::Invalid(detail) = error else {
+            panic!("expected invalid output");
+        };
+        assert!(detail.contains("output_parse_failed"));
+        assert!(!detail.contains("private source text"));
+    }
+
+    #[test]
+    fn other_provider_failures_are_not_reclassified() {
+        for (status, body) in [
+            (
+                400,
+                r#"{"error":{"code":"invalid_request_error","message":"output_parse_failed"}}"#,
+            ),
+            (401, r#"{"error":{"code":"output_parse_failed"}}"#),
+            (429, r#"{"error":{"code":"rate_limit_exceeded"}}"#),
+            (400, "output_parse_failed"),
+        ] {
+            assert!(matches!(
+                prompt_error(provider_error(status, body)),
+                ModelError::Provider(_)
+            ));
+        }
     }
 }

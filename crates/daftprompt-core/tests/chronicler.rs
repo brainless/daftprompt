@@ -70,6 +70,14 @@ impl Stub {
 struct Handle(Arc<Stub>);
 
 impl ChroniclerModel for Handle {
+    fn summarize(
+        &self,
+        prompt: String,
+    ) -> daftprompt_core::chronicler::BoxFuture<'_, Result<String, ModelError>> {
+        self.0.prompts.lock().unwrap().push(prompt);
+        Box::pin(async { Ok("Recent work summary.".to_owned()) })
+    }
+
     fn brief(
         &self,
         input: ChroniclerInput,
@@ -120,7 +128,7 @@ fn log_all() -> Calls {
 }
 
 async fn run(stub: &Arc<Stub>, request: AgentTaskRequest) -> Result<BriefingResult, ParseError> {
-    chronicler(stub).brief(request, &scope()).await
+    chronicler(stub).brief_with_tools(request, &scope()).await
 }
 
 #[tokio::test]
@@ -323,6 +331,30 @@ async fn invalid_output_is_retried_and_only_the_accepted_attempt_is_recorded() {
 }
 
 #[tokio::test]
+async fn invalid_model_output_retries_and_stops_at_the_attempt_budget() {
+    let stub = Stub::new(|attempt, _| {
+        if attempt == 1 {
+            Step::Fail(ModelError::Invalid("output_parse_failed".to_owned()))
+        } else {
+            Step::Submit(
+                log_all(),
+                summary("A typo fix [1].", vec![commit("f00dfeed")]),
+            )
+        }
+    });
+    let result = run(&stub, AgentTaskRequest::default()).await.unwrap();
+    assert_eq!(result.run.attempts, 2);
+
+    let stub = Stub::new(|_, _| Step::Fail(ModelError::Invalid("output_parse_failed".to_owned())));
+    let error = run(&stub, AgentTaskRequest::default()).await.unwrap_err();
+    assert!(matches!(
+        error,
+        ParseError::InvalidOutput { attempts: 3, .. }
+    ));
+    assert_eq!(stub.attempts(), 3);
+}
+
+#[tokio::test]
 async fn provider_errors_are_not_retried() {
     let stub = Stub::new(|_, _| Step::Fail(ModelError::Provider("down".to_owned())));
     let error = run(&stub, AgentTaskRequest::default()).await.unwrap_err();
@@ -426,7 +458,7 @@ async fn a_folder_that_is_not_a_repository_is_a_briefing_with_a_notice() {
     );
     let chronicler = chronicler_over(&stub, Arc::new(InMemoryGit::not_a_repository()));
     let result = chronicler
-        .brief(AgentTaskRequest::default(), &scope())
+        .brief_with_tools(AgentTaskRequest::default(), &scope())
         .await
         .unwrap();
     assert_eq!(result.notices.len(), 1);
@@ -439,7 +471,7 @@ async fn a_folder_that_is_not_a_repository_is_a_briefing_with_a_notice() {
 
     let chronicler = chronicler_over(&stub, Arc::new(InMemoryGit::unavailable()));
     let result = chronicler
-        .brief(AgentTaskRequest::default(), &scope())
+        .brief_with_tools(AgentTaskRequest::default(), &scope())
         .await
         .unwrap();
     assert_eq!(result.notices[0].kind, BriefingNoticeKind::GitUnavailable);
@@ -462,11 +494,116 @@ async fn the_briefer_trait_reports_its_configuration() {
     let briefer: Arc<dyn Briefer> = Arc::new(chronicler(&stub));
     let info = briefer.info();
     assert_eq!(info.kind, "chronicler");
-    assert_eq!(info.prompt_version, "chronicler-v1");
+    assert_eq!(info.prompt_version, "chronicler-summary-v1");
     assert_eq!(info.model.as_deref(), Some("glm-5.3-flash"));
     let result = briefer
         .brief(AgentTaskRequest::default(), &scope())
         .await
         .unwrap();
     assert_eq!(result.run.agent, "chronicler");
+}
+
+#[tokio::test]
+async fn plain_summary_preloads_configured_history_without_submission_or_citations() {
+    let stub = Stub::always(vec![], summary("Unused", vec![]));
+    let mut config = ChroniclerConfig::default();
+    config.commit_count = 1;
+    let agent = Chronicler::new(config, Handle(stub.clone())).with_history(|_| history());
+    let result = agent
+        .brief(
+            AgentTaskRequest {
+                prompt: Some("What changed?".into()),
+                author: None,
+            },
+            &scope(),
+        )
+        .await
+        .unwrap();
+    let prompts = stub.prompts.lock().unwrap();
+    assert_eq!(prompts.len(), 1);
+    assert!(prompts[0].contains("What changed?"));
+    assert!(prompts[0].contains("Add the importer"));
+    assert!(!prompts[0].contains("Test the importer"));
+    assert_eq!(result.summary_payload.content, "Recent work summary.");
+    assert!(result.citations.is_empty());
+    assert_eq!(result.tool_calls.len(), 1);
+    assert_eq!(result.tool_calls[0].tool, "git_log");
+    assert_eq!(
+        result.run.prompt_version.as_deref(),
+        Some("chronicler-summary-v1")
+    );
+}
+
+#[tokio::test]
+async fn plain_summary_defaults_to_ten_commits_and_preserves_unavailable_notice() {
+    let stub = Stub::always(vec![], summary("Unused", vec![]));
+    let result = chronicler(&stub)
+        .brief(AgentTaskRequest::default(), &scope())
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&result.tool_calls[0].input).unwrap()["count"],
+        10
+    );
+    let result = chronicler_over(&stub, Arc::new(InMemoryGit::not_a_repository()))
+        .brief(AgentTaskRequest::default(), &scope())
+        .await
+        .unwrap();
+    assert_eq!(
+        result.notices[0].kind,
+        BriefingNoticeKind::NotAGitRepository
+    );
+}
+
+struct PlainResponses(Mutex<std::collections::VecDeque<String>>);
+
+impl ChroniclerModel for PlainResponses {
+    fn summarize(
+        &self,
+        _prompt: String,
+    ) -> daftprompt_core::chronicler::BoxFuture<'_, Result<String, ModelError>> {
+        let next = self
+            .0
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("bounded attempts");
+        Box::pin(async move { Ok(next) })
+    }
+
+    fn brief(
+        &self,
+        _input: ChroniclerInput,
+    ) -> daftprompt_core::chronicler::BoxFuture<'_, Result<BriefingExtraction, ModelError>> {
+        panic!("the active path must never invoke the tool model")
+    }
+}
+
+#[tokio::test]
+async fn plain_summary_retries_invalid_text_with_one_history_read() {
+    let model = PlainResponses(Mutex::new(
+        [" ".into(), "Summary [1] is plain text.".into()].into(),
+    ));
+    let agent = Chronicler::new(ChroniclerConfig::default(), model).with_history(|_| history());
+    let result = agent
+        .brief(AgentTaskRequest::default(), &scope())
+        .await
+        .unwrap();
+    assert_eq!(result.run.attempts, 2);
+    assert_eq!(result.tool_calls.len(), 1);
+    assert!(result.citations.is_empty());
+    assert_eq!(result.summary_payload.content, "Summary [1] is plain text.");
+
+    let model = PlainResponses(Mutex::new(
+        ["x".repeat(17 * 1024), "".into(), " ".into()].into(),
+    ));
+    let agent = Chronicler::new(ChroniclerConfig::default(), model).with_history(|_| history());
+    let error = agent
+        .brief(AgentTaskRequest::default(), &scope())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ParseError::InvalidOutput { attempts: 3, .. }
+    ));
 }

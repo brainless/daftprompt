@@ -92,6 +92,9 @@ pub enum ToolError {
 /// Arguments of `list_files`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ListFilesArgs {
+    /// Only immediate files in the requested directory.
+    #[serde(default)]
+    pub shallow: bool,
     #[serde(default)]
     pub directory: Option<String>,
     #[serde(default)]
@@ -123,6 +126,7 @@ pub struct ReadFileArgs {
 /// Which files a `list_files` or `search` call looks at.
 #[derive(Debug, Clone)]
 pub struct Scope {
+    pub(crate) shallow: bool,
     /// Directory relative to the root; `None` is the root.
     pub directory: Option<String>,
     glob: Option<globset::GlobMatcher>,
@@ -139,12 +143,30 @@ impl Scope {
             ),
         };
         let directory = directory.filter(|d| !d.trim().is_empty());
-        Ok(Self { directory, glob })
+        Ok(Self {
+            directory,
+            glob,
+            shallow: false,
+        })
     }
 
     /// Whether the glob (if any) accepts this root-relative path. A glob
     /// without a `/` also matches the file name alone.
     pub fn glob_matches(&self, rel_path: &str) -> bool {
+        if self.shallow {
+            let dir = self
+                .directory
+                .as_deref()
+                .map(normalize_path_text)
+                .unwrap_or_default();
+            let parent = rel_path
+                .rsplit_once('/')
+                .map(|(parent, _)| parent)
+                .unwrap_or("");
+            if parent != dir {
+                return false;
+            }
+        }
         match &self.glob {
             None => true,
             Some(g) => {

@@ -192,7 +192,7 @@ fn generic_key_files(files: &dyn ProjectFiles) -> GenericDocs {
     }
 }
 
-fn is_root_doc(name: &str) -> bool {
+pub(crate) fn is_root_doc(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     upper == "AGENTS.MD"
         || upper == "CLAUDE.MD"

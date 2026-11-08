@@ -155,7 +155,7 @@ markers and may select whole blocks or smaller segment ranges.
 - `llm`: `ModelSettings { provider, model }` and `build_model(&ModelSettings) -> Result<DynModel<Completion>, LlmError>`, moved from `daftprompt-api/src/main.rs` with the same providers (`openai`, `neuralwatt`, `cerebras`, `groq`), credential variables and base URL defaults. `default_model(provider)` gives the per-provider default used by `DAFTPROMPT_API_MODEL`.
 - `git_tools`: `GitHistory` (`log(&LogQuery) -> Result<GitLog, GitError>`, `show(&ShowQuery) -> Result<GitShow, GitError>`), `SubprocessGit::new(root, &GitToolConfig)`, the in-memory `InMemoryGit`, and `GitToolbox` (`call(name, json)`, per-run call cap, `ToolRecorder` ledger, `problem()`), plus Rig adapters (`git_rig_tools`). `LogQuery`/`ShowQuery` can only be built through validating constructors. The ledger (`RecordedCall.commits`, `ToolRecorder::resolve_commit`) records the full hashes each call returned.
 - `project_agent`: the generic runner. `Toolset` (tools plus ledger), `run_attempts(limits, prompt, new_toolset, attempt, validate)` for the attempt budget, per-attempt timeout and retry on invalid output, `run_rig_agent::<T, O>(model, system_prompt, input)` for one multi-turn Rig attempt with an output tool, the shared `validate_briefing`/`build_briefing`, and the object-safe `Briefer` trait the API holds. Explainer is not migrated.
-- `chronicler`: `ChroniclerConfig` (`config.rs`), `chronicler-v1` prompt (`prompt.rs`, `prompts/chronicler-v1.md`), the `ChroniclerModel` seam and `RigChronicler` (`model.rs`), `validate.rs`, `graph.rs`, and `Chronicler::brief(AgentTaskRequest, &ProjectScope)`. `Chronicler::with_history(factory)` substitutes the git backend in tests.
+- `chronicler`: `ChroniclerConfig` (`config.rs`), `chronicler-summary-v1` active prompt and preserved `chronicler-v1` tool prompt (`prompt.rs`, `prompts/`), the `ChroniclerModel` seam and `RigChronicler` (`model.rs`), `validate.rs`, `graph.rs`, and `Chronicler::brief(AgentTaskRequest, &ProjectScope)`. `Chronicler::with_history(factory)` substitutes the git backend in tests.
 - Environment: `DAFTPROMPT_CHRONICLER_PROVIDER` and `DAFTPROMPT_CHRONICLER_MODEL` (default `neuralwatt` / `glm-5.3-flash`, the Explainer's defaults).
 - Tests: `tests/git_tools.rs` builds a temporary repository with fixed `GIT_AUTHOR_*`/`GIT_COMMITTER_*` names and dates (it skips quietly when `git` is not installed); `tests/chronicler.rs` uses a stub `ChroniclerModel` over `InMemoryGit`; `daftprompt-api/tests/history.rs` covers the endpoints. None needs credentials. Live Chronicler evaluation is not built yet.
 
@@ -460,3 +460,19 @@ Groq is also available in the API and both evaluation binaries. Use provider
 set `DAFTPROMPT_EVAL_PROVIDER=groq`; for Explainer evaluations, explicitly set both
 `DAFTPROMPT_EXPLAINER_PROVIDER=groq` and
 `DAFTPROMPT_EXPLAINER_MODEL=openai/gpt-oss-20b`. See [API setup](api.md#groq-configuration).
+
+### Briefing provider output failures
+
+The shared project-agent runner classifies HTTP 400 `error.code: output_parse_failed` as invalid model output, retrying within the existing attempt budget (three by default). It does not retry other provider failures or parse `failed_generation` as a result. Exhaustion returns `422 invalid_output` with a concise diagnostic instead of echoing the rejected generation. This handles intermittent generation failures; it does not establish or fix the underlying reason a provider rejected the output.
+
+### Preloaded Chronicler summaries
+
+The active `Chronicler::brief` reads history on `spawn_blocking`, then calls `ChroniclerModel::summarize` with the bounded log. `RigChronicler` uses a single-turn Rig agent without tools or output schema. `DAFTPROMPT_CHRONICLER_COMMIT_COUNT` defaults to 10 (positive integer; invalid/zero values fall back to 10, requests clamp to the git cap of 50). Set it in `.env` and restart the API, or run `DAFTPROMPT_CHRONICLER_COMMIT_COUNT=20 cargo run -p daftprompt-api`. No dependency changes.
+
+The model returns plain text, wrapped in the existing briefing response with no citations or synthetic submission. The read ledger preserves the Rust-initiated log input/output. Retries reuse the log; summaries must be nonempty and at most 16 KiB. The old tool implementation and prompt remain under `brief_with_tools` and `ChroniclerModel::brief`, unused by the API. The active prompt version is `chronicler-summary-v1`.
+
+### File-agent initial context
+
+`project_agent::preload` builds a bounded snapshot for Surveyor and Operator on a blocking worker: shallow root/src/docs listings (50 paths each), then up to six common root documents selected from the profile (100 lines and 4 KiB body budget each). Serialized initial context is capped at 32 KiB. Existing tighter file-tool limits and access protections still apply. Model tools retain their full call allowance; each attempt seeds only the snapshot's model-visible records into its fresh ledger. File excerpts are citable; listings are not line evidence. The active prompts are `surveyor-v2` and `operator-v2`, and both structured output contracts remain intact. No dependency or environment changes.
+
+`list_files` accepts optional `shallow: true`; the real filesystem walker prunes deeper directories and the in-memory backend applies matching depth semantics. Missing src/docs folders are ordinary listing errors in the context. Tests cover filesystem ignore/hidden rules, shallow depth, context bounds, citation coverage, additional model reads, and structured documented commands from preloaded excerpts.

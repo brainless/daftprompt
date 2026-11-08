@@ -68,7 +68,11 @@ Implemented scope is stateless and targets extracted spans only. Later work: cla
 
 ## Project briefing (planned)
 
-[Epic 006](../epics/006-project-briefing.md) plans three read-only agents that brief the user when a project opens: **Chronicler** (git history), **Surveyor** (files and documentation) and **Operator** (the commands the project supports, discovered and never run). Each accepts an optional prompt in place of its default task and cites evidence that Rust validates. Task A (the shared agent runner, the git tools, `GET /agents`, and the Chronicler behind `POST /projects/{id}/history`) is implemented, as are the language registry and the Surveyor (Task B) and the Operator behind `POST /projects/{id}/commands` (Task C); the GUI follows.
+[Epic 006](../epics/006-project-briefing.md) plans three read-only agents that brief the user when a project opens: **Chronicler** (git history), **Surveyor** (files and documentation) and **Operator** (the commands the project supports, discovered and never run). Each accepts an optional prompt in place of its default task. Surveyor and Operator cite evidence that Rust validates; Chronicler uses the preloaded-history path described below. Task A (the shared agent runner, the git tools, `GET /agents`, and the Chronicler behind `POST /projects/{id}/history`) is implemented, as are the language registry and the Surveyor (Task B) and the Operator behind `POST /projects/{id}/commands` (Task C); the GUI follows.
+
+Chronicler's active history briefing preloads the latest commits in Rust (configurable, default 10) and asks the model for a plain-text summary without tools. Custom prompts use the same supplied history. The earlier tool-enabled implementation remains available in core but is unused by the API. Responses retain the briefing envelope and read provenance, with no model citations or submission-tool record.
+
+Surveyor and Operator receive bounded contents of common root documentation (README, DEVELOP, CONTRIBUTING, ARCHITECTURE, AGENTS.md, CLAUDE.md) plus shallow file listings of the root, `src/`, and `docs/` before their first model call. They retain `list_files`, `search`, and `read_file` for additional context. Both retain their citation-bearing output contracts; Operator retains structured commands for the GUI. Preloaded excerpts use the same read protections and citation validation as tool results.
 
 ## Projects and storage
 

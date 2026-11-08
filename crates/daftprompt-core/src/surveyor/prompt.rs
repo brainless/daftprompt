@@ -3,10 +3,10 @@
 use daftprompt_types::{LanguageDetection, ProjectProfile};
 
 /// Identifier of the prompt revision recorded on every Surveyor run.
-pub const PROMPT_VERSION: &str = "surveyor-v1";
+pub const PROMPT_VERSION: &str = "surveyor-v2";
 
 /// The complete system instructions for Surveyor, included at compile time.
-pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/surveyor-v1.md");
+pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/surveyor-v2.md");
 
 /// The task of a run without a user prompt.
 pub(crate) const DEFAULT_TASK: &str = "Summarize this project: what it is, the stack it uses, \
@@ -130,8 +130,8 @@ mod tests {
 
     #[test]
     fn prompt_version_matches_the_file() {
-        assert_eq!(PROMPT_VERSION, "surveyor-v1");
-        assert!(SYSTEM_PROMPT.starts_with("# Surveyor v1"));
+        assert_eq!(PROMPT_VERSION, "surveyor-v2");
+        assert!(SYSTEM_PROMPT.starts_with("# Surveyor v2"));
     }
 
     #[test]

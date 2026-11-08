@@ -78,7 +78,7 @@ pub(crate) fn build(input: Built<'_>) -> Result<CommandsResult, ParseError> {
         summary: &input.extraction.summary,
         citations: &citations,
         calls: input.calls,
-        submitted: input.extraction,
+        submitted: Some(input.extraction),
         notices,
         profile: Some(input.profile),
         run_id: input.run_id,

@@ -130,7 +130,7 @@ Validation rules:
 - File citations lie within lines read in the same run. Commit citations resolve to exactly one commit the ledger saw.
 - Every command is backed by a candidate or by at least one file citation, such as a README "how to run" section. Its `working_dir` exists inside the root.
 - Labels are short and unique. Duplicate `(working_dir, command)` pairs are rejected. The number of commands is capped (default 12).
-- Invalid output is retried within the attempt budget, as Explainer does.
+- Invalid output is retried within the attempt budget. This includes provider HTTP 400 responses with the structured code `output_parse_failed`; other provider errors return immediately.
 
 ### Records (graph alignment)
 
@@ -212,6 +212,34 @@ pub struct ProjectCommand {
 - **Project tab:** the Chronicler and Surveyor summaries are stacked as sections, each with a title, loading or error state, rendered summary, citations and a re-run control. Briefings are not cached; they re-run whenever a project becomes current, including on launch.
 - **Footer:** a fixed footer holds one row of command buttons from `CommandsResult.commands`. Clicking a button opens a details popover with the label, command, working directory, kind, origin and cited evidence. It never runs or copies the command.
 - **Errors:** they stay inside the section they belong to and never block parsing or clarifying.
+
+## Initial file context for Surveyor and Operator
+
+Before the first model call, Rust supplies shallow file listings of root, `src/`,
+and `docs/`, followed by bounded excerpts from up to six common root documents
+(README, DEVELOP/DEVELOPMENT, CONTRIBUTING, ARCHITECTURE, AGENTS.md, CLAUDE.md).
+Each listing has at most 50 paths, each document at most 100 lines and a 4 KiB
+body budget; existing stricter tool limits still apply. The combined serialized
+preload section is capped at 32 KiB. Missing folders and read errors appear as
+bounded results, and tools remain available for omitted content.
+
+The shared preload runs on a blocking worker and snapshots the exact results
+once per request. Each attempt seeds its citation ledger from that snapshot,
+without consuming the model's tool-call budget. Filenames alone are not citable
+line evidence. Both agents retain all three read-only tools and their structured
+output contracts; Operator still returns commands for the GUI. Active prompt
+versions are `surveyor-v2` and `operator-v2`.
+
+## Current Chronicler execution
+
+The active history endpoint preloads the latest commits in Rust (default 10;
+`DAFTPROMPT_CHRONICLER_COMMIT_COUNT`, positive integer, capped by git limits).
+It sends that log to a single-turn plain-text summarizer with no tools or output
+schema. Custom prompts use the same supplied log. The original tool-enabled design in this epic is retained in `Chronicler::brief_with_tools` for future use, with no API
+route invoking it. The active prompt is `chronicler-summary-v1`; the unused path
+keeps `chronicler-v1`. The API still returns `BriefingResult`, with no citations
+or `submit` call; its ledger records the Rust-initiated history read. Retries reuse
+the same history and validate summary size/non-emptiness.
 
 ## Tasks
 

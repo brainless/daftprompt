@@ -6,10 +6,10 @@ use crate::languages::CommandCandidate;
 use crate::surveyor::prompt::{render_profile, short};
 
 /// Identifier of the prompt revision recorded on every Operator run.
-pub const PROMPT_VERSION: &str = "operator-v1";
+pub const PROMPT_VERSION: &str = "operator-v2";
 
 /// The complete system instructions for Operator, included at compile time.
-pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/operator-v1.md");
+pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/operator-v2.md");
 
 /// The task of a run without a user prompt.
 pub(crate) const DEFAULT_TASK: &str = "List the commands this project supports: how to set it \
@@ -88,8 +88,8 @@ mod tests {
 
     #[test]
     fn prompt_version_matches_the_file() {
-        assert_eq!(PROMPT_VERSION, "operator-v1");
-        assert!(SYSTEM_PROMPT.starts_with("# Operator v1"));
+        assert_eq!(PROMPT_VERSION, "operator-v2");
+        assert!(SYSTEM_PROMPT.starts_with("# Operator v2"));
     }
 
     #[test]

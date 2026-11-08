@@ -167,10 +167,21 @@ async fn valid_file_citations_become_contexts_with_ranges_and_hashes() {
     assert_eq!(result.run.agent, "surveyor");
     assert_eq!(result.run.status, RunStatus::Done);
     assert_eq!(result.run.attempts, 1);
-    assert_eq!(result.run.prompt_version.as_deref(), Some("surveyor-v1"));
+    assert_eq!(result.run.prompt_version.as_deref(), Some("surveyor-v2"));
     assert_eq!(result.run.project_id.as_deref(), Some("project-1"));
     let tools: Vec<&str> = result.tool_calls.iter().map(|c| c.tool.as_str()).collect();
-    assert_eq!(tools, ["read_file", "read_file", "submit"]);
+    assert_eq!(
+        tools,
+        [
+            "list_files",
+            "list_files",
+            "list_files",
+            "read_file",
+            "read_file",
+            "read_file",
+            "submit"
+        ]
+    );
     assert_eq!(stub.attempts(), 1);
 }
 
@@ -202,13 +213,13 @@ async fn the_result_and_the_prompt_include_the_computed_profile() {
 
 #[tokio::test]
 async fn lines_that_were_not_read_are_invalid() {
-    // README.md has 7 lines; only the first two are read.
+    // Cargo.toml has two lines and is not preloaded; only line 1 is read.
     let stub = Stub::always(
         vec![(
             READ_FILE,
-            json!({"path": "README.md", "start_line": 1, "end_line": 2}),
+            json!({"path": "Cargo.toml", "start_line": 1, "end_line": 1}),
         )],
-        summary("Layout [1].", vec![file("README.md", 5, 6)]),
+        summary("Layout [1].", vec![file("Cargo.toml", 2, 2)]),
     );
     let error = run(&stub, AgentTaskRequest::default()).await.unwrap_err();
     let ParseError::InvalidOutput { detail, attempts } = error else {
@@ -266,7 +277,7 @@ async fn invalid_output_is_retried_and_only_the_accepted_attempt_is_recorded() {
         if attempt == 1 {
             Step::Submit(
                 vec![],
-                summary("Unread [1].", vec![file("README.md", 1, 1)]),
+                summary("Unread [1].", vec![file("Cargo.toml", 1, 1)]),
             )
         } else {
             Step::Submit(
@@ -278,7 +289,17 @@ async fn invalid_output_is_retried_and_only_the_accepted_attempt_is_recorded() {
     let result = run(&stub, AgentTaskRequest::default()).await.unwrap();
     assert_eq!(result.run.attempts, 2);
     let tools: Vec<&str> = result.tool_calls.iter().map(|c| c.tool.as_str()).collect();
-    assert_eq!(tools, ["read_file", "submit"]);
+    assert_eq!(
+        tools,
+        [
+            "list_files",
+            "list_files",
+            "list_files",
+            "read_file",
+            "read_file",
+            "submit"
+        ]
+    );
 }
 
 #[tokio::test]
@@ -371,11 +392,37 @@ async fn the_briefer_trait_reports_its_configuration() {
     let briefer: Arc<dyn Briefer> = Arc::new(surveyor(&stub));
     let info = briefer.info();
     assert_eq!(info.kind, "surveyor");
-    assert_eq!(info.prompt_version, "surveyor-v1");
+    assert_eq!(info.prompt_version, "surveyor-v2");
     assert_eq!(info.model.as_deref(), Some("glm-5.3-flash"));
     let result = briefer
         .brief(AgentTaskRequest::default(), &scope())
         .await
         .unwrap();
     assert_eq!(result.run.agent, "surveyor");
+}
+
+#[tokio::test]
+async fn preloaded_readme_can_be_cited_without_a_model_read_and_extra_context_uses_tools() {
+    let stub = Stub::new(|_, input| {
+        assert!(input.prompt.contains("A demo importer."));
+        assert!(input.prompt.contains("docs/guide.md"));
+        assert!(input.toolset.files().recorder().covers("README.md", 3, 3));
+        Step::Submit(
+            vec![(READ_FILE, json!({"path":"Cargo.toml"}))],
+            summary(
+                "Importer in a workspace [1][2].",
+                vec![file("README.md", 3, 3), file("Cargo.toml", 1, 1)],
+            ),
+        )
+    });
+    let result = run(&stub, AgentTaskRequest::default()).await.unwrap();
+    assert_eq!(result.citations.len(), 2);
+    assert_eq!(
+        result
+            .tool_calls
+            .iter()
+            .filter(|c| c.tool == READ_FILE && c.input.contains("README.md"))
+            .count(),
+        1
+    );
 }

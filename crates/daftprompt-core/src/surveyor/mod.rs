@@ -97,7 +97,15 @@ impl<M: SurveyorModel> Surveyor<M> {
         check_request(&request, &self.config)?;
         let files = (self.project)(scope)?;
         let profile = languages::profile(files.as_ref());
-        let prompt = prompt::render_prompt(request.prompt_text(), &profile);
+        let mut prompt = prompt::render_prompt(request.prompt_text(), &profile);
+
+        let preloaded = crate::project_agent::preload_common_files(
+            files.clone(),
+            &profile,
+            self.config.tools.clone(),
+        )
+        .await?;
+        prompt.push_str(&preloaded.context);
 
         let started_at = support::now();
         let run_id = support::new_id("run");
@@ -109,7 +117,11 @@ impl<M: SurveyorModel> Surveyor<M> {
         let completed = run_attempts(
             limits,
             &prompt,
-            || Arc::new(SurveyorTools::new(files.clone(), self.config.tools.clone())),
+            || {
+                let tools = Arc::new(SurveyorTools::new(files.clone(), self.config.tools.clone()));
+                preloaded.seed(tools.recorder());
+                tools
+            },
             |input| self.model.brief(input),
             |extraction, tools| validate::validate(extraction, tools.recorder(), &self.config),
         )

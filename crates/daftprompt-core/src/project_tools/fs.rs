@@ -149,6 +149,13 @@ impl FsProject {
                 // Walk only the target and the directories leading to it.
                 entry.path().starts_with(&target_owned) || target_owned.starts_with(entry.path())
             });
+        if scope.shallow {
+            let depth = target
+                .strip_prefix(&self.root)
+                .map(|p| p.components().count())
+                .unwrap_or(0);
+            builder.max_depth(Some(depth + 1));
+        }
         for entry in builder.build() {
             let Ok(entry) = entry else { continue };
             if !entry.file_type().is_some_and(|t| t.is_file()) || !entry.path().starts_with(target)
