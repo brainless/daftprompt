@@ -22,6 +22,23 @@ const LOCKFILES: &[(&str, &str)] = &[
 ];
 
 impl LanguageSupport for TypeScript {
+    fn context_suggestions(&self, files: &dyn ProjectFiles) -> Vec<super::ContextSuggestion> {
+        scan::context_suggestions(
+            files,
+            "{package.json,tsconfig*.json,pnpm-workspace.yaml,turbo.json,nx.json}",
+            "{index.ts,index.tsx,main.ts,main.tsx,layout.tsx,page.tsx,App.tsx}",
+            &[
+                "src",
+                "app",
+                "pages",
+                "src/app",
+                "src/pages",
+                "test",
+                "tests",
+            ],
+        )
+    }
+
     fn id(&self) -> LanguageId {
         LanguageId::TypeScript
     }

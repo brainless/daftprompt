@@ -85,7 +85,7 @@ impl<M: ChroniclerModel> Chronicler<M> {
     /// task. Each attempt then runs the model with a fresh toolbox. Invalid
     /// output (a bad schema, no submission, a turn-limit overrun, an unseen or
     /// ambiguous commit citation, or a bad marker) consumes the attempt
-    /// budget, and each retry starts from scratch without feedback. A provider
+    /// budget, and each retry gets the rejection reason and fresh tools. A provider
     /// error or an attempt timeout (which covers the whole tool loop) is
     /// returned immediately. A partial result is never returned.
     ///
@@ -102,6 +102,7 @@ impl<M: ChroniclerModel> Chronicler<M> {
 
         let started_at = support::now();
         let run_id = support::new_id("run");
+        let log = crate::agent_log::AgentLog::new("chronicler", &run_id);
         let limits = RunLimits {
             max_turns: self.config.max_agent_turns,
             max_attempts: self.config.max_attempts,
@@ -111,10 +112,12 @@ impl<M: ChroniclerModel> Chronicler<M> {
             limits,
             &prompt,
             || {
-                Arc::new(ChroniclerTools::new(
+                let tools = Arc::new(ChroniclerTools::new(
                     history.clone(),
                     self.config.tools.clone(),
-                ))
+                ));
+                tools.recorder().set_log(log.clone());
+                tools
             },
             |input| self.model.brief(input),
             |extraction, tools| validate::validate(extraction, tools.recorder(), &self.config),
@@ -147,10 +150,12 @@ impl<M: ChroniclerModel> Chronicler<M> {
         check_request(&request, &self.config)?;
         let started_at = support::now();
         let run_id = support::new_id("run");
+        let log = crate::agent_log::AgentLog::new("chronicler", &run_id);
         let tools = Arc::new(ChroniclerTools::new(
             (self.history)(scope),
             self.config.tools.clone(),
         ));
+        tools.recorder().set_log(log.clone());
         let reader = tools.clone();
         let count = self
             .config
@@ -175,7 +180,10 @@ impl<M: ChroniclerModel> Chronicler<M> {
                 timeout: self.config.timeout,
             },
             &prompt,
-            || tools.clone(),
+            || {
+                tools.recorder().set_log(log.clone());
+                tools.clone()
+            },
             |input| {
                 Box::pin(async move {
                     let summary = self.model.summarize(input.prompt).await?;

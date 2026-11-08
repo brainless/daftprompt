@@ -42,6 +42,12 @@ pub trait LanguageSupport: Send + Sync {
     /// Root-relative manifests and similar files worth reading first.
     fn key_files(&self, detection: &LanguageDetection) -> Vec<String>;
 
+    /// Ordered, existing files and directories to supply before a model call.
+    /// Implementations should discover paths through the protected file backend.
+    fn context_suggestions(&self, _files: &dyn ProjectFiles) -> Vec<ContextSuggestion> {
+        Vec::new()
+    }
+
     /// The commands the project's manifests support, parsed deterministically
     /// from the files `detection` found. Malformed manifests yield fewer (or
     /// no) candidates, never an error.
@@ -50,6 +56,13 @@ pub trait LanguageSupport: Send + Sync {
         files: &dyn ProjectFiles,
         detection: &LanguageDetection,
     ) -> Vec<CommandCandidate>;
+}
+
+/// One initial context request. Listings provide orientation, not citation lines.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ContextSuggestion {
+    Read(String),
+    List(String),
 }
 
 /// A command the project's manifests support, found by Rust.

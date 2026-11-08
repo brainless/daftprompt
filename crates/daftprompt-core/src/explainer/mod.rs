@@ -166,6 +166,7 @@ impl<M: ExplainerModel> Explainer<M> {
 
         let started_at = support::now();
         let run_id = support::new_id("run");
+        let log = crate::agent_log::AgentLog::new("explainer", &run_id);
         let max_attempts = self.config.effective_max_attempts();
         let mut last_invalid = "no attempt ran".to_owned();
 
@@ -176,14 +177,26 @@ impl<M: ExplainerModel> Explainer<M> {
                     self.config.tools.clone(),
                 ))
             });
+            if let Some(toolbox) = &toolbox {
+                toolbox
+                    .recorder()
+                    .set_log(log.clone().with_attempt(attempt));
+            }
             let input = ExplainerInput {
                 prompt: prompt.clone(),
                 toolbox: toolbox.clone(),
                 max_turns: self.config.max_agent_turns,
             };
 
+            let attempt_started = std::time::Instant::now();
             let outcome =
                 tokio::time::timeout(self.config.timeout, self.model.explain(input)).await;
+            log.clone().with_attempt(attempt).model_outcome(
+                "model_attempt",
+                &outcome,
+                attempt_started.elapsed(),
+            );
+
             let extraction = match outcome {
                 Err(_elapsed) => {
                     return Err(ParseError::Timeout {
@@ -223,7 +236,13 @@ impl<M: ExplainerModel> Explainer<M> {
                         project_id: project_id.clone(),
                     });
                 }
-                Err(detail) => last_invalid = detail,
+                Err(detail) => {
+                    log.event(
+                        "validation_error",
+                        serde_json::json!({"attempt": attempt, "detail": detail}),
+                    );
+                    last_invalid = detail;
+                }
             }
         }
 

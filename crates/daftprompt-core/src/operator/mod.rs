@@ -89,7 +89,7 @@ impl<M: OperatorModel> Operator<M> {
     /// turn-limit overrun, a commit citation, a citation of lines no
     /// `read_file` call returned, a bad marker, or a command that breaks the
     /// rules in [`validate`](self)) consumes the attempt
-    /// budget, and each retry starts from scratch without feedback. A provider
+    /// budget, and each retry gets the rejection reason and fresh tools. A provider
     /// error or an attempt timeout (which covers the whole tool loop) is
     /// returned immediately. A partial result is never returned.
     pub async fn brief(
@@ -106,18 +106,22 @@ impl<M: OperatorModel> Operator<M> {
             &profile,
             &candidates,
             self.config.max_commands,
+            self.config.max_citations,
+            self.config.max_summary_bytes,
         );
 
+        let started_at = support::now();
+        let run_id = support::new_id("run");
+        let log = crate::agent_log::AgentLog::new("operator", &run_id);
         let preloaded = crate::project_agent::preload_common_files(
             files.clone(),
             &profile,
             self.config.tools.clone(),
+            Some(log.clone()),
         )
         .await?;
         prompt.push_str(&preloaded.context);
 
-        let started_at = support::now();
-        let run_id = support::new_id("run");
         let limits = RunLimits {
             max_turns: self.config.max_agent_turns,
             max_attempts: self.config.max_attempts,
@@ -128,6 +132,7 @@ impl<M: OperatorModel> Operator<M> {
             &prompt,
             || {
                 let tools = Arc::new(OperatorTools::new(files.clone(), self.config.tools.clone()));
+                tools.recorder().set_log(log.clone());
                 preloaded.seed(tools.recorder());
                 tools
             },

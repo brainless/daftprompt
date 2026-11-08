@@ -170,7 +170,7 @@ async fn commands_with_an_empty_body_returns_commands_and_briefing_records() {
     assert_eq!(json["project_id"], fx.project.id.as_str());
     assert_eq!(json["task"]["kind"], "default");
     assert_eq!(json["run"]["agent"], "operator");
-    assert_eq!(json["run"]["prompt_version"], "operator-v2");
+    assert_eq!(json["run"]["prompt_version"], "operator-v3");
     assert_eq!(json["profile"]["languages"][0]["language"], "rust");
 
     let commands = json["commands"].as_array().unwrap();
@@ -272,6 +272,6 @@ async fn agents_lists_the_operator_when_configured() {
     let agents = json.as_array().unwrap();
     let kinds: Vec<&str> = agents.iter().map(|a| a["kind"].as_str().unwrap()).collect();
     assert_eq!(kinds, ["scribe", "operator"]);
-    assert_eq!(agents[1]["prompt_version"], "operator-v2");
+    assert_eq!(agents[1]["prompt_version"], "operator-v3");
     assert_eq!(agents[1]["provider"], "neuralwatt");
 }

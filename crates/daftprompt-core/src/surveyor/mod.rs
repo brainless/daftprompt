@@ -86,7 +86,7 @@ impl<M: SurveyorModel> Surveyor<M> {
     /// with a fresh toolbox. Invalid output (a bad schema, no submission, a
     /// turn-limit overrun, a commit citation, a citation of lines no
     /// `read_file` call returned, or a bad marker) consumes the attempt
-    /// budget, and each retry starts from scratch without feedback. A provider
+    /// budget, and each retry gets the rejection reason and fresh tools. A provider
     /// error or an attempt timeout (which covers the whole tool loop) is
     /// returned immediately. A partial result is never returned.
     pub async fn brief(
@@ -97,18 +97,25 @@ impl<M: SurveyorModel> Surveyor<M> {
         check_request(&request, &self.config)?;
         let files = (self.project)(scope)?;
         let profile = languages::profile(files.as_ref());
-        let mut prompt = prompt::render_prompt(request.prompt_text(), &profile);
+        let mut prompt = prompt::render_prompt(
+            request.prompt_text(),
+            &profile,
+            self.config.max_citations,
+            self.config.max_summary_bytes,
+        );
 
+        let started_at = support::now();
+        let run_id = support::new_id("run");
+        let log = crate::agent_log::AgentLog::new("surveyor", &run_id);
         let preloaded = crate::project_agent::preload_common_files(
             files.clone(),
             &profile,
             self.config.tools.clone(),
+            Some(log.clone()),
         )
         .await?;
         prompt.push_str(&preloaded.context);
 
-        let started_at = support::now();
-        let run_id = support::new_id("run");
         let limits = RunLimits {
             max_turns: self.config.max_agent_turns,
             max_attempts: self.config.max_attempts,
@@ -119,6 +126,7 @@ impl<M: SurveyorModel> Surveyor<M> {
             &prompt,
             || {
                 let tools = Arc::new(SurveyorTools::new(files.clone(), self.config.tools.clone()));
+                tools.recorder().set_log(log.clone());
                 preloaded.seed(tools.recorder());
                 tools
             },

@@ -45,8 +45,8 @@ pub enum ValidatedCitation {
 }
 
 /// Check the summary, its markers, and every citation against the run's
-/// ledger. The error describes the first problem; it is never fed back to the
-/// model.
+/// ledger. The error describes the first problem and is included as diagnostic data
+/// when the runner retries the submission.
 pub fn validate_briefing(
     extraction: &BriefingExtraction,
     recorder: &ToolRecorder,

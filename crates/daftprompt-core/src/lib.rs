@@ -27,6 +27,7 @@
 //!   the opt-in live Scribe evaluation.
 
 pub mod access;
+pub mod agent_log;
 pub mod chronicler;
 pub mod eval;
 pub mod explainer;

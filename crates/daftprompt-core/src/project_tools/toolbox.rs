@@ -98,6 +98,7 @@ impl ProjectToolbox {
     /// Runs a tool by name with raw JSON arguments. Always returns a result
     /// for the model, records the call, and enforces the call cap.
     pub fn call(&self, name: &str, args: Value) -> ToolResponse {
+        let started = std::time::Instant::now();
         let n = self.started.fetch_add(1, Ordering::SeqCst);
         let outcome = if n >= self.config.max_tool_calls {
             Err(ToolError::CallLimit(self.config.max_tool_calls))
@@ -115,16 +116,19 @@ impl ProjectToolbox {
             Ok(out) => (out.text, false, out.truncated, out.read),
             Err(e) => (format!("error: {e}"), true, false, None),
         };
-        self.recorder.push(RecordedCall {
-            index: 0,
-            name: name.to_string(),
-            args,
-            output: text.clone(),
-            is_error,
-            truncated,
-            read,
-            commits: Vec::new(),
-        });
+        self.recorder.push_timed(
+            RecordedCall {
+                index: 0,
+                name: name.to_string(),
+                args,
+                output: text.clone(),
+                is_error,
+                truncated,
+                read,
+                commits: Vec::new(),
+            },
+            started.elapsed(),
+        );
         ToolResponse { text, is_error }
     }
 

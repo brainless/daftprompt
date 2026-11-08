@@ -473,6 +473,72 @@ The model returns plain text, wrapped in the existing briefing response with no 
 
 ### File-agent initial context
 
-`project_agent::preload` builds a bounded snapshot for Surveyor and Operator on a blocking worker: shallow root/src/docs listings (50 paths each), then up to six common root documents selected from the profile (100 lines and 4 KiB body budget each). Serialized initial context is capped at 32 KiB. Existing tighter file-tool limits and access protections still apply. Model tools retain their full call allowance; each attempt seeds only the snapshot's model-visible records into its fresh ledger. File excerpts are citable; listings are not line evidence. The active prompts are `surveyor-v2` and `operator-v2`, and both structured output contracts remain intact. No dependency or environment changes.
+Before the first model call, Rust supplies a bounded stack-aware snapshot on a
+blocking worker. Generic documentation and task runner files are interleaved with
+language-owned suggestions, round-robin across detected stacks. Rust contributes
+Cargo/toolchain and workspace member manifests, source entrypoints and listings;
+TypeScript contributes package/workspace/tsconfig manifests and src/app/pages;
+Python contributes pyproject/setup/requirements/manage files and package/source
+listings. Existing manifests are rediscovered with the language scanner, since
+folded workspace package names are not paths. Lockfile contents are excluded.
+
+At most 24 files and 12 shallow listings are supplied, with 50 paths per listing,
+200 lines and 8 KiB output per file, and a 96 KiB combined serialized context cap.
+Existing stricter tool limits and file protections still apply. Only records
+actually included in the context seed the citation ledger. The snapshot is reused
+across retries without consuming the model's tool budget; filenames alone are
+not citable evidence. Tools remain available for omitted or truncated context.
+Active prompt versions are `surveyor-v3` and `operator-v3`.
 
 `list_files` accepts optional `shallow: true`; the real filesystem walker prunes deeper directories and the in-memory backend applies matching depth semantics. Missing src/docs folders are ordinary listing errors in the context. Tests cover filesystem ignore/hidden rules, shallow depth, context bounds, citation coverage, additional model reads, and structured documented commands from preloaded excerpts.
+
+### Agent diagnostic file logging
+
+Set `DAFTPROMPT_AGENT_LOG_FILE=/absolute/path/agent-calls.jsonl` before starting
+an API, GUI, or evaluation process to append agent diagnostics. Unset or empty
+leaves logging disabled. The parent directory must already exist. There are no
+new dependencies. Each JSONL record has a UTC timestamp, process id, agent name,
+run id, event name, and payload. Agent runs use the same run id as their graph
+records; standalone project/git toolboxes have a separate `tool-run` id.
+
+Use `DAFTPROMPT_AGENT_LOG_LEVEL=summary|full` (default `summary`). An unknown
+value prints a warning and falls back to summary. The file variable still gates
+logging. Restart the process after changing environment settings.
+
+- `summary`: tool names, arguments (including paths, ranges and search queries),
+  call indexes, output byte/line counts, returned read ranges, commit counts,
+  error/truncation flags, and durations. Error details are limited to 1,000
+  characters. File bodies, content hashes, commit subjects, and model reply bodies
+  are omitted; structured replies retain size and available citation/command/span/
+  label counts. Scribe and Explainer emit typed model status and size/count metrics.
+- `full`: includes original tool output and model output alongside diagnostics.
+
+Each record includes its level and attempt. Preload calls have a null attempt;
+model tool calls carry the attempt number. Ledger replay is not logged again.
+Tool `duration_ms` measures execution before logging; model attempt durations
+include model/tool rounds but exclude validation. A `submitted` status means the
+model returned output, not that validation succeeded: check `validation_error`
+events for rejections. The full citation ledger is unchanged at both levels.
+
+```sh
+export DAFTPROMPT_AGENT_LOG_FILE=/tmp/daftprompt-agents.jsonl
+export DAFTPROMPT_AGENT_LOG_LEVEL=summary
+```
+
+Find repeated calls within a run (including preloads and retries):
+
+```sh
+jq -s '[.[] | select(.event == "tool_call")] | group_by([.run_id, .payload.name, .payload.args]) | map(select(length > 1) | {run_id: .[0].run_id, tool: .[0].payload.name, args: .[0].payload.args, count: length})' /tmp/daftprompt-agents.jsonl
+```
+
+Inspect truncated or failed calls:
+
+```sh
+jq 'select(.event == "tool_call" and (.payload.truncated or .payload.is_error)) | {agent, run_id, attempt, payload}' /tmp/daftprompt-agents.jsonl
+```
+
+Writes append without truncating existing data. A process-wide lock keeps lines
+intact between concurrent agents in one process. Use a separate destination for
+each process if running multiple processes. An append failure prints a diagnostic
+to stderr and leaves agent execution running. Full logs contain source text and model output; summary logs still contain paths,
+queries and error details. No rotation or general-purpose redaction is performed.

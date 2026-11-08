@@ -115,6 +115,14 @@ The active Chronicler summary path is an exception to the tool-submission record
 
 Surveyor and Operator also record Rust-initiated preload reads and shallow listings in the run ledger. Preloaded file excerpts carry the same hashes and exact shown line ranges as later `read_file` results; the model may cite them without rereading. Listings carry no read ranges and cannot support line citations. Retries seed a fresh ledger with the same preload snapshot, then add only that attempt's model tool calls. No new schema fields are introduced.
 
+Surveyor and Operator receive a bounded, stack-aware initial file snapshot before
+using model tools: documentation, task runner files, manifests, source entrypoints,
+and shallow listings, interleaved across languages. The snapshot is at most
+96 KiB (24 reads, 12 listings; excerpts at most 200 lines/8 KiB), trading a larger
+initial prompt for fewer discovery round trips. Existing stricter tool limits
+apply. Only visible excerpts establish citable lines; the same snapshot and
+ledger are reused for retries. This adds no storage records or schema changes.
+
 The commit hash is a reference into the project's git repository, not a copy: nothing from the commit is stored in a payload. The cited commits must have been returned by a git tool in the same run (the `ToolRecorder` ledger records the hashes each call returned). Briefing results are in memory only. A Surveyor result also carries the `ProjectProfile` (detected languages and key files, computed by Rust) as `profile`; it is not a graph record and is not persisted.
 
 The Operator's commands are structured results, not graph nodes (`CommandsResult.commands`, each `ProjectCommand` with `origin` `detected` or `documented`). Each points, through `citation_indexes`, at the summary node's file citation contexts that justify it. For a detected command Rust appends a context for the candidate's manifest lines after the model's citations (the same `path`, `content_hash` and whole-line range as any file citation). A later `project_command` table may persist commands; there is no table or schema change in this task.

@@ -72,7 +72,13 @@ Implemented scope is stateless and targets extracted spans only. Later work: cla
 
 Chronicler's active history briefing preloads the latest commits in Rust (configurable, default 10) and asks the model for a plain-text summary without tools. Custom prompts use the same supplied history. The earlier tool-enabled implementation remains available in core but is unused by the API. Responses retain the briefing envelope and read provenance, with no model citations or submission-tool record.
 
-Surveyor and Operator receive bounded contents of common root documentation (README, DEVELOP, CONTRIBUTING, ARCHITECTURE, AGENTS.md, CLAUDE.md) plus shallow file listings of the root, `src/`, and `docs/` before their first model call. They retain `list_files`, `search`, and `read_file` for additional context. Both retain their citation-bearing output contracts; Operator retains structured commands for the GUI. Preloaded excerpts use the same read protections and citation validation as tool results.
+Surveyor and Operator receive a bounded, stack-aware initial file snapshot before
+using model tools: documentation, task runner files, manifests, source entrypoints,
+and shallow listings, interleaved across languages. The snapshot is at most
+96 KiB (24 reads, 12 listings; excerpts at most 200 lines/8 KiB), trading a larger
+initial prompt for fewer discovery round trips. Existing stricter tool limits
+apply. Only visible excerpts establish citable lines; the same snapshot and
+ledger are reused for retries. This adds no storage records or schema changes.
 
 ## Projects and storage
 

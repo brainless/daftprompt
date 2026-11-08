@@ -6,10 +6,10 @@ use crate::languages::CommandCandidate;
 use crate::surveyor::prompt::{render_profile, short};
 
 /// Identifier of the prompt revision recorded on every Operator run.
-pub const PROMPT_VERSION: &str = "operator-v2";
+pub const PROMPT_VERSION: &str = "operator-v3";
 
 /// The complete system instructions for Operator, included at compile time.
-pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/operator-v2.md");
+pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/operator-v3.md");
 
 /// The task of a run without a user prompt.
 pub(crate) const DEFAULT_TASK: &str = "List the commands this project supports: how to set it \
@@ -22,6 +22,8 @@ pub(crate) fn render_prompt(
     profile: &ProjectProfile,
     candidates: &[CommandCandidate],
     max_commands: usize,
+    max_citations: usize,
+    max_summary_bytes: usize,
 ) -> String {
     let task = match user_prompt {
         None => format!("## Task\n\n{DEFAULT_TASK}\n"),
@@ -33,7 +35,7 @@ pub(crate) fn render_prompt(
         ),
     };
     format!(
-        "{task}\nOffer at most {max_commands} commands.\n\n{}\n{}\n## Tools\n\n`list_files`, \
+        "{task}\n## Output limits\n\nOffer at most {max_commands} commands. Submit at most {max_citations} citations and a summary of at most {max_summary_bytes} UTF-8 bytes. Select the most useful evidence; reading a file does not require citing it. Keep citation markers and command citation indexes consistent with the submitted citation list.\n\n{}\n{}\n## Tools\n\n`list_files`, \
          `search` and `read_file` read the project folder. Paths are relative to the project \
          root. Nothing can be run.\n",
         render_profile(profile),
@@ -88,8 +90,8 @@ mod tests {
 
     #[test]
     fn prompt_version_matches_the_file() {
-        assert_eq!(PROMPT_VERSION, "operator-v2");
-        assert!(SYSTEM_PROMPT.starts_with("# Operator v2"));
+        assert_eq!(PROMPT_VERSION, "operator-v3");
+        assert!(SYSTEM_PROMPT.starts_with("# Operator v3"));
     }
 
     #[test]
@@ -136,10 +138,12 @@ mod tests {
     #[test]
     fn a_user_prompt_replaces_the_default_task() {
         let profile = ProjectProfile::default();
-        let default = render_prompt(None, &profile, &[], 12);
+        let default = render_prompt(None, &profile, &[], 12, 7, 2048);
         assert!(default.contains(DEFAULT_TASK));
         assert!(default.contains("at most 12 commands"));
-        let asked = render_prompt(Some("how do I test?"), &profile, &[], 12);
+        assert!(default.contains("at most 7 citations"));
+        assert!(default.contains("at most 2048 UTF-8 bytes"));
+        let asked = render_prompt(Some("how do I test?"), &profile, &[], 12, 7, 2048);
         assert!(asked.contains("<user_prompt>\nhow do I test?\n</user_prompt>"));
         assert!(!asked.contains(DEFAULT_TASK));
     }

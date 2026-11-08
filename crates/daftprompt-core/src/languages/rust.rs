@@ -11,6 +11,15 @@ use super::{CommandCandidate, LanguageSupport, ProjectFiles};
 pub(super) struct Rust;
 
 impl LanguageSupport for Rust {
+    fn context_suggestions(&self, files: &dyn ProjectFiles) -> Vec<super::ContextSuggestion> {
+        scan::context_suggestions(
+            files,
+            "{Cargo.toml,rust-toolchain.toml,rust-toolchain}",
+            "{lib.rs,main.rs}",
+            &["src", "src/bin", "examples", "tests"],
+        )
+    }
+
     fn id(&self) -> LanguageId {
         LanguageId::Rust
     }

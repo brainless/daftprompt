@@ -130,7 +130,7 @@ Validation rules:
 - File citations lie within lines read in the same run. Commit citations resolve to exactly one commit the ledger saw.
 - Every command is backed by a candidate or by at least one file citation, such as a README "how to run" section. Its `working_dir` exists inside the root.
 - Labels are short and unique. Duplicate `(working_dir, command)` pairs are rejected. The number of commands is capped (default 12).
-- Invalid output is retried within the attempt budget. This includes provider HTTP 400 responses with the structured code `output_parse_failed`; other provider errors return immediately.
+- Invalid output is retried within the attempt budget with the bounded rejection reason and a fresh toolset. Surveyor and Operator prompts include the configured citation and summary-size limits. This includes provider HTTP 400 responses with the structured code `output_parse_failed`; other provider errors return immediately.
 
 ### Records (graph alignment)
 
@@ -215,20 +215,22 @@ pub struct ProjectCommand {
 
 ## Initial file context for Surveyor and Operator
 
-Before the first model call, Rust supplies shallow file listings of root, `src/`,
-and `docs/`, followed by bounded excerpts from up to six common root documents
-(README, DEVELOP/DEVELOPMENT, CONTRIBUTING, ARCHITECTURE, AGENTS.md, CLAUDE.md).
-Each listing has at most 50 paths, each document at most 100 lines and a 4 KiB
-body budget; existing stricter tool limits still apply. The combined serialized
-preload section is capped at 32 KiB. Missing folders and read errors appear as
-bounded results, and tools remain available for omitted content.
+Before the first model call, Rust supplies a bounded stack-aware snapshot on a
+blocking worker. Generic documentation and task runner files are interleaved with
+language-owned suggestions, round-robin across detected stacks. Rust contributes
+Cargo/toolchain and workspace member manifests, source entrypoints and listings;
+TypeScript contributes package/workspace/tsconfig manifests and src/app/pages;
+Python contributes pyproject/setup/requirements/manage files and package/source
+listings. Existing manifests are rediscovered with the language scanner, since
+folded workspace package names are not paths. Lockfile contents are excluded.
 
-The shared preload runs on a blocking worker and snapshots the exact results
-once per request. Each attempt seeds its citation ledger from that snapshot,
-without consuming the model's tool-call budget. Filenames alone are not citable
-line evidence. Both agents retain all three read-only tools and their structured
-output contracts; Operator still returns commands for the GUI. Active prompt
-versions are `surveyor-v2` and `operator-v2`.
+At most 24 files and 12 shallow listings are supplied, with 50 paths per listing,
+200 lines and 8 KiB output per file, and a 96 KiB combined serialized context cap.
+Existing stricter tool limits and file protections still apply. Only records
+actually included in the context seed the citation ledger. The snapshot is reused
+across retries without consuming the model's tool budget; filenames alone are
+not citable evidence. Tools remain available for omitted or truncated context.
+Active prompt versions are `surveyor-v3` and `operator-v3`.
 
 ## Current Chronicler execution
 

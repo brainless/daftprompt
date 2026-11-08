@@ -141,6 +141,7 @@ impl<M: ExtractionModel> Scribe<M> {
 
         let started_at = support::now();
         let run_id = support::new_id("run");
+        let log = crate::agent_log::AgentLog::new("scribe", &run_id);
         let (content_type, _) = resolve_content_type(&request);
         let tree = structure(text, content_type);
         let input = ModelInput {
@@ -156,8 +157,14 @@ impl<M: ExtractionModel> Scribe<M> {
         let mut last_invalid = "no attempt ran".to_owned();
 
         for attempt in 1..=max_attempts {
+            let attempt_started = std::time::Instant::now();
             let outcome =
                 tokio::time::timeout(self.config.timeout, self.model.extract(input.clone())).await;
+            log.clone().with_attempt(attempt).model_outcome(
+                "model_attempt",
+                &outcome,
+                attempt_started.elapsed(),
+            );
 
             match outcome {
                 Err(_elapsed) => {
@@ -180,7 +187,7 @@ impl<M: ExtractionModel> Scribe<M> {
                 Ok(Ok(extraction)) => match validate::validate(text, &extraction, &tree) {
                     Ok(validated) => {
                         let (extraction, validated, followup) = self
-                            .consistency_followup(text, &tree, &input, extraction, validated)
+                            .consistency_followup(text, &tree, &input, extraction, validated, &log)
                             .await;
                         return graph::build(
                             &request,
@@ -195,6 +202,10 @@ impl<M: ExtractionModel> Scribe<M> {
                         );
                     }
                     Err(error) => {
+                        log.event(
+                            "validation_error",
+                            serde_json::json!({"attempt": attempt, "detail": error.to_string()}),
+                        );
                         last_invalid = error.to_string();
                     }
                 },
@@ -222,6 +233,7 @@ impl<M: ExtractionModel> Scribe<M> {
         input: &ModelInput,
         extraction: daftprompt_types::Extraction,
         validated: validate::ValidatedExtraction,
+        log: &crate::agent_log::AgentLog,
     ) -> (
         daftprompt_types::Extraction,
         validate::ValidatedExtraction,
@@ -237,8 +249,10 @@ impl<M: ExtractionModel> Scribe<M> {
         }
         let mut followup_input = input.clone();
         followup_input.feedback = Some(consistency::feedback(&gaps));
+        let followup_started = std::time::Instant::now();
         let outcome =
             tokio::time::timeout(self.config.timeout, self.model.extract(followup_input)).await;
+        log.model_outcome("consistency_followup", &outcome, followup_started.elapsed());
         if let Ok(Ok(second)) = outcome
             && let Ok(second_validated) = validate::validate(text, &second, tree)
         {

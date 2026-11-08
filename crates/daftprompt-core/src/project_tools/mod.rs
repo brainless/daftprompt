@@ -289,6 +289,7 @@ pub enum CommitLookupError {
 #[derive(Debug, Clone, Default)]
 pub struct ToolRecorder {
     calls: Arc<Mutex<Vec<RecordedCall>>>,
+    log: Arc<Mutex<crate::agent_log::AgentLog>>,
 }
 
 impl ToolRecorder {
@@ -296,9 +297,46 @@ impl ToolRecorder {
         Self::default()
     }
 
-    pub(crate) fn push(&self, mut call: RecordedCall) {
+    /// Attach agent and run correlation before invoking tools.
+    pub fn set_log(&self, log: crate::agent_log::AgentLog) {
+        *self.log.lock().unwrap_or_else(|e| e.into_inner()) = log;
+    }
+
+    pub fn set_attempt(&self, attempt: u32) {
+        let mut log = self.log.lock().unwrap_or_else(|e| e.into_inner());
+        *log = log.clone().with_attempt(attempt);
+    }
+
+    /// Record diagnostics associated with this tool attempt.
+    pub fn log_event(&self, kind: &str, payload: impl Serialize) {
+        self.log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .event(kind, payload);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn push(&self, call: RecordedCall) {
+        self.append(call, true, None);
+    }
+
+    pub(crate) fn seed(&self, call: RecordedCall) {
+        self.append(call, false, None);
+    }
+
+    pub(crate) fn push_timed(&self, call: RecordedCall, duration: std::time::Duration) {
+        self.append(call, true, Some(duration));
+    }
+
+    fn append(&self, mut call: RecordedCall, emit: bool, duration: Option<std::time::Duration>) {
         let mut calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
         call.index = calls.len();
+        if emit {
+            self.log
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .tool_call(&call, duration);
+        }
         calls.push(call);
     }
 

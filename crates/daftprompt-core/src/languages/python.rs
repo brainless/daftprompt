@@ -11,6 +11,15 @@ use super::{CommandCandidate, LanguageSupport, ProjectFiles};
 pub(super) struct Python;
 
 impl LanguageSupport for Python {
+    fn context_suggestions(&self, files: &dyn ProjectFiles) -> Vec<super::ContextSuggestion> {
+        scan::context_suggestions(
+            files,
+            "{pyproject.toml,setup.cfg,setup.py,requirements*.txt,manage.py,tox.ini,pytest.ini}",
+            "{__init__.py,__main__.py,main.py,app.py,asgi.py,wsgi.py}",
+            &["src", "tests"],
+        )
+    }
+
     fn id(&self) -> LanguageId {
         LanguageId::Python
     }

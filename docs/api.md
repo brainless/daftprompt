@@ -521,15 +521,22 @@ curl -sS http://127.0.0.1:8080/projects/project-18f3a2-1/profile
 
 ### Initial file context (Surveyor and Operator)
 
-Both file agents receive a bounded preload before their first model call:
+Before the first model call, Rust supplies a bounded stack-aware snapshot on a
+blocking worker. Generic documentation and task runner files are interleaved with
+language-owned suggestions, round-robin across detected stacks. Rust contributes
+Cargo/toolchain and workspace member manifests, source entrypoints and listings;
+TypeScript contributes package/workspace/tsconfig manifests and src/app/pages;
+Python contributes pyproject/setup/requirements/manage files and package/source
+listings. Existing manifests are rediscovered with the language scanner, since
+folded workspace package names are not paths. Lockfile contents are excluded.
 
-- Shallow listings of the root, `src/`, and `docs/`: at most 50 immediate file paths each, no recursive tree. Missing folders produce a notice in the initial context.
-- Contents of up to six common root documents, selected from the profile in priority order: README, developer/contributor docs, architecture, and agent instructions. Each excerpt has at most 100 lines and a 4 KiB body budget; existing stricter tool limits apply.
-- The complete serialized preload section is capped at 32 KiB, with a marker when remaining content is omitted. Hidden, ignored, binary, environment, and out-of-root files remain excluded by the existing file backend.
-
-They retain `list_files`, `search`, and `read_file` to fetch more context. `list_files` now accepts optional `shallow: true` to list only immediate files; its default remains recursive. Preload listings do not establish file contents for citations. Preload excerpts do: their exact shown ranges and hashes are recorded in the same ledger used to validate model-requested reads. The ledger includes Rust-initiated preload calls, followed by model calls and `submit`. Preloads are reused across retries and do not consume the model's tool-call allowance.
-
-The output contracts are unchanged, including Operator's structured commands. Active prompt versions are `surveyor-v2` and `operator-v2`.
+At most 24 files and 12 shallow listings are supplied, with 50 paths per listing,
+200 lines and 8 KiB output per file, and a 96 KiB combined serialized context cap.
+Existing stricter tool limits and file protections still apply. Only records
+actually included in the context seed the citation ledger. The snapshot is reused
+across retries without consuming the model's tool budget; filenames alone are
+not citable evidence. Tools remain available for omitted or truncated context.
+Active prompt versions are `surveyor-v3` and `operator-v3`.
 
 ### `POST /projects/{id}/overview` (Surveyor)
 

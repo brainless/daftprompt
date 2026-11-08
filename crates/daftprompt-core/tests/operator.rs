@@ -208,7 +208,7 @@ async fn candidate_backed_and_documented_commands_become_records() {
     assert_eq!(result.briefing.run.agent, "operator");
     assert_eq!(
         result.briefing.run.prompt_version.as_deref(),
-        Some("operator-v2")
+        Some("operator-v3")
     );
     assert_eq!(result.briefing.run.status, RunStatus::Done);
     assert!(result.briefing.profile.is_some());
@@ -279,17 +279,9 @@ async fn candidate_backed_and_documented_commands_become_records() {
         .iter()
         .map(|c| c.tool.as_str())
         .collect();
-    assert_eq!(
-        tools,
-        [
-            "list_files",
-            "list_files",
-            "list_files",
-            "read_file",
-            "read_file",
-            "submit"
-        ]
-    );
+    assert_eq!(tools.last(), Some(&"submit"));
+    assert!(tools.contains(&"list_files"));
+    assert!(tools.contains(&"read_file"));
 }
 
 #[tokio::test]
@@ -358,7 +350,7 @@ async fn an_unbacked_command_is_rejected() {
     let stub = Stub::always(
         vec![],
         extraction(
-            vec![file("Cargo.toml", 1, 1)],
+            vec![file("unread.txt", 1, 1)],
             vec![documented("site", "make site", vec![1])],
         ),
     );
@@ -606,7 +598,7 @@ async fn info_reports_the_configuration() {
     let stub = Stub::always(vec![], extraction(vec![], vec![]));
     let info = operator(&stub).info();
     assert_eq!(info.kind, "operator");
-    assert_eq!(info.prompt_version, "operator-v2");
+    assert_eq!(info.prompt_version, "operator-v3");
     assert_eq!(info.provider.as_deref(), Some("neuralwatt"));
 }
 
@@ -627,4 +619,35 @@ async fn preloaded_readme_supports_structured_documented_commands_without_model_
     assert_eq!(result.commands[0].origin, CommandOrigin::Documented);
     assert_eq!(result.commands[0].citation_indexes, [1]);
     assert_eq!(result.briefing.tool_calls.last().unwrap().tool, "submit");
+}
+
+#[tokio::test]
+async fn preloaded_manifests_support_documented_commands_without_model_reads() {
+    let stub = Stub::new(|_, input| {
+        assert!(
+            input
+                .toolset
+                .files()
+                .recorder()
+                .covers("web/package.json", 1, 1)
+        );
+        Step::Submit(
+            vec![],
+            extraction(
+                vec![file("web/package.json", 1, 1)],
+                vec![documented("web", "pnpm dev", vec![1])],
+            ),
+        )
+    });
+    let result = run(&stub).await.unwrap();
+    assert_eq!(result.commands[0].command, "pnpm dev");
+    assert_eq!(
+        result
+            .briefing
+            .tool_calls
+            .iter()
+            .filter(|c| c.tool == READ_FILE && c.input.contains("web/package.json"))
+            .count(),
+        1
+    );
 }
