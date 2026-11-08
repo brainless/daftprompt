@@ -557,6 +557,7 @@ The Surveyor is configured the same way, independently:
 | --- | --- | --- |
 | `DAFTPROMPT_SURVEYOR_PROVIDER` | `neuralwatt` | Provider recorded as `run.provider` |
 | `DAFTPROMPT_SURVEYOR_MODEL` | `glm-5.3-flash` | Model recorded as `run.model` |
+| `DAFTPROMPT_SURVEYOR_STRATEGY` | `chat` | Experimental tool strategy, `chat` or `restate`; see `docs/development.md`. `restate` returns a summary without citations and reports prompt version `surveyor-restate-v1`. Part of the cache identity |
 
 ```text
 daftprompt-api POST /projects/{id}/overview: surveyor provider neuralwatt, model glm-5.3-flash

@@ -13,6 +13,8 @@ pub const DEFAULT_MODEL: &str = crate::explainer::DEFAULT_MODEL;
 pub const PROVIDER_ENV: &str = "DAFTPROMPT_SURVEYOR_PROVIDER";
 /// Environment variable overriding the model.
 pub const MODEL_ENV: &str = "DAFTPROMPT_SURVEYOR_MODEL";
+/// Environment variable selecting the [`ToolStrategy`] (`chat` or `restate`).
+pub const STRATEGY_ENV: &str = "DAFTPROMPT_SURVEYOR_STRATEGY";
 
 /// Default model-call budget of one attempt (tool rounds plus the final call).
 pub const DEFAULT_MAX_AGENT_TURNS: usize = 12;
@@ -28,6 +30,39 @@ pub const DEFAULT_MAX_SUMMARY_BYTES: usize = 16 * 1024;
 pub const DEFAULT_MAX_PROMPT_BYTES: usize = 2 * 1024;
 /// Longest accepted author name.
 pub const MAX_AUTHOR_BYTES: usize = 200;
+
+/// How a Rig-backed Surveyor carries tool results between model calls.
+///
+/// Experimental: the two strategies are compared by measurement, so the
+/// strategy is part of the cache identity.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ToolStrategy {
+    /// One multi-turn conversation; tool results accumulate as chat messages.
+    #[default]
+    Chat,
+    /// Every model call is a fresh, stateless request: the task prompt plus
+    /// an evidence section rebuilt (and merged) from all tool results so far.
+    Restate,
+}
+
+impl ToolStrategy {
+    /// The value accepted by [`STRATEGY_ENV`] and recorded in the cache key.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Restate => "restate",
+        }
+    }
+
+    /// Parse `chat` or `restate`, ignoring case. `None` for anything else.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "chat" => Some(Self::Chat),
+            "restate" => Some(Self::Restate),
+            _ => None,
+        }
+    }
+}
 
 /// Configuration for a [`Surveyor`](super::Surveyor).
 ///
@@ -53,6 +88,8 @@ pub struct SurveyorConfig {
     pub max_prompt_bytes: usize,
     /// Caps for the file tools (calls per run, bytes per call).
     pub tools: ProjectToolConfig,
+    /// How tool results reach the model between calls (Rig models only).
+    pub strategy: ToolStrategy,
 }
 
 impl Default for SurveyorConfig {
@@ -67,6 +104,7 @@ impl Default for SurveyorConfig {
             max_summary_bytes: DEFAULT_MAX_SUMMARY_BYTES,
             max_prompt_bytes: DEFAULT_MAX_PROMPT_BYTES,
             tools: ProjectToolConfig::default(),
+            strategy: ToolStrategy::default(),
         }
     }
 }
@@ -77,9 +115,10 @@ impl SurveyorConfig {
         Self::default()
     }
 
-    /// The defaults with provider and model overridden by
-    /// `DAFTPROMPT_SURVEYOR_PROVIDER` and `DAFTPROMPT_SURVEYOR_MODEL`.
-    /// Blank values are ignored. No credential is read here.
+    /// The defaults with provider, model and tool strategy overridden by
+    /// `DAFTPROMPT_SURVEYOR_PROVIDER`, `DAFTPROMPT_SURVEYOR_MODEL` and
+    /// `DAFTPROMPT_SURVEYOR_STRATEGY`. Blank or unrecognized values are
+    /// ignored. No credential is read here.
     pub fn from_env() -> Self {
         Self::from_lookup(|name| std::env::var(name).ok())
     }
@@ -98,6 +137,9 @@ impl SurveyorConfig {
         if let Some(model) = get(MODEL_ENV) {
             config.model = Some(model);
         }
+        if let Some(strategy) = get(STRATEGY_ENV).and_then(|value| ToolStrategy::parse(&value)) {
+            config.strategy = strategy;
+        }
         config
     }
 
@@ -114,6 +156,7 @@ impl SurveyorConfig {
             "max_summary_bytes": self.max_summary_bytes,
             "max_prompt_bytes": self.max_prompt_bytes,
             "tools": self.tools.cache_settings(),
+            "strategy": self.strategy.as_str(),
         })
     }
 
@@ -172,6 +215,12 @@ impl SurveyorConfig {
         self
     }
 
+    /// Set the tool strategy.
+    pub fn with_strategy(mut self, strategy: ToolStrategy) -> Self {
+        self.strategy = strategy;
+        self
+    }
+
     /// Set the file tool caps.
     pub fn with_tool_config(mut self, tools: ProjectToolConfig) -> Self {
         self.tools = tools;
@@ -205,5 +254,28 @@ mod tests {
         assert_eq!(config.model.as_deref(), Some("glm-5.3-flash"));
         assert_eq!(PROVIDER_ENV, "DAFTPROMPT_SURVEYOR_PROVIDER");
         assert_eq!(MODEL_ENV, "DAFTPROMPT_SURVEYOR_MODEL");
+    }
+
+    #[test]
+    fn strategy_defaults_to_chat_and_parses_from_the_environment() {
+        assert_eq!(SurveyorConfig::default().strategy, ToolStrategy::Chat);
+        let with = |value: &'static str| {
+            SurveyorConfig::from_lookup(|name| (name == STRATEGY_ENV).then(|| value.to_owned()))
+                .strategy
+        };
+        assert_eq!(with(" Restate "), ToolStrategy::Restate);
+        assert_eq!(with("chat"), ToolStrategy::Chat);
+        assert_eq!(with("bogus"), ToolStrategy::Chat);
+        assert_eq!(with(" "), ToolStrategy::Chat);
+        assert_eq!(STRATEGY_ENV, "DAFTPROMPT_SURVEYOR_STRATEGY");
+    }
+
+    #[test]
+    fn strategy_is_part_of_the_cache_settings() {
+        let chat = SurveyorConfig::default().cache_settings();
+        let restate = SurveyorConfig::default()
+            .with_strategy(ToolStrategy::Restate)
+            .cache_settings();
+        assert_ne!(chat, restate);
     }
 }

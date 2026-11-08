@@ -10,7 +10,7 @@ use daftprompt_types::{
 };
 
 use super::config::SurveyorConfig;
-use super::prompt::PROMPT_VERSION;
+use super::prompt::system_prompt;
 use crate::project_agent::{BriefingBuild, PromptRecord, ValidatedCitation, build_briefing};
 use crate::project_tools::RecordedCall;
 
@@ -41,7 +41,7 @@ pub(crate) fn build(input: Built<'_>) -> Result<BriefingResult, ParseError> {
     }
     build_briefing(BriefingBuild {
         agent: "surveyor",
-        prompt_version: PROMPT_VERSION,
+        prompt_version: system_prompt(input.config.strategy).0,
         provider: input.config.provider.clone(),
         model: input.config.model.clone(),
         project_id: input.project_id,

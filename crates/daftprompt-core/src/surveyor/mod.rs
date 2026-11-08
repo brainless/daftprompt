@@ -21,6 +21,7 @@ mod config;
 mod graph;
 mod model;
 pub mod prompt;
+mod restate;
 mod validate;
 
 use std::sync::Arc;
@@ -30,10 +31,12 @@ use daftprompt_types::{AgentInfo, AgentTaskRequest, BriefingResult, ParseError};
 pub use config::{
     DEFAULT_MAX_AGENT_TURNS, DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_CITATIONS, DEFAULT_MAX_PROMPT_BYTES,
     DEFAULT_MAX_SUMMARY_BYTES, DEFAULT_MODEL, DEFAULT_PROVIDER, DEFAULT_TIMEOUT, MODEL_ENV,
-    PROVIDER_ENV, SurveyorConfig,
+    PROVIDER_ENV, STRATEGY_ENV, SurveyorConfig, ToolStrategy,
 };
 pub use model::{BoxFuture, ModelError, RigSurveyor, SurveyorInput, SurveyorModel, SurveyorTools};
-pub use prompt::{PROMPT_VERSION, SYSTEM_PROMPT};
+pub use prompt::{
+    PROMPT_VERSION, RESTATE_PROMPT_VERSION, RESTATE_SYSTEM_PROMPT, SYSTEM_PROMPT, system_prompt,
+};
 
 use crate::access::ProjectScope;
 use crate::languages;
@@ -115,6 +118,7 @@ impl<M: SurveyorModel> Surveyor<M> {
         let mut prompt = prompt::render_prompt(
             request.prompt_text(),
             &profile,
+            self.config.strategy,
             self.config.max_citations,
             self.config.max_summary_bytes,
         );
@@ -199,7 +203,7 @@ impl<M: SurveyorModel> Surveyor<M> {
             "surveyor",
             &settings.provider,
             &settings.model,
-            &[(PROMPT_VERSION, SYSTEM_PROMPT)],
+            &[prompt::system_prompt(self.config.strategy)],
             self.config.cache_settings(),
         )
     }
@@ -210,7 +214,7 @@ impl<M: SurveyorModel> Surveyor<M> {
             kind: "surveyor".to_owned(),
             provider: self.config.provider.clone(),
             model: self.config.model.clone(),
-            prompt_version: PROMPT_VERSION.to_owned(),
+            prompt_version: prompt::system_prompt(self.config.strategy).0.to_owned(),
         }
     }
 }
@@ -257,7 +261,11 @@ impl Surveyor<RigSurveyor> {
     where
         M: Into<rig::DynModel<rig::operation::Completion>>,
     {
-        Self::new(config, RigSurveyor::from_model(model))
+        let strategy = config.strategy;
+        Self::new(
+            config,
+            RigSurveyor::from_model(model).with_strategy(strategy),
+        )
     }
 }
 
