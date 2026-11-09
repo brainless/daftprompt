@@ -10,7 +10,7 @@ use crate::project_tools::ToolRecorder;
 /// ledger. Only file citations are valid: each must lie within lines a
 /// `read_file` call returned in this run. Surveyor has no git tools, so a
 /// commit citation is rejected outright. The error is a description of the
-/// first problem; it is never fed back to the model.
+/// first problem; the runner includes it as diagnostic data on a retry.
 pub(crate) fn validate(
     extraction: &BriefingExtraction,
     recorder: &ToolRecorder,

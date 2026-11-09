@@ -414,6 +414,84 @@ address without your own access control.
 
 [Epic 006](../epics/006-project-briefing.md) adds read-only agents that brief the user on a registered project. Task A provides `GET /agents` and the **Chronicler**, which reads git history. Task B adds `GET /projects/{id}/profile` and the **Surveyor** (`POST /projects/{id}/overview`). Task C adds the **Operator** (`POST /projects/{id}/commands`), which lists the commands the project supports. Commands are discovered, never run.
 
+Each successful history, overview, or commands run for a registered project is
+also appended to the SQLite `project_agent_response` table (see
+[data-model](data-model.md)); failed runs write nothing. If the finished run
+cannot be written, the request fails with `500 internal_error` naming the run id
+and no result is returned.
+
+**Reuse ([Epic 007](../epics/007-project-paths-and-agent-storage.md), Task C1).**
+Only the Chronicler's responses are served from storage so far. A default-task
+history request without `"refresh": true`, whose granted scope is the whole
+registered path, first looks for a stored response of the same project, agent,
+request and configuration at the same full `HEAD` commit and repository-relative
+subpath: the requested path's own responses first, then other paths of that
+project, newest first, at most three candidates. Each candidate is verified
+against the *requested* path (the source path's folder is never read): the
+recorded `git_log` call is repeated with the same arguments and limits and its
+output hash must match, and `HEAD` and subpath must be unchanged before and
+after the check. A working tree with uncommitted changes does not matter to
+this history-only agent. A verified hit calls no model, creates no run, and
+inserts no row; the original result is returned with its original run ids. Any
+unknown input (not a repository, unborn `HEAD`, no `git`, a probe error or
+timeout, an unusable stored row, a failed check) is a miss and the agent runs;
+hit and miss reasons are logged to stderr without source text. Custom prompts,
+`refresh: true`, and a policy-narrowed scope always run fresh.
+
+Overview (Surveyor) and commands (Operator) requests use the same lookup with a
+stricter check, because their output depends on the working tree. A dirty
+checkout does not block capture or reuse; equivalence comes from replaying the
+recorded observations. Against the requested path only: the project profile is
+recomputed and compared; the common-file preload is rerun and its complete ledger compared with
+the saved fingerprint (so a newly selected file, such as a new ignored document,
+is a miss); for Operator the command candidates, their manifests, and the stored
+working directories are recomputed and compared; and the model's own
+`list_files`, `search`, and `read_file` calls are replayed under their original
+limits and their results (errors and truncation included, plus each read file's
+whole-file hash) compared. Cited-line hashes alone never decide a hit. The
+`submit` call is not replayed, no discovered command is ever executed, and no
+model is called; an observation that was not completely recorded makes the
+response a miss. A hit returns the stored commands with their citation indexes
+and working directories unchanged, interpreted against the requested path.
+
+The history, overview, and commands bodies accept `"refresh": true` (default
+`false`): it skips the lookup but the new result is still stored.
+
+**Delivery metadata.** These three routes return the result with two extra
+top-level fields (`Delivered<T>`); every existing field stays top level,
+including the `BriefingResult` fields flattened into a `CommandsResult`.
+
+```json
+{
+  "...every BriefingResult / CommandsResult field...": "...",
+  "project_path_id": "path-...",
+  "cache": {
+    "requested_path_id": "path-...",
+    "source_path_id": "path-...",
+    "response_id": "response-...",
+    "captured_at": "2026-11-08T10:00:00Z",
+    "kind": "fresh"
+  }
+}
+```
+
+`kind` is `fresh` (a new run, stored just now), `same_path` (a verified earlier
+response of the requested path), or `other_path` (a verified response owned by
+another path of the project; `source_path_id` names it and the result keeps that
+run's provenance). `response_id` is the stored row's id, not a run id, and
+`captured_at` is when it was stored. A result that was not stored has
+`cache: null`: the unregistered `DAFTPROMPT_PROJECT_ROOT` fallback (which also
+has `project_path_id: null`, having no path record) or a service without a
+database. Clients that predate the wrapper ignore the two extra fields.
+
+The GUI (see [gui.md](gui.md#project-briefing-epic-006)) sends `project_path_id`
+for the path selected in its path selector on these routes, on `/parse` and
+`/clarify`, with `refresh` false for ordinary opens and `true` only from a
+section's Re-run control, and drops any reply whose project and path no longer
+match the selection. It shows `Reused from <path> · captured <time>` for
+`same_path` and `other_path` and nothing for `fresh`. It does not call
+`GET /projects/{id}/profile` or register paths.
+
 ### `GET /agents`
 
 Lists every configured agent as `AgentInfo[]`: `{ "kind", "provider", "model", "prompt_version" }`. `provider` and `model` are configuration (the values recorded on runs), never credentials. An agent that is not configured on this service is not listed.
@@ -426,49 +504,32 @@ curl -sS http://127.0.0.1:8080/agents
 [
   { "kind": "scribe", "provider": "openai", "model": "gpt-4o-mini", "prompt_version": "scribe-v4" },
   { "kind": "explainer", "provider": "neuralwatt", "model": "glm-5.3-flash", "prompt_version": "explainer-v1" },
-  { "kind": "chronicler", "provider": "neuralwatt", "model": "glm-5.3-flash", "prompt_version": "chronicler-v1" }
+  { "kind": "chronicler", "provider": "neuralwatt", "model": "glm-5.3-flash", "prompt_version": "chronicler-summary-v1" }
 ]
 ```
 
 ### `POST /projects/{id}/history` (Chronicler)
 
-Summarizes the project's git history. The body is an `AgentTaskRequest`; an empty body or `{}` runs the default task, **summarize recent work** (themes, notable changes, areas in progress).
+Summarizes recent history supplied by Rust. Before the model call, Rust reads the latest `DAFTPROMPT_CHRONICLER_COMMIT_COUNT` commits (default **10**, newest first). The model receives that bounded log and returns **plain text**, with no tools, JSON schema, or output-submission tool. The existing `git_log`/`git_show` agent is retained as `Chronicler::brief_with_tools`, but no API route invokes it.
 
-| field | meaning |
-| --- | --- |
-| `prompt` | Optional. Replaces the default task, for example `"what changed in auth recently?"`. Blank means absent. At most 2048 bytes (`413 oversized_input`). |
-| `author` | Optional human identity for the prompt node; absent means `unknown`. At most 200 bytes. |
+An empty body or `{}` runs the default task: summarize themes, notable changes, and areas in progress. Optional `prompt` replaces that task but uses the same supplied history; it cannot request additional history. Blank prompts mean absent; the limit is 2048 bytes. Optional `author` records the prompt author (default `unknown`, at most 200 bytes).
 
 ```sh
-# Default task
-curl -sS -X POST http://127.0.0.1:8080/projects/project-18f3a2-1/history
-
-# With a prompt
-curl -sS -X POST http://127.0.0.1:8080/projects/project-18f3a2-1/history \
+curl -sS -X POST http://127.0.0.1:8080/projects/$PROJECT_ID/history
+curl -sS -X POST http://127.0.0.1:8080/projects/$PROJECT_ID/history \
   -H 'content-type: application/json' \
-  -d '{"prompt": "what changed in auth recently?", "author": "ada"}'
+  -d '{"prompt":"What changed in auth?"}'
 ```
 
-The response is a `BriefingResult`:
+The HTTP response remains a `BriefingResult` JSON object. `summary_payload.content` contains the plain-text answer. `citations` is empty; the summary context references only its payload. `tool_calls` records the one **Rust-initiated** `git_log` read, with its output in `tool_payloads`; there is no model tool invocation or synthetic `submit` record. `run.prompt_version` is `chronicler-summary-v1`. Each request reads history afresh; retries reuse that same bounded history. Optional prompt nodes, run metadata, and `project_id` are unchanged.
 
-| field | meaning |
-| --- | --- |
-| `project_id` | The resolved project. |
-| `task` | `{ "kind": "default" }` or `{ "kind": "prompt" }`. |
-| `prompt_payload` | The prompt text; `null` for the default task. |
-| `summary_payload`, `summary_node_id` | The agent's Markdown summary and its node. `[n]` markers refer to `citations`, 1-based. |
-| `nodes`, `node_contexts` | The optional prompt node `P` (root, author = request author or `unknown`) and the summary node `S` (`parent_id` = `P`, or `null` for the default task; `author` `agent`). `S` context `seq 0` is the summary payload; `seq 1..n` are the citations. |
-| `citations` | `CitationInfo[]`. Chronicler cites commits: `{ "index", "context_id", "location": { "kind": "commit", "hash": "<full hash>", "subject": "..." } }`. |
-| `notices` | `{ "kind", "detail" }` with `kind` `not_a_git_repository`, `git_unavailable`, or `truncated`. The first two mean the folder has no readable history; this is a briefing that says so, not an error. |
-| `run`, `run_inputs`, `tool_calls`, `tool_payloads` | Run metadata (agent `chronicler`, `project_id` set), the prompt node as input, every `git_log`/`git_show` call plus `submit`, and their outputs. |
+Git reads run off the async worker. Existing git process/output caps apply, including at most 50 commits by default. The configured count is clamped to these limits; invalid or zero environment values fall back to 10. Missing git, non-repository folders, and truncation retain their notices. The model is instructed to acknowledge unavailable or insufficient history.
 
-Rust validates every citation: a `commit` citation (a hash or a prefix of at least 7 hex characters) must resolve to exactly one commit that `git_log` or `git_show` returned in the same run, and every `[n]` marker must have a citation. Invalid output is retried within the attempt budget (3), then `422 invalid_output`. Nothing is stored; each request recomputes the briefing and no labels are created.
-
-Errors are the existing `{ "kind", "detail" }` shapes. The project is resolved first, for `AgentKind::Chronicler`, so `404 not_found`, `403 forbidden` and `422 project_unavailable` are answered before any model call. After that: `400 invalid_request` (malformed body), `413 oversized_input`, `422 invalid_output`, `502 provider_error`, `504 timeout`, `500 internal_error` (including a service without a Chronicler).
+Empty or oversized summaries are invalid output and retry within the three-attempt budget. Provider HTTP 400 `output_parse_failed` also uses that budget. Exhaustion returns `422 invalid_output`. Other errors retain the existing shapes: `404 not_found`, `403 forbidden`, `422 project_unavailable`, `400 invalid_request`, `413 oversized_input`, `502 provider_error`, `504 timeout`, and `500 internal_error`.
 
 ### Git tools and their limits
 
-The Chronicler's only tools are `git_log` and `git_show` (`daftprompt_core::git_tools`). They are read-only and run `git` as a subprocess without a shell:
+The preserved, unused tool-based Chronicler path exposes `git_log` and `git_show` (`daftprompt_core::git_tools`). They are read-only and run `git` as a subprocess without a shell:
 
 - Arguments come only from validated, typed parameters: hashes are 7 to 64 hex characters, `since` is a short date expression, `path` is a root-relative path with no `..`, absolute, hidden or `.env` component, and nothing starts with `-` (or `:`).
 - Every invocation is `git -C <root> --no-pager -c core.pager=cat -c core.fsmonitor=false -c log.showSignature=false --literal-pathspecs`, with `--no-ext-diff --no-textconv --no-color`, and the environment sets `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0` and `GIT_CONFIG_NOSYSTEM=1`.
@@ -481,6 +542,7 @@ The Chronicler's only tools are `git_log` and `git_show` (`daftprompt_core::git_
 | variable | default | meaning |
 | --- | --- | --- |
 | `DAFTPROMPT_CHRONICLER_PROVIDER` | `neuralwatt` | `openai`, `neuralwatt`, `cerebras`, or `groq`; recorded as `run.provider`. Same default as the Explainer, independent of the other agents |
+| `DAFTPROMPT_CHRONICLER_COMMIT_COUNT` | `10` | Latest commits supplied by Rust; positive integer, clamped to git limits |
 | `DAFTPROMPT_CHRONICLER_MODEL` | `glm-5.3-flash` | Model identifier recorded as `run.model` |
 
 Credentials are the provider's own variables, shared with Scribe and Explainer. Startup builds the Chronicler's client too, so with the defaults `NEURALWATT_API_KEY` must be present. Startup logs its provider and model:
@@ -495,6 +557,7 @@ The Surveyor is configured the same way, independently:
 | --- | --- | --- |
 | `DAFTPROMPT_SURVEYOR_PROVIDER` | `neuralwatt` | Provider recorded as `run.provider` |
 | `DAFTPROMPT_SURVEYOR_MODEL` | `glm-5.3-flash` | Model recorded as `run.model` |
+| `DAFTPROMPT_SURVEYOR_STRATEGY` | `chat` | Experimental tool strategy, `chat` or `restate`; see `docs/development.md`. `restate` returns a summary without citations and reports prompt version `surveyor-restate-v1`. Part of the cache identity |
 
 ```text
 daftprompt-api POST /projects/{id}/overview: surveyor provider neuralwatt, model glm-5.3-flash
@@ -534,6 +597,25 @@ curl -sS http://127.0.0.1:8080/projects/project-18f3a2-1/profile
 - Each `projects[]` entry is one manifest directory (`dir` is root-relative, `""` is the root), so a monorepo lists each project with its own `package_manager` (`cargo`, `npm`, `pnpm`, `yarn`, `bun`, `uv`, `poetry`, `pip`, or `null`). Members of a declared workspace are folded into the workspace root's `packages`. `toolchain` is the Rust channel, `typescript`/`javascript`, or Python's `requires-python`. `files` is the evidence (manifests and lockfiles).
 - `key_files` are what Surveyor reads first: root README*/DEVELOP*/CONTRIBUTING*/ARCHITECTURE*, AGENTS.md, CLAUDE.md, then, in this priority order under the cap of 40: top-level docs, text files directly in `docs/`, each language's manifests (lockfiles excluded), and finally text files in nested `docs/**` folders. At most 20 files are taken from `docs/` in all.
 - Detection uses the project tools' rules: hidden, ignored and binary files are invisible (so a binary `bun.lockb` is not seen; `bun.lock` and the `packageManager` field are), vendored directories (`node_modules`, `target`, `vendor`, `dist`, `build`, virtualenvs) are skipped, manifests deeper than 4 directories are ignored, and malformed manifests still detect the language with less detail.
+
+### Initial file context (Surveyor and Operator)
+
+Before the first model call, Rust supplies a bounded stack-aware snapshot on a
+blocking worker. Generic documentation and task runner files are interleaved with
+language-owned suggestions, round-robin across detected stacks. Rust contributes
+Cargo/toolchain and workspace member manifests, source entrypoints and listings;
+TypeScript contributes package/workspace/tsconfig manifests and src/app/pages;
+Python contributes pyproject/setup/requirements/manage files and package/source
+listings. Existing manifests are rediscovered with the language scanner, since
+folded workspace package names are not paths. Lockfile contents are excluded.
+
+At most 24 files and 12 shallow listings are supplied, with 50 paths per listing,
+200 lines and 8 KiB output per file, and a 96 KiB combined serialized context cap.
+Existing stricter tool limits and file protections still apply. Only records
+actually included in the context seed the citation ledger. The snapshot is reused
+across retries without consuming the model's tool budget; filenames alone are
+not citable evidence. Tools remain available for omitted or truncated context.
+Active prompt versions are `surveyor-v3` and `operator-v3`.
 
 ### `POST /projects/{id}/overview` (Surveyor)
 
@@ -644,8 +726,8 @@ its location only; nothing inside the folder is read, written, or deleted, and
 removing a project from the registry never touches files.
 
 A request selects a project per call with `project_id` on `/parse` and
-`/clarify`; clients register a folder here first (the GUI will do this on a
-folder pick or drop). Resolution has three steps, in `daftprompt_core::access`:
+`/clarify`; clients register a folder here first (the GUI does this on a
+folder pick or drop; it attaches no further paths itself). Resolution has three steps, in `daftprompt_core::access`:
 the registry lookup, a `RootPolicy` decision for the caller (`Principal`) and
 the agent (Scribe or Explainer), and a check that the folder still exists. The
 default `LocalPolicy` allows every registered project for both agents and the
@@ -659,23 +741,43 @@ Explainer's default project.
 | --- | --- | --- |
 | `DAFTPROMPT_DB_PATH` | `<OS user data dir>/daftprompt/daftprompt.db` | SQLite file. Missing parent directories are created. On macOS: `~/Library/Application Support/daftprompt/daftprompt.db`; Linux: `$XDG_DATA_HOME/daftprompt/daftprompt.db`. A database written by a newer build is refused at startup |
 
-A project is `{ id, name, root_path, created_at, last_opened_at }`. `id` is a
-Rust-generated string (`project-<nanos hex>-<counter hex>`, the same scheme as
-other records). `root_path` is the absolute, canonicalized folder path and is
-unique. Timestamps are RFC 3339 UTC.
+A project is `{ id, name, root_path, created_at, last_opened_at, paths,
+default_path_id }`. `id` is a Rust-generated string
+(`project-<nanos hex>-<counter hex>`, the same scheme as other records). A
+project owns one or more registered local folders, `paths`, each
+`{ id, project_id, root_path, is_default, created_at, last_opened_at }` with a
+Rust-generated `path-...` id. A path's `root_path` is the absolute,
+canonicalized folder and is unique across the whole registry; exactly one path
+per project is the default (listed first), named by `default_path_id`. The
+project's `root_path` is computed from the default path for older clients; it
+is not stored or writable separately. Timestamps are RFC 3339 UTC. A folder
+that disappears stays registered; using it fails with `project_unavailable`
+and never switches to another path.
 
 | route | body | success | notes |
 | --- | --- | --- | --- |
 | `GET /projects` | none | `200` array, most recently opened first | |
 | `POST /projects` | `{ "path": "...", "name": "..."? }` | `201` project | The path must exist and be a directory; the name defaults to the folder name. If the folder is already registered the existing project is returned unchanged with `200` (the supplied name is ignored) |
-| `GET /projects/{id}` | none | `200` project | |
-| `POST /projects/{id}/open` | none | `200` project | Sets `last_opened_at` to now |
-| `PATCH /projects/{id}` | `{ "name": "..." }` | `200` project | Blank names are rejected |
-| `DELETE /projects/{id}` | none | `204` | Registry only |
+| `GET /projects/{id}` | none | `200` project | Includes `paths` and `default_path_id` |
+| `POST /projects/{id}/open` | none | `200` project | Sets `last_opened_at` to now on the project and its default path |
+| `PATCH /projects/{id}` | `{ "name"?: "...", "default_path_id"?: "..." }` | `200` project | At least one field. Blank names are rejected; the default must be a path of this project (`404` otherwise). Both apply or neither |
+| `DELETE /projects/{id}` | none | `204` | Registry only; removes its paths too |
+| `GET /projects/{id}/paths` | none | `200` array of paths, default first | |
+| `POST /projects/{id}/paths` | `{ "path": "..." }` | `201` path | The folder must exist and be a directory. Attaching a folder the project already has returns that path with `200`; a folder registered to another project is `400` |
+| `DELETE /projects/{id}/paths/{path_id}` | none; query `replacement_default_path_id`? | `200` updated project | Registry only. Removing the default path requires the replacement, another path of the project, which becomes the default; removing the only path is `400` (delete the project instead). An unknown path id, or one owned by another project, is `404` |
+
+`project_path_id` is optional wherever a project is named. It is a body field
+on `POST /parse`, `POST /clarify`, and the history, overview, and commands
+routes (which also require their `project_id` or URL id), and a query parameter
+on `GET /projects/{id}/profile`. Omitted, the persisted default path is used,
+so older bodies behave as before. An id that is unknown or belongs to another
+project is `404 not_found`; `project_path_id` without a `project_id` is `400`.
+The access policy receives the selected path, and the scope's root is that
+path's folder (a policy may narrow it, never widen it).
 
 Failures use the same `{ "kind", "detail" }` body as the other routes:
 `invalid_request` (400: bad path, blank name, malformed JSON), `not_found`
-(404: unknown id), `internal_error` (500: storage failure, or no store
+(404: unknown project or path id), `internal_error` (500: storage failure, or no store
 configured). On `/parse` and `/clarify`, `project_id` adds `not_found` (404),
 `forbidden` (403), and `project_unavailable` (422: the request is well formed
 but the registered folder cannot be used right now, which is not the client's
@@ -691,5 +793,10 @@ curl -s http://127.0.0.1:8080/projects/$ID
 curl -s -X POST http://127.0.0.1:8080/projects/$ID/open
 curl -s -X PATCH http://127.0.0.1:8080/projects/$ID \
   -H 'content-type: application/json' -d '{"name": "My app"}'
+curl -s -X POST http://127.0.0.1:8080/projects/$ID/paths \
+  -H 'content-type: application/json' -d '{"path": "/Users/me/code/my-app-2"}'
+curl -s -X PATCH http://127.0.0.1:8080/projects/$ID \
+  -H 'content-type: application/json' -d '{"default_path_id": "'$PATH_ID'"}'
+curl -s -X DELETE "http://127.0.0.1:8080/projects/$ID/paths/$PATH_ID?replacement_default_path_id=$OTHER"
 curl -s -X DELETE http://127.0.0.1:8080/projects/$ID
 ```

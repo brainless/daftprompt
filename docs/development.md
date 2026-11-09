@@ -59,7 +59,7 @@ Crates.io dependencies are declared once in the workspace `Cargo.toml`. Resolved
 - `rig` 0.43.0 with `reqwest` and `rustls` — enabled by `daftprompt-core` for `daftprompt_core::llm`, which builds the provider client from environment credentials (moved from the API in Epic 006).
 - `dotenvy` 0.15.7 — loads a local `.env` at startup of `daftprompt-api` and, as an optional dependency of the `live-eval` feature, of `evaluate-scribe`. Core's normal build does not include it.
 - `ignore` 0.4.34, `globset` 0.4.21 — core's read-only project tools (`daftprompt_core::project_tools`): `ignore::WalkBuilder` for `.gitignore`-aware, hidden-skipping, sorted traversal and `ignore::gitignore::Gitignore` for single-path checks (sources inspected before choosing); `globset` for the `glob` filters. `toml` 0.9.12 (resolved in `Cargo.lock`; declared as `toml = "0.9"`) — core's `languages` module parses `Cargo.toml`, `rust-toolchain.toml` and `pyproject.toml`; `package.json` uses `serde_json`. Malformed manifests are tolerated, never an error. `tempfile` 3.27.0 is a dev-dependency of core for filesystem tests.
-- `rusqlite` 0.41.1 with `bundled` (pulls `libsqlite3-sys` 0.39.1, which compiles SQLite from source, so no system SQLite is needed; the first build needs a C compiler) — the SQLite store in `daftprompt_core::store`. `directories` 6.0.0 — resolves the per-user data directory for the default database path (`ProjectDirs::from("", "", "daftprompt")`). Both used only by core.
+- `rusqlite` 0.41.1 with `bundled` (pulls `libsqlite3-sys` 0.39.1, which compiles SQLite from source, so no system SQLite is needed; the first build needs a C compiler) — the SQLite store in `daftprompt_core::store`. `directories` 6.0.0 — resolves the per-user data directory for the default database path (`ProjectDirs::from("", "", "daftprompt")`). Both used only by core. The `project_agent_response` table (migration 3) adds no dependency: its keys reuse `sha2` and canonical `serde_json`.
 - `ureq` 3.5.0 — GUI HTTP client.
 - `wgpu` 29.0.4, `winit` 0.30.13, `pollster` 0.4.0 — GUI host integration. These are the versions akar builds against; akar does not re-export its surface or event-loop types, so the app declares them directly. They stay out of core, types, and the API.
 - `glyphon` 0.11.0 — same text shaping version as akar's pipeline. The GUI uses it only to give the scrollable block text an explicit viewport clip; app chrome still uses akar components.
@@ -155,7 +155,7 @@ markers and may select whole blocks or smaller segment ranges.
 - `llm`: `ModelSettings { provider, model }` and `build_model(&ModelSettings) -> Result<DynModel<Completion>, LlmError>`, moved from `daftprompt-api/src/main.rs` with the same providers (`openai`, `neuralwatt`, `cerebras`, `groq`), credential variables and base URL defaults. `default_model(provider)` gives the per-provider default used by `DAFTPROMPT_API_MODEL`.
 - `git_tools`: `GitHistory` (`log(&LogQuery) -> Result<GitLog, GitError>`, `show(&ShowQuery) -> Result<GitShow, GitError>`), `SubprocessGit::new(root, &GitToolConfig)`, the in-memory `InMemoryGit`, and `GitToolbox` (`call(name, json)`, per-run call cap, `ToolRecorder` ledger, `problem()`), plus Rig adapters (`git_rig_tools`). `LogQuery`/`ShowQuery` can only be built through validating constructors. The ledger (`RecordedCall.commits`, `ToolRecorder::resolve_commit`) records the full hashes each call returned.
 - `project_agent`: the generic runner. `Toolset` (tools plus ledger), `run_attempts(limits, prompt, new_toolset, attempt, validate)` for the attempt budget, per-attempt timeout and retry on invalid output, `run_rig_agent::<T, O>(model, system_prompt, input)` for one multi-turn Rig attempt with an output tool, the shared `validate_briefing`/`build_briefing`, and the object-safe `Briefer` trait the API holds. Explainer is not migrated.
-- `chronicler`: `ChroniclerConfig` (`config.rs`), `chronicler-v1` prompt (`prompt.rs`, `prompts/chronicler-v1.md`), the `ChroniclerModel` seam and `RigChronicler` (`model.rs`), `validate.rs`, `graph.rs`, and `Chronicler::brief(AgentTaskRequest, &ProjectScope)`. `Chronicler::with_history(factory)` substitutes the git backend in tests.
+- `chronicler`: `ChroniclerConfig` (`config.rs`), `chronicler-summary-v1` active prompt and preserved `chronicler-v1` tool prompt (`prompt.rs`, `prompts/`), the `ChroniclerModel` seam and `RigChronicler` (`model.rs`), `validate.rs`, `graph.rs`, and `Chronicler::brief(AgentTaskRequest, &ProjectScope)`. `Chronicler::with_history(factory)` substitutes the git backend in tests.
 - Environment: `DAFTPROMPT_CHRONICLER_PROVIDER` and `DAFTPROMPT_CHRONICLER_MODEL` (default `neuralwatt` / `glm-5.3-flash`, the Explainer's defaults).
 - Tests: `tests/git_tools.rs` builds a temporary repository with fixed `GIT_AUTHOR_*`/`GIT_COMMITTER_*` names and dates (it skips quietly when `git` is not installed); `tests/chronicler.rs` uses a stub `ChroniclerModel` over `InMemoryGit`; `daftprompt-api/tests/history.rs` covers the endpoints. None needs credentials. Live Chronicler evaluation is not built yet.
 
@@ -166,6 +166,7 @@ Task B adds, in `daftprompt-core`:
 - `languages`: the `LanguageSupport` trait (`id`, `detect(&dyn ProjectFiles) -> Option<LanguageDetection>`, `key_files(&LanguageDetection)`), `registry()` (one line per language), and `profile(&dyn ProjectFiles)` / `profile_root(path)` returning `ProjectProfile`. `rust`, `typescript` (covers JavaScript) and `python` are one module each; `scan.rs` holds the shared marker search, vendored-directory and depth limits, and workspace-member folding. Adding a language means adding a module and one registry line. The shared types (`LanguageId`, `LanguageProject`, `LanguageDetection`, `ProjectProfile`) live in `daftprompt-types` and are re-exported from `languages`. `command_candidates` was added in Task C.
 - `surveyor`: same files as Chronicler (`SurveyorConfig`, `surveyor-v1` prompt in `prompts/surveyor-v1.md`, `SurveyorModel` seam with `RigSurveyor`, `validate.rs`, `graph.rs`) over the shared runner and briefing code. `Surveyor::with_project(factory)` substitutes the file backend in tests (for example `InMemoryProject`). Tools: `list_files`, `search`, `read_file`. File citations only.
 - Environment: `DAFTPROMPT_SURVEYOR_PROVIDER` and `DAFTPROMPT_SURVEYOR_MODEL` (default `neuralwatt` / `glm-5.3-flash`).
+- Experimental tool strategy: `DAFTPROMPT_SURVEYOR_STRATEGY` (`chat`, the default, or `restate`; `SurveyorConfig::strategy`, `ToolStrategy`) applies to Rig-backed Surveyors only and exists to measure the two against each other. `chat` is the shared multi-turn agent loop, where tool results accumulate as chat messages and the model submits a `BriefingExtraction` with file citations through Rig's `final_result` output tool. `restate` (`surveyor/restate.rs`) makes every model call a fresh, stateless request: its own system prompt (`surveyor-restate-v1`, `prompts/surveyor-restate-v1.md`) plus one user message holding the task prompt and an evidence section rebuilt from every tool result of the attempt. The evidence merges overlapping or adjacent `read_file` ranges into one block per file, merges listings into one tree, keeps search hits in a separate section, and logs calls that found nothing or failed so the model does not repeat them. Files are ordered by `(path depth, path)` and the rendering is capped at 96 KiB with an explicit truncation marker. There is no output tool: a reply without tool calls ends the run and its text is the summary, with no citations (citations may later be derived by matching the summary against the files read). The last allowed model call offers no tools. Tools still run through the attempt's `ProjectToolbox`, so the ledger and graph construction are unchanged. The strategy and its prompt are part of the cache identity, so briefings from different strategies are never reused for each other; `run.prompt_version` and `GET /agents` report the strategy's prompt version. Diagnostics add `tool_strategy`, per-turn `restate_turn` events (evidence and prompt bytes, whether tools were offered) and `final_text`.
 - Tests: `tests/languages.rs` (in-memory fixtures: Rust workspace, each JS lockfile, uv/poetry/pip, mixed monorepo, empty folder, malformed manifests, key files), `tests/surveyor.rs` (stub model), `daftprompt-api/tests/overview.rs` (profile, overview, `/agents`). None needs credentials. Live Surveyor evaluation is not built yet.
 
 ## Project briefing (Epic 006, Task C)
@@ -177,6 +178,12 @@ Task C adds, in `daftprompt-core`:
 - Environment: `DAFTPROMPT_OPERATOR_PROVIDER` and `DAFTPROMPT_OPERATOR_MODEL` (default `neuralwatt` / `glm-5.3-flash`).
 - Key-file priority (Task B fix): top-level docs, then `docs/*`, then manifests, then nested `docs/**` (20 files from `docs/` at most, 40 key files in all).
 - Tests: `tests/commands.rs` (candidates: Rust workspace and package, each JS package manager, script-kind mapping, uv, poetry, pip, Django, monorepo, workspace members, malformed manifests, evidence lines), `tests/operator.rs` (stub model: valid detected and documented commands; rejected unbacked, bad or escaping `working_dir`, edited candidates, duplicates, long or repeated labels, the cap; retry then success), `tests/languages.rs` (key-file priority), `daftprompt-api/tests/commands.rs` (200, 404, 403, 422, 500, `/agents`). None needs credentials. Live Operator evaluation (precision and recall against expected command lists) is not built yet.
+
+Stored responses (Epic 007 Task B): `tests/responses.rs` runs stub Chronicler, Surveyor, and Operator models through `BriefingService` into a temporary SQLite file (round trip after reopening, failed runs, custom prompts, the unregistered fallback, a failed write, `config_key` sensitivity, path-deletion cascade), unit tests in `store/responses.rs` cover lossless DTO conversion, unusable rows (unsupported version, wrong-shape JSON, hash mismatch) and ordering, and `daftprompt-api/tests/responses.rs` checks that the three briefing routes persist a row with an unchanged body and that a failed write is a `500 internal_error`. None needs credentials.
+
+Verified reuse (Epic 007 Task C1): `tests/reuse.rs` builds real temporary Git repositories, `git worktree add` worktrees, and a `--depth 1` clone (fixed author and dates, so equal trees give equal hashes) and runs a counting stub Chronicler through `BriefingService` against a temporary SQLite file. It covers a same-path hit with no model call and no new row, an other-path (worktree) hit that keeps the source path, run ids, and ownership, another project or subpath missing, a shallow history at the same HEAD and a different commit count missing, HEAD changes missing while a dirty or untracked tree still hits, non-Git and unborn folders persisting without NULL-commit matches, custom prompts and `refresh` running fresh, a narrowed scope storing `reusable = 0` and never being served, an unusable row (unsupported version) being a kept miss, a commit made during the run marking the row not reusable, the `Delivered` JSON shape, and the Git identity queries (`head_commit`, `repository_subpath`). They skip quietly without `git`. `daftprompt-api/tests/responses.rs` checks the delivery metadata on the three routes. Git identity probes use `GitToolConfig` limits (10 second timeout, byte cap). Reuse decisions and their reasons are logged to stderr as `daftprompt: <agent> reuse hit/miss ...` without any source text.
+
+File-agent reuse (Epic 007 Task C2) lives in `project_agent/reuse.rs`: `capture_files` records the profile hash, the preload ledger fingerprint, the tool limits, and the model-initiated calls (the seeded preload prefix of the accepted ledger is separated from them), and `verify_files` is the one verifier shared by Surveyor and Operator (`Briefer::verify_reuse` / `CommandsBriefer::verify_reuse`). The service checks `HEAD`/subpath identity around it; there is no clean-checkout requirement, and reuse relies on replaying recorded observations (files that change and revert during a run remain a limitation). Agents expose `brief_captured` (the result plus the recorded inputs); `brief` is unchanged. Precondition check: the recorder already stored errors and truncated outputs as comparable `output` text with flags, and every list, search, read output and citation path is root-relative, so no recorder change was needed (`every_outcome_is_recorded_with_a_root_relative_comparable_output` pins this; `capture_files` still refuses an output that shows the absolute root or a call kind other than the three file tools). `tests/reuse.rs` adds, over real temporary repositories whose tools can read files Git does not see (excluded through `.git/info/exclude`): same-path and worktree hits for both agents with no model call and preserved provenance and commands; hits despite a dirty tracked file or an untracked file the agent never observed (same path, other path, and a source captured dirty); misses for a modified tracked file the model read, an untracked file appearing in a listing, a moved HEAD, a changed profile, a new ignored document, a new ignored task file in the preload, changed bytes of a read-but-uncited file, a removed ignored input, a tool error that became a read, a read that became truncated, an ignored-but-readable input absent from a worktree, and a changed model or tool limit; custom prompts, `refresh`, and narrowed scopes running fresh; a mid-run HEAD change making the row not reusable; and unusable or input-less rows being kept misses.
 
 ## Scribe evaluation
 
@@ -338,6 +345,14 @@ and the result returns over a channel; while loading, the event loop polls on a
 rendering, and the live-run status are documented in [gui.md](gui.md). A live
 model run was not performed on 2026-10-31 because credentials were unavailable.
 
+Epic 007 Task D adds path selection to the GUI: a selector for the open project's
+registered paths (default preselected), `project_path_id` on briefing, parse and
+clarify requests, `refresh: true` only from the Re-run controls, replies stamped
+with project and path and dropped when the selection moved on, and a muted
+"Reused from ... captured ..." line for `Delivered` cache metadata. The unit
+tests need no network or credentials; the drawing code was not exercised in a
+window. No dependency was added.
+
 ## Workspace checks
 
 ```sh
@@ -460,3 +475,85 @@ Groq is also available in the API and both evaluation binaries. Use provider
 set `DAFTPROMPT_EVAL_PROVIDER=groq`; for Explainer evaluations, explicitly set both
 `DAFTPROMPT_EXPLAINER_PROVIDER=groq` and
 `DAFTPROMPT_EXPLAINER_MODEL=openai/gpt-oss-20b`. See [API setup](api.md#groq-configuration).
+
+### Briefing provider output failures
+
+The shared project-agent runner classifies HTTP 400 `error.code: output_parse_failed` as invalid model output, retrying within the existing attempt budget (three by default). It does not retry other provider failures or parse `failed_generation` as a result. Exhaustion returns `422 invalid_output` with a concise diagnostic instead of echoing the rejected generation. This handles intermittent generation failures; it does not establish or fix the underlying reason a provider rejected the output.
+
+### Preloaded Chronicler summaries
+
+The active `Chronicler::brief` reads history on `spawn_blocking`, then calls `ChroniclerModel::summarize` with the bounded log. `RigChronicler` uses a single-turn Rig agent without tools or output schema. `DAFTPROMPT_CHRONICLER_COMMIT_COUNT` defaults to 10 (positive integer; invalid/zero values fall back to 10, requests clamp to the git cap of 50). Set it in `.env` and restart the API, or run `DAFTPROMPT_CHRONICLER_COMMIT_COUNT=20 cargo run -p daftprompt-api`. No dependency changes.
+
+The model returns plain text, wrapped in the existing briefing response with no citations or synthetic submission. The read ledger preserves the Rust-initiated log input/output. Retries reuse the log; summaries must be nonempty and at most 16 KiB. The old tool implementation and prompt remain under `brief_with_tools` and `ChroniclerModel::brief`, unused by the API. The active prompt version is `chronicler-summary-v1`.
+
+### File-agent initial context
+
+Before the first model call, Rust supplies a bounded stack-aware snapshot on a
+blocking worker. Generic documentation and task runner files are interleaved with
+language-owned suggestions, round-robin across detected stacks. Rust contributes
+Cargo/toolchain and workspace member manifests, source entrypoints and listings;
+TypeScript contributes package/workspace/tsconfig manifests and src/app/pages;
+Python contributes pyproject/setup/requirements/manage files and package/source
+listings. Existing manifests are rediscovered with the language scanner, since
+folded workspace package names are not paths. Lockfile contents are excluded.
+
+At most 24 files and 12 shallow listings are supplied, with 50 paths per listing,
+200 lines and 8 KiB output per file, and a 96 KiB combined serialized context cap.
+Existing stricter tool limits and file protections still apply. Only records
+actually included in the context seed the citation ledger. The snapshot is reused
+across retries without consuming the model's tool budget; filenames alone are
+not citable evidence. Tools remain available for omitted or truncated context.
+Active prompt versions are `surveyor-v3` and `operator-v3`.
+
+`list_files` accepts optional `shallow: true`; the real filesystem walker prunes deeper directories and the in-memory backend applies matching depth semantics. Missing src/docs folders are ordinary listing errors in the context. Tests cover filesystem ignore/hidden rules, shallow depth, context bounds, citation coverage, additional model reads, and structured documented commands from preloaded excerpts.
+
+### Agent diagnostic file logging
+
+Set `DAFTPROMPT_AGENT_LOG_FILE=/absolute/path/agent-calls.jsonl` before starting
+an API, GUI, or evaluation process to append agent diagnostics. Unset or empty
+leaves logging disabled. The parent directory must already exist. There are no
+new dependencies. Each JSONL record has a UTC timestamp, process id, agent name,
+run id, event name, and payload. Agent runs use the same run id as their graph
+records; standalone project/git toolboxes have a separate `tool-run` id.
+
+Use `DAFTPROMPT_AGENT_LOG_LEVEL=summary|full` (default `summary`). An unknown
+value prints a warning and falls back to summary. The file variable still gates
+logging. Restart the process after changing environment settings.
+
+- `summary`: tool names, arguments (including paths, ranges and search queries),
+  call indexes, output byte/line counts, returned read ranges, commit counts,
+  error/truncation flags, and durations. Error details are limited to 1,000
+  characters. File bodies, content hashes, commit subjects, and model reply bodies
+  are omitted; structured replies retain size and available citation/command/span/
+  label counts. Scribe and Explainer emit typed model status and size/count metrics.
+- `full`: includes original tool output and model output alongside diagnostics.
+
+Each record includes its level and attempt. Preload calls have a null attempt;
+model tool calls carry the attempt number. Ledger replay is not logged again.
+Tool `duration_ms` measures execution before logging; model attempt durations
+include model/tool rounds but exclude validation. A `submitted` status means the
+model returned output, not that validation succeeded: check `validation_error`
+events for rejections. The full citation ledger is unchanged at both levels.
+
+```sh
+export DAFTPROMPT_AGENT_LOG_FILE=/tmp/daftprompt-agents.jsonl
+export DAFTPROMPT_AGENT_LOG_LEVEL=summary
+```
+
+Find repeated calls within a run (including preloads and retries):
+
+```sh
+jq -s '[.[] | select(.event == "tool_call")] | group_by([.run_id, .payload.name, .payload.args]) | map(select(length > 1) | {run_id: .[0].run_id, tool: .[0].payload.name, args: .[0].payload.args, count: length})' /tmp/daftprompt-agents.jsonl
+```
+
+Inspect truncated or failed calls:
+
+```sh
+jq 'select(.event == "tool_call" and (.payload.truncated or .payload.is_error)) | {agent, run_id, attempt, payload}' /tmp/daftprompt-agents.jsonl
+```
+
+Writes append without truncating existing data. A process-wide lock keeps lines
+intact between concurrent agents in one process. Use a separate destination for
+each process if running multiple processes. An append failure prints a diagnostic
+to stderr and leaves agent execution running. Full logs contain source text and model output; summary logs still contain paths,
+queries and error details. No rotation or general-purpose redaction is performed.

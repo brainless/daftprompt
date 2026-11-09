@@ -28,13 +28,18 @@
 //! is `400`. It never changes the parse result.
 //!
 //! Saved projects (named local folders) live in the SQLite store and are
-//! served by `GET/POST /projects`, `GET/PATCH/DELETE /projects/{id}`, and
-//! `POST /projects/{id}/open`. Their failures use the same `{ "kind", "detail" }`
+//! served by `GET/POST /projects`, `GET/PATCH/DELETE /projects/{id}`,
+//! `POST /projects/{id}/open`, `GET/POST /projects/{id}/paths`, and
+//! `DELETE /projects/{id}/paths/{path_id}`. A project owns one or more
+//! registered paths, one of them the default. Their failures use the same `{ "kind", "detail" }`
 //! body with the kinds `invalid_request` (400), `not_found` (404), and
 //! `internal_error` (500). See `docs/api.md`.
 //!
 //! `POST /parse` and `POST /clarify` may name a saved project with
-//! `project_id`. The service resolves it against the registry and its
+//! `project_id` and, optionally, one of its paths with `project_path_id` (the
+//! default path otherwise; the path id without a project id is `400`). The
+//! briefing routes take `project_path_id` in the body and the profile route in
+//! the query. The service resolves it against the registry and its
 //! [`RootPolicy`] for the calling [`Principal`] (always [`Principal::Local`]
 //! for now), so a client never sends a filesystem path. Failures add
 //! `not_found` (404, unknown id), `forbidden` (403, the policy refused) and
@@ -58,24 +63,27 @@ use std::error::Error as _;
 use std::sync::Arc;
 
 use axum::body::to_bytes;
-use axum::extract::Path;
 use axum::extract::{FromRequestParts, Request, State};
+use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use daftprompt_core::{
-    AccessError, AgentKind, Briefer, Clarifier, CommandsBriefer, DEFAULT_MAX_INPUT_BYTES,
-    LocalPolicy, Parser, Principal, ProjectScope, RootPolicy, Store, StoreError, resolve_project,
+    AccessError, AgentKind, Briefer, BriefingAgent, BriefingError, BriefingService, Clarifier,
+    CommandsBriefer, DEFAULT_MAX_INPUT_BYTES, LocalPolicy, Parser, Principal, ProjectScope,
+    RootPolicy, ScopeOrigin, Store, StoreError, resolve_project,
 };
 use http_body_util::LengthLimitError;
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
 pub use daftprompt_types::{
-    AgentInfo, AgentTaskRequest, BriefingResult, ClarifyRequest, ClarifyResult, CommandsResult,
-    CreateProjectRequest, ParseError, ParseRequest, ParseResult, Project, RenameProjectRequest,
+    AddProjectPathRequest, AgentInfo, AgentTaskRequest, BriefingResult, ClarifyRequest,
+    ClarifyResult, CommandsResult, CreateProjectRequest, ParseError, ParseRequest, ParseResult,
+    Project, ProjectPath, UpdateProjectRequest,
 };
 
 /// Room for JSON escaping and source metadata beyond the text itself.
@@ -222,8 +230,16 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/projects/{id}",
             get(get_project)
-                .patch(rename_project)
+                .patch(update_project)
                 .delete(delete_project),
+        )
+        .route(
+            "/projects/{id}/paths",
+            get(list_project_paths).post(add_project_path),
+        )
+        .route(
+            "/projects/{id}/paths/{path_id}",
+            axum::routing::delete(remove_project_path),
         )
         .route("/projects/{id}/open", post(open_project))
         .route("/projects/{id}/history", post(project_history))
@@ -272,6 +288,7 @@ async fn clarify(
         &principal,
         AgentKind::Explainer,
         request.project_id.as_deref(),
+        request.project_path_id.as_deref(),
     ) {
         Ok(scope) => scope,
         Err(failure) => return failure.into_response(),
@@ -309,6 +326,7 @@ async fn parse(
         &principal,
         AgentKind::Scribe,
         request.project_id.as_deref(),
+        request.project_path_id.as_deref(),
     ) {
         Ok(scope) => scope,
         Err(failure) => return failure.into_response(),
@@ -403,21 +421,33 @@ async fn project_commands(
             detail: "the Operator is not configured on this service".to_owned(),
         });
     };
-    match operator.brief(task, &scope).await {
+    let service = BriefingService::new(state.store.clone());
+    match service
+        .commands(operator.as_ref(), task, &scope, ScopeOrigin::Registered)
+        .await
+    {
         Ok(result) => Json(result).into_response(),
-        Err(error) => error_response(error),
+        Err(error) => briefing_error_response(error),
     }
 }
 
 /// `GET /projects/{id}/profile`: the deterministic `ProjectProfile` of the
 /// project folder. No model is called, so no agent needs to be configured; the
-/// project is still resolved for [`AgentKind::Surveyor`].
+/// project is still resolved for [`AgentKind::Surveyor`]. The optional
+/// `project_path_id` query parameter selects a registered path.
 async fn project_profile(
     State(state): State<AppState>,
     Caller(principal): Caller,
     Path(id): Path<String>,
+    Query(query): Query<ProfileQuery>,
 ) -> Response {
-    let scope = match resolve_scope(&state, &principal, AgentKind::Surveyor, Some(&id)) {
+    let scope = match resolve_scope(
+        &state,
+        &principal,
+        AgentKind::Surveyor,
+        Some(&id),
+        query.project_path_id.as_deref(),
+    ) {
         Ok(Some(scope)) => scope,
         Ok(None) => {
             return error_response(ParseError::Internal {
@@ -473,9 +503,28 @@ async fn briefing(
             detail: format!("{name} is not configured on this service"),
         });
     };
-    match briefer.brief(task, &scope).await {
+    let agent = match agent {
+        AgentKind::Chronicler => BriefingAgent::Chronicler,
+        AgentKind::Surveyor => BriefingAgent::Surveyor,
+        other => {
+            return error_response(ParseError::Internal {
+                detail: format!("{} is not a Briefer agent", other.as_str()),
+            });
+        }
+    };
+    let service = BriefingService::new(state.store.clone());
+    match service
+        .brief(
+            briefer.as_ref(),
+            agent,
+            task,
+            &scope,
+            ScopeOrigin::Registered,
+        )
+        .await
+    {
         Ok(result) => Json(result).into_response(),
-        Err(error) => error_response(error),
+        Err(error) => briefing_error_response(error),
     }
 }
 
@@ -516,7 +565,13 @@ async fn prepare_task(
         })));
     }
 
-    match resolve_scope(state, principal, agent, Some(id)) {
+    match resolve_scope(
+        state,
+        principal,
+        agent,
+        Some(id),
+        task.project_path_id.as_deref(),
+    ) {
         Ok(Some(scope)) => Ok((task, scope)),
         Ok(None) => Err(Box::new(error_response(ParseError::Internal {
             detail: "the project was not resolved".to_owned(),
@@ -528,6 +583,19 @@ async fn prepare_task(
 // ---------------------------------------------------------------------------
 // Projects
 // ---------------------------------------------------------------------------
+
+/// Query of `GET /projects/{id}/profile`.
+#[derive(Debug, Deserialize)]
+struct ProfileQuery {
+    project_path_id: Option<String>,
+}
+
+/// Query of `DELETE /projects/{id}/paths/{path_id}`.
+#[derive(Debug, Deserialize)]
+struct RemovePathQuery {
+    /// The path that becomes the default; required when the removed path is.
+    replacement_default_path_id: Option<String>,
+}
 
 /// A project-route failure, serialized as `{ "kind", "detail" }` like
 /// [`ParseError`].
@@ -583,14 +651,23 @@ impl From<AccessError> for ProjectFailure {
 }
 
 /// The project scope for one agent call. A request with no `project_id`
-/// needs no store and gets `None`.
+/// needs no store and gets `None`; a `project_path_id` without a project is
+/// rejected. No path id selects the project's default path.
 fn resolve_scope(
     state: &AppState,
     principal: &Principal,
     agent: AgentKind,
     project_id: Option<&str>,
+    project_path_id: Option<&str>,
 ) -> Result<Option<ProjectScope>, ProjectFailure> {
     if project_id.is_none() {
+        if project_path_id.is_some() {
+            return Err(ProjectFailure {
+                status: StatusCode::BAD_REQUEST,
+                kind: "invalid_request",
+                detail: "project_path_id requires a project_id".to_owned(),
+            });
+        }
         return Ok(None);
     }
     let store = store(state)?;
@@ -600,6 +677,7 @@ fn resolve_scope(
         principal,
         agent,
         project_id,
+        project_path_id,
     )?)
 }
 
@@ -667,13 +745,55 @@ async fn open_project(
     Ok(Json(store(&state)?.mark_project_opened(&id)?))
 }
 
-async fn rename_project(
+/// `PATCH /projects/{id}`: rename and/or choose the default path.
+async fn update_project(
     State(state): State<AppState>,
     Path(id): Path<String>,
     request: Request,
 ) -> Result<Json<Project>, ProjectFailure> {
-    let body: RenameProjectRequest = project_body(&state, request).await?;
-    Ok(Json(store(&state)?.rename_project(&id, &body.name)?))
+    let body: UpdateProjectRequest = project_body(&state, request).await?;
+    Ok(Json(store(&state)?.update_project(
+        &id,
+        body.name.as_deref(),
+        body.default_path_id.as_deref(),
+    )?))
+}
+
+async fn list_project_paths(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<ProjectPath>>, ProjectFailure> {
+    Ok(Json(store(&state)?.list_paths(&id)?))
+}
+
+/// `201` for a newly attached folder, `200` with the existing path when the
+/// project already has it. A folder owned by another project is `400`.
+async fn add_project_path(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Result<Response, ProjectFailure> {
+    let body: AddProjectPathRequest = project_body(&state, request).await?;
+    let (path, created) = store(&state)?.add_path(&id, &body.path)?;
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(path)).into_response())
+}
+
+/// `DELETE /projects/{id}/paths/{path_id}`: the updated project.
+async fn remove_project_path(
+    State(state): State<AppState>,
+    Path((id, path_id)): Path<(String, String)>,
+    Query(query): Query<RemovePathQuery>,
+) -> Result<Json<Project>, ProjectFailure> {
+    Ok(Json(store(&state)?.remove_path(
+        &id,
+        &path_id,
+        query.replacement_default_path_id.as_deref(),
+    )?))
 }
 
 async fn delete_project(
@@ -697,6 +817,17 @@ fn body_error(error: &axum::Error, limit: usize) -> ParseError {
         ParseError::InvalidRequest {
             detail: format!("the request body could not be read: {error}"),
         }
+    }
+}
+
+/// An agent failure keeps its documented status; a storage failure after a
+/// completed run is a `500 internal_error` and the result is not returned.
+fn briefing_error_response(error: BriefingError) -> Response {
+    match error {
+        BriefingError::Agent(error) => error_response(error),
+        storage @ BriefingError::Storage { .. } => error_response(ParseError::Internal {
+            detail: storage.to_string(),
+        }),
     }
 }
 

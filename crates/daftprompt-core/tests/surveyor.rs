@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 fn scope() -> ProjectScope {
     ProjectScope {
         project_id: "project-1".to_owned(),
+        project_path_id: "path-1".to_owned(),
         root: PathBuf::from("/does/not/matter"),
     }
 }
@@ -34,7 +35,8 @@ fn project() -> Arc<dyn ProjectFiles> {
                 "crates/core/Cargo.toml",
                 "[package]\nname = \"demo-core\"\n",
             )
-            .with_file("docs/guide.md", "Guide\n"),
+            .with_file("docs/guide.md", "Guide\n")
+            .with_file("custom.txt", "first\nsecond\n"),
     )
 }
 
@@ -167,10 +169,12 @@ async fn valid_file_citations_become_contexts_with_ranges_and_hashes() {
     assert_eq!(result.run.agent, "surveyor");
     assert_eq!(result.run.status, RunStatus::Done);
     assert_eq!(result.run.attempts, 1);
-    assert_eq!(result.run.prompt_version.as_deref(), Some("surveyor-v1"));
+    assert_eq!(result.run.prompt_version.as_deref(), Some("surveyor-v3"));
     assert_eq!(result.run.project_id.as_deref(), Some("project-1"));
     let tools: Vec<&str> = result.tool_calls.iter().map(|c| c.tool.as_str()).collect();
-    assert_eq!(tools, ["read_file", "read_file", "submit"]);
+    assert_eq!(tools.last(), Some(&"submit"));
+    assert!(tools.contains(&"list_files"));
+    assert!(tools.contains(&"read_file"));
     assert_eq!(stub.attempts(), 1);
 }
 
@@ -202,13 +206,13 @@ async fn the_result_and_the_prompt_include_the_computed_profile() {
 
 #[tokio::test]
 async fn lines_that_were_not_read_are_invalid() {
-    // README.md has 7 lines; only the first two are read.
+    // The custom source is not an entrypoint; only its first line is read.
     let stub = Stub::always(
         vec![(
             READ_FILE,
-            json!({"path": "README.md", "start_line": 1, "end_line": 2}),
+            json!({"path": "custom.txt", "start_line": 1, "end_line": 1}),
         )],
-        summary("Layout [1].", vec![file("README.md", 5, 6)]),
+        summary("Layout [1].", vec![file("custom.txt", 2, 2)]),
     );
     let error = run(&stub, AgentTaskRequest::default()).await.unwrap_err();
     let ParseError::InvalidOutput { detail, attempts } = error else {
@@ -220,7 +224,7 @@ async fn lines_that_were_not_read_are_invalid() {
 
     // A file that was never read at all is invalid too, as is a bad range.
     for citation in [
-        file("Cargo.toml", 1, 1),
+        file("custom.txt", 1, 1),
         file("README.md", 0, 1),
         file("README.md", 3, 2),
     ] {
@@ -266,7 +270,7 @@ async fn invalid_output_is_retried_and_only_the_accepted_attempt_is_recorded() {
         if attempt == 1 {
             Step::Submit(
                 vec![],
-                summary("Unread [1].", vec![file("README.md", 1, 1)]),
+                summary("Unread [1].", vec![file("custom.txt", 1, 1)]),
             )
         } else {
             Step::Submit(
@@ -278,7 +282,14 @@ async fn invalid_output_is_retried_and_only_the_accepted_attempt_is_recorded() {
     let result = run(&stub, AgentTaskRequest::default()).await.unwrap();
     assert_eq!(result.run.attempts, 2);
     let tools: Vec<&str> = result.tool_calls.iter().map(|c| c.tool.as_str()).collect();
-    assert_eq!(tools, ["read_file", "submit"]);
+    assert_eq!(tools.last(), Some(&"submit"));
+    assert_eq!(tools.iter().filter(|tool| **tool == "submit").count(), 1);
+    assert!(
+        result
+            .tool_payloads
+            .iter()
+            .all(|p| !p.content.contains("Unread [1]."))
+    );
 }
 
 #[tokio::test]
@@ -298,6 +309,7 @@ async fn a_custom_prompt_replaces_the_task_and_creates_the_prompt_node() {
     let request = AgentTaskRequest {
         prompt: Some("  what does it import?  ".to_owned()),
         author: Some("ada".to_owned()),
+        ..Default::default()
     };
     let result = run(&stub, request).await.unwrap();
 
@@ -325,6 +337,7 @@ async fn an_oversized_prompt_is_rejected_before_any_model_call() {
     let request = AgentTaskRequest {
         prompt: Some("x".repeat(3000)),
         author: None,
+        ..Default::default()
     };
     let error = run(&stub, request).await.unwrap_err();
     assert!(
@@ -371,11 +384,73 @@ async fn the_briefer_trait_reports_its_configuration() {
     let briefer: Arc<dyn Briefer> = Arc::new(surveyor(&stub));
     let info = briefer.info();
     assert_eq!(info.kind, "surveyor");
-    assert_eq!(info.prompt_version, "surveyor-v1");
+    assert_eq!(info.prompt_version, "surveyor-v3");
     assert_eq!(info.model.as_deref(), Some("glm-5.3-flash"));
     let result = briefer
         .brief(AgentTaskRequest::default(), &scope())
         .await
         .unwrap();
     assert_eq!(result.run.agent, "surveyor");
+}
+
+#[tokio::test]
+async fn preloaded_readme_can_be_cited_without_a_model_read_and_extra_context_uses_tools() {
+    let stub = Stub::new(|_, input| {
+        assert!(input.prompt.contains("A demo importer."));
+        assert!(input.prompt.contains("docs/guide.md"));
+        assert!(input.toolset.files().recorder().covers("README.md", 3, 3));
+        Step::Submit(
+            vec![],
+            summary(
+                "Importer in a workspace [1][2].",
+                vec![file("README.md", 3, 3), file("Cargo.toml", 1, 1)],
+            ),
+        )
+    });
+    let result = run(&stub, AgentTaskRequest::default()).await.unwrap();
+    assert_eq!(result.citations.len(), 2);
+    assert_eq!(
+        result
+            .tool_calls
+            .iter()
+            .filter(|c| c.tool == READ_FILE && c.input.contains("README.md"))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn configured_citation_limit_is_visible_and_rejection_can_be_corrected() {
+    let stub = Stub::new(|attempt, input| {
+        assert!(input.prompt.contains("at most 1 citations"));
+        assert!(input.prompt.contains("at most 2048 UTF-8 bytes"));
+        if attempt == 1 {
+            assert!(!input.prompt.contains("## Previous attempt rejected"));
+            Step::Submit(
+                read_readme(),
+                summary(
+                    "Read [1].",
+                    vec![file("README.md", 1, 1), file("README.md", 2, 2)],
+                ),
+            )
+        } else {
+            assert!(input.prompt.contains("2 citations exceed the limit of 1"));
+            assert!(input.prompt.contains("new complete submission"));
+            Step::Submit(
+                read_readme(),
+                summary("Read [1].", vec![file("README.md", 1, 1)]),
+            )
+        }
+    });
+    let agent = Surveyor::new(
+        SurveyorConfig::default().with_output_limits(1, 2048),
+        Handle(stub.clone()),
+    )
+    .with_project(|_| project());
+    let result = agent
+        .brief(AgentTaskRequest::default(), &scope())
+        .await
+        .unwrap();
+    assert_eq!(result.run.attempts, 2);
+    assert_eq!(result.citations.len(), 1);
 }

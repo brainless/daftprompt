@@ -10,8 +10,7 @@ use crate::project_tools::ToolRecorder;
 /// ledger. A commit citation must be a hash, or a prefix of at least 7 hex
 /// characters, that resolves to exactly one commit a git tool returned in this
 /// run; Chronicler has no file tools, so a file citation never validates.
-/// The error is a description of the first problem; it is never fed back to
-/// the model.
+/// The error is a description of the first problem; the runner includes it as diagnostic data on a retry.
 pub(crate) fn validate(
     extraction: &BriefingExtraction,
     recorder: &ToolRecorder,

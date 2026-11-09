@@ -130,7 +130,7 @@ Validation rules:
 - File citations lie within lines read in the same run. Commit citations resolve to exactly one commit the ledger saw.
 - Every command is backed by a candidate or by at least one file citation, such as a README "how to run" section. Its `working_dir` exists inside the root.
 - Labels are short and unique. Duplicate `(working_dir, command)` pairs are rejected. The number of commands is capped (default 12).
-- Invalid output is retried within the attempt budget, as Explainer does.
+- Invalid output is retried within the attempt budget with the bounded rejection reason and a fresh toolset. Surveyor and Operator prompts include the configured citation and summary-size limits. This includes provider HTTP 400 responses with the structured code `output_parse_failed`; other provider errors return immediately.
 
 ### Records (graph alignment)
 
@@ -212,6 +212,36 @@ pub struct ProjectCommand {
 - **Project tab:** the Chronicler and Surveyor summaries are stacked as sections, each with a title, loading or error state, rendered summary, citations and a re-run control. Briefings are not cached; they re-run whenever a project becomes current, including on launch.
 - **Footer:** a fixed footer holds one row of command buttons from `CommandsResult.commands`. Clicking a button opens a details popover with the label, command, working directory, kind, origin and cited evidence. It never runs or copies the command.
 - **Errors:** they stay inside the section they belong to and never block parsing or clarifying.
+
+## Initial file context for Surveyor and Operator
+
+Before the first model call, Rust supplies a bounded stack-aware snapshot on a
+blocking worker. Generic documentation and task runner files are interleaved with
+language-owned suggestions, round-robin across detected stacks. Rust contributes
+Cargo/toolchain and workspace member manifests, source entrypoints and listings;
+TypeScript contributes package/workspace/tsconfig manifests and src/app/pages;
+Python contributes pyproject/setup/requirements/manage files and package/source
+listings. Existing manifests are rediscovered with the language scanner, since
+folded workspace package names are not paths. Lockfile contents are excluded.
+
+At most 24 files and 12 shallow listings are supplied, with 50 paths per listing,
+200 lines and 8 KiB output per file, and a 96 KiB combined serialized context cap.
+Existing stricter tool limits and file protections still apply. Only records
+actually included in the context seed the citation ledger. The snapshot is reused
+across retries without consuming the model's tool budget; filenames alone are
+not citable evidence. Tools remain available for omitted or truncated context.
+Active prompt versions are `surveyor-v3` and `operator-v3`.
+
+## Current Chronicler execution
+
+The active history endpoint preloads the latest commits in Rust (default 10;
+`DAFTPROMPT_CHRONICLER_COMMIT_COUNT`, positive integer, capped by git limits).
+It sends that log to a single-turn plain-text summarizer with no tools or output
+schema. Custom prompts use the same supplied log. The original tool-enabled design in this epic is retained in `Chronicler::brief_with_tools` for future use, with no API
+route invoking it. The active prompt is `chronicler-summary-v1`; the unused path
+keeps `chronicler-v1`. The API still returns `BriefingResult`, with no citations
+or `submit` call; its ledger records the Rust-initiated history read. Retries reuse
+the same history and validate summary size/non-emptiness.
 
 ## Tasks
 

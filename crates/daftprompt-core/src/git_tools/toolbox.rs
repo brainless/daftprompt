@@ -113,6 +113,7 @@ impl GitToolbox {
     /// Runs a tool by name with raw JSON arguments. Always returns a result
     /// for the model, records the call, and enforces the call cap.
     pub fn call(&self, name: &str, args: Value) -> ToolResponse {
+        let started = std::time::Instant::now();
         let n = self.started.fetch_add(1, Ordering::SeqCst);
         let outcome = if n >= self.config.max_tool_calls {
             Err(GitError::InvalidArgument(format!(
@@ -133,16 +134,19 @@ impl GitToolbox {
                 (format!("error: {error}"), true, false, Vec::new())
             }
         };
-        self.recorder.push(RecordedCall {
-            index: 0,
-            name: name.to_owned(),
-            args,
-            output: text.clone(),
-            is_error,
-            truncated,
-            read: None,
-            commits,
-        });
+        self.recorder.push_timed(
+            RecordedCall {
+                index: 0,
+                name: name.to_owned(),
+                args,
+                output: text.clone(),
+                is_error,
+                truncated,
+                read: None,
+                commits,
+            },
+            started.elapsed(),
+        );
         ToolResponse { text, is_error }
     }
 

@@ -46,7 +46,9 @@ use briefing_view::{Action, Block as ViewBlock};
 use clarify::{Branches, build_branch_view, panel_blocks};
 use clipboard::{ClipboardRequest, SystemClipboard};
 use daftprompt_types::{ClarifyRequest, ClarifyResult, ParseResult};
-use projects::{DropAction, MenuAction, NoticeKind, ProjectMessage, Projects, classify_drop};
+use projects::{
+    DropAction, MenuAction, NoticeKind, ProjectMessage, Projects, Stamp, classify_drop,
+};
 use render::{
     ContentLayout, PanelLayout, build_panel, draw_content, draw_drop_frame, draw_notice,
     draw_panel_content, draw_project_menu,
@@ -123,12 +125,16 @@ fn main() {
 
 struct WorkerMessage {
     submission: u64,
+    /// The selection the request was made for.
+    stamp: Option<Stamp>,
     outcome: Result<ParseResult, ApiError>,
 }
 
 struct ClarifyMessage {
     display_id: u32,
     token: u64,
+    /// The selection the request was made for.
+    stamp: Option<Stamp>,
     outcome: Result<ClarifyResult, ApiError>,
 }
 
@@ -1534,10 +1540,18 @@ fn close_details_on_outside_input(state: &mut GuiState) {
 }
 
 fn draw_project_header(state: &mut GuiState, theme: &AkarTheme) {
+    let selected_root = state.projects.current_path_id().and_then(|id| {
+        state
+            .projects
+            .current_paths()
+            .iter()
+            .find(|path| path.id == id)
+            .map(|path| path.root_path.as_str())
+    });
     let (title, meta) = match state.projects.current() {
         Some(project) => (
             truncate_for_display(&project.name, 48),
-            projects::shorten_path(&project.root_path, 90),
+            projects::shorten_path(selected_root.unwrap_or(&project.root_path), 90),
         ),
         None => ("Project".to_owned(), "No project selected.".to_owned()),
     };
@@ -1556,14 +1570,26 @@ fn draw_project_header(state: &mut GuiState, theme: &AkarTheme) {
         line_height: Some(theme.font_size_sm * 1.5),
         ..ui_style(FontWeight::Normal)
     };
-    akar_paragraph(
-        &mut state.core,
-        &state.layout,
-        state.main_meta,
-        &meta,
-        Some(meta_style),
-        theme,
-    );
+    // With several registered paths the meta line becomes the path selector;
+    // registering paths stays API-only.
+    let chips = state.projects.path_chips();
+    if chips.is_empty() {
+        akar_paragraph(
+            &mut state.core,
+            &state.layout,
+            state.main_meta,
+            &meta,
+            Some(meta_style),
+            theme,
+        );
+    } else {
+        let rect = state.layout.rect(state.main_meta);
+        if let Some(index) = briefing_ui::draw_path_selector(&mut state.core, rect, &chips, theme)
+            && state.projects.select_path(&chips[index].path_id)
+        {
+            state.window.request_redraw();
+        }
+    }
 }
 
 /// Rebuild a cached block layout when its key changed.
@@ -1580,6 +1606,7 @@ fn ensure_blocks(
 }
 
 fn draw_project_body(state: &mut GuiState, theme: &AkarTheme) {
+    let paths = state.projects.current_paths();
     let Some(briefing) = state.briefing.briefing() else {
         draw_notice(
             &mut state.core,
@@ -1601,7 +1628,7 @@ fn draw_project_body(state: &mut GuiState, theme: &AkarTheme) {
         &mut state.project_layout,
         key,
         rect[2],
-        || briefing_view::project_blocks(briefing),
+        || briefing_view::project_blocks(briefing, paths),
         theme,
     );
     if let Some((_, layout)) = &state.project_layout {
@@ -1626,7 +1653,11 @@ fn draw_details(state: &mut GuiState, theme: &AkarTheme) {
     let Some(details) = state.briefing.details().cloned() else {
         return;
     };
-    let Some(blocks) = briefing_view::details_view(state.briefing.briefing(), &details) else {
+    let Some(blocks) = briefing_view::details_view(
+        state.briefing.briefing(),
+        &details,
+        state.projects.current_paths(),
+    ) else {
         // The command is gone (re-run or project change).
         state.briefing.close_details();
         state.window.request_redraw();
@@ -1706,10 +1737,17 @@ fn spawn_briefing(state: &GuiState, request: Request) {
     let api = state.api.clone();
     let tx = state.briefing_tx.clone();
     thread::spawn(move || {
+        let path = request.path_id.as_deref();
         let outcome = match request.section {
-            Section::History => api.history(&request.project_id).map(Reply::Summary),
-            Section::Overview => api.overview(&request.project_id).map(Reply::Summary),
-            Section::Commands => api.commands(&request.project_id).map(Reply::Commands),
+            Section::History => api
+                .history(&request.project_id, path, request.refresh)
+                .map(Reply::Summary),
+            Section::Overview => api
+                .overview(&request.project_id, path, request.refresh)
+                .map(Reply::Summary),
+            Section::Commands => api
+                .commands(&request.project_id, path, request.refresh)
+                .map(Reply::Commands),
         };
         let _ = tx.send(BriefingMessage { request, outcome });
     });
@@ -1923,19 +1961,29 @@ fn submit_clarify(state: &mut GuiState) {
         return;
     };
     let question = state.followup_text.clone();
-    // The project is read now, so a later change affects only new requests.
-    let project_id = state.projects.current_id();
-    let Some((token, request)) = state
-        .branches
-        .begin(parse, display_id, &question, project_id)
-    else {
+    // The selection is read now; a reply that arrives after it changed is
+    // dropped.
+    let stamp = state.projects.stamp();
+    let Some((token, request)) = state.branches.begin(
+        parse,
+        display_id,
+        &question,
+        stamp.as_ref().map(|s| s.project_id.as_str()),
+        stamp.as_ref().and_then(|s| s.path_id.as_deref()),
+    ) else {
         return;
     };
-    spawn_clarify(state, display_id, token, request);
+    spawn_clarify(state, display_id, token, stamp, request);
 }
 
 /// Send the request on a worker thread; the render loop only polls the channel.
-fn spawn_clarify(state: &GuiState, display_id: u32, token: u64, request: ClarifyRequest) {
+fn spawn_clarify(
+    state: &GuiState,
+    display_id: u32,
+    token: u64,
+    stamp: Option<Stamp>,
+    request: ClarifyRequest,
+) {
     let api = state.api.clone();
     let tx = state.clarify_tx.clone();
     thread::spawn(move || {
@@ -1943,6 +1991,7 @@ fn spawn_clarify(state: &GuiState, display_id: u32, token: u64, request: Clarify
         let _ = tx.send(ClarifyMessage {
             display_id,
             token,
+            stamp,
             outcome,
         });
     });
@@ -1991,13 +2040,19 @@ fn submit(state: &mut GuiState) {
     state.scroll_y = 0.0;
     reset_branches(state);
 
-    let request = build_parse_request(&state.text, state.projects.current_id());
+    let stamp = state.projects.stamp();
+    let request = build_parse_request(
+        &state.text,
+        stamp.as_ref().map(|s| s.project_id.as_str()),
+        stamp.as_ref().and_then(|s| s.path_id.as_deref()),
+    );
     let api = state.api.clone();
     let tx = state.tx.clone();
     thread::spawn(move || {
         let outcome = api.parse(&request);
         let _ = tx.send(WorkerMessage {
             submission,
+            stamp,
             outcome,
         });
     });
@@ -2014,11 +2069,12 @@ fn poll_worker(state: &mut GuiState) {
             ProjectMessage::Selected { token, outcome } => {
                 state.projects.job_finished();
                 if state.projects.finish_select(token, outcome)
-                    && let Some(id) = state.projects.current_id().map(str::to_owned)
+                    && let Some(stamp) = state.projects.stamp()
                 {
-                    // Choosing a project always re-runs its briefing, even
-                    // when it was already current: nothing is cached.
-                    let requests = state.briefing.open(&id);
+                    // Choosing a project always requests its briefing again,
+                    // even when it was already current. These are ordinary
+                    // opens, so the API may reuse a verified stored response.
+                    let requests = state.briefing.open(&stamp);
                     spawn_briefings(state, requests);
                 }
             }
@@ -2036,12 +2092,19 @@ fn poll_worker(state: &mut GuiState) {
     }
     // Launch preselection, a vanished project and "No project" all arrive as a
     // change of the current project; follow it.
-    let requests = state.briefing.sync(state.projects.current_id());
+    let requests = state.briefing.sync(state.projects.stamp().as_ref());
     spawn_briefings(state, requests);
     while let Ok(message) = state.briefing_rx.try_recv() {
         state.briefing.apply(message);
     }
     while let Ok(message) = state.rx.try_recv() {
+        if message.stamp != state.projects.stamp() {
+            // Made for another project or path: never show it.
+            if state.parse_view.cancel(message.submission) {
+                state.window.request_redraw();
+            }
+            continue;
+        }
         refresh_projects |= message
             .outcome
             .as_ref()
@@ -2063,8 +2126,14 @@ fn poll_worker(state: &mut GuiState) {
         let ClarifyMessage {
             display_id,
             token,
+            stamp,
             outcome,
         } = message;
+        if stamp != state.projects.stamp() {
+            // Made for another project or path: never show it.
+            state.branches.cancel(display_id, token);
+            continue;
+        }
         refresh_projects |= outcome
             .as_ref()
             .err()

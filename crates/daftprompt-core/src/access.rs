@@ -1,7 +1,9 @@
 //! Which project folders a caller may give an agent.
 //!
-//! Requests name a registered project by id, never a filesystem path. The
-//! server looks the project up in the [`Store`], asks a [`RootPolicy`]
+//! Requests name a registered project by id, and optionally one of its
+//! registered paths by id (the project's default path otherwise), never a
+//! filesystem path. The server looks both up in the [`Store`], asks a
+//! [`RootPolicy`]
 //! whether this [`Principal`] may use it with this [`AgentKind`], and gets
 //! back a [`ProjectScope`]: the only thing an agent is allowed to read. The
 //! module knows nothing about HTTP; the API layer supplies the principal and
@@ -14,7 +16,7 @@
 
 use std::path::PathBuf;
 
-use daftprompt_types::Project;
+use daftprompt_types::{Project, ProjectPath};
 
 use crate::store::{Store, StoreError};
 
@@ -55,7 +57,8 @@ impl AgentKind {
     }
 }
 
-/// What a policy grants: the project and the folder an agent may read.
+/// What a policy grants: the project, the registered path, and the folder an
+/// agent may read.
 ///
 /// The fields stay minimal on purpose. A future policy can add an allowed
 /// subdirectory under `root` or a tool-limit override here; agents only ever
@@ -63,7 +66,10 @@ impl AgentKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectScope {
     pub project_id: String,
-    /// The folder agents may read, as stored at registration.
+    /// The registered path this scope was resolved from.
+    pub project_path_id: String,
+    /// The folder agents may read: the path's `root_path`, or a subfolder of
+    /// it when a policy narrows the grant.
     pub root: PathBuf,
 }
 
@@ -92,14 +98,15 @@ pub enum AccessError {
 /// principal owns or was shared the project), a team rule (the principal's
 /// team may use these roots), and a per-agent rule (for example Explainer
 /// may read `docs/` only) all live in an implementation of this trait. It may
-/// narrow the returned `root`; it must never widen it beyond the project's.
+/// narrow the returned `root` below `path.root_path`; it must never widen it.
 pub trait RootPolicy: Send + Sync {
-    /// The scope granted for `project`, or the reason it is not.
+    /// The scope granted for `path` of `project`, or the reason it is not.
     fn grant(
         &self,
         principal: &Principal,
         agent: AgentKind,
         project: &Project,
+        path: &ProjectPath,
     ) -> Result<ProjectScope, AccessError>;
 }
 
@@ -113,10 +120,12 @@ impl RootPolicy for LocalPolicy {
         _principal: &Principal,
         _agent: AgentKind,
         project: &Project,
+        path: &ProjectPath,
     ) -> Result<ProjectScope, AccessError> {
         Ok(ProjectScope {
             project_id: project.id.clone(),
-            root: PathBuf::from(&project.root_path),
+            project_path_id: path.id.clone(),
+            root: PathBuf::from(&path.root_path),
         })
     }
 }
@@ -125,15 +134,18 @@ impl RootPolicy for LocalPolicy {
 ///
 /// `None` means the request names no project, and the result is `None`: the
 /// caller falls back to its server-wide default, if any. Otherwise the project
-/// must exist in `store`, `policy` must grant it, and the granted root must
-/// still be a directory (a folder deleted or moved since registration is
-/// [`AccessError::UnusableRoot`]).
+/// must exist in `store`. `project_path_id` selects one of its registered
+/// paths; `None` selects the persisted default, and an id that is unknown or
+/// belongs to another project is [`AccessError::NotFound`]. `policy` must
+/// grant that path, and the granted root must still be a directory (a folder
+/// deleted or moved since registration is [`AccessError::UnusableRoot`]).
 pub fn resolve_project(
     store: &Store,
     policy: &dyn RootPolicy,
     principal: &Principal,
     agent: AgentKind,
     project_id: Option<&str>,
+    project_path_id: Option<&str>,
 ) -> Result<Option<ProjectScope>, AccessError> {
     let Some(id) = project_id else {
         return Ok(None);
@@ -142,10 +154,21 @@ pub fn resolve_project(
         StoreError::NotFound(detail) => AccessError::NotFound(detail),
         other => AccessError::Storage(other.to_string()),
     })?;
-    let scope = policy.grant(principal, agent, &project)?;
+    let path = match project_path_id {
+        Some(path_id) => project.paths.iter().find(|path| path.id == path_id),
+        None => project.paths.iter().find(|path| path.is_default),
+    }
+    .ok_or_else(|| {
+        AccessError::NotFound(format!(
+            "project {id:?} has no path {:?}",
+            project_path_id.unwrap_or("(default)")
+        ))
+    })?;
+    let scope = policy.grant(principal, agent, &project, path)?;
     if !scope.root.is_dir() {
         return Err(AccessError::UnusableRoot(format!(
-            "the folder of project {id:?} ({}) no longer exists or is not a directory",
+            "the folder of project {id:?} path {:?} ({}) no longer exists or is not a directory",
+            path.id,
             scope.root.display()
         )));
     }
@@ -164,6 +187,7 @@ mod tests {
             _principal: &Principal,
             agent: AgentKind,
             project: &Project,
+            _path: &ProjectPath,
         ) -> Result<ProjectScope, AccessError> {
             Err(AccessError::Denied(format!(
                 "{} may not use {}",
@@ -182,9 +206,10 @@ mod tests {
             principal: &Principal,
             agent: AgentKind,
             project: &Project,
+            path: &ProjectPath,
         ) -> Result<ProjectScope, AccessError> {
             match agent {
-                AgentKind::Explainer => LocalPolicy.grant(principal, agent, project),
+                AgentKind::Explainer => LocalPolicy.grant(principal, agent, project, path),
                 _ => Err(AccessError::Denied(format!(
                     "{} is not allowed",
                     agent.as_str()
@@ -206,7 +231,7 @@ mod tests {
         agent: AgentKind,
         id: Option<&str>,
     ) -> Result<Option<ProjectScope>, AccessError> {
-        resolve_project(store, policy, &Principal::Local, agent, id)
+        resolve_project(store, policy, &Principal::Local, agent, id, None)
     }
 
     #[test]
@@ -273,6 +298,105 @@ mod tests {
         assert!(
             matches!(error, Err(AccessError::UnusableRoot(_))),
             "{error:?}"
+        );
+    }
+
+    /// Records the path it was asked about.
+    struct Recording(std::sync::Mutex<Vec<String>>);
+
+    impl RootPolicy for Recording {
+        fn grant(
+            &self,
+            principal: &Principal,
+            agent: AgentKind,
+            project: &Project,
+            path: &ProjectPath,
+        ) -> Result<ProjectScope, AccessError> {
+            self.0.lock().unwrap().push(path.id.clone());
+            LocalPolicy.grant(principal, agent, project, path)
+        }
+    }
+
+    fn resolve_path(
+        store: &Store,
+        policy: &dyn RootPolicy,
+        project_id: &str,
+        path_id: Option<&str>,
+    ) -> Result<Option<ProjectScope>, AccessError> {
+        resolve_project(
+            store,
+            policy,
+            &Principal::Local,
+            AgentKind::Surveyor,
+            Some(project_id),
+            path_id,
+        )
+    }
+
+    #[test]
+    fn the_scope_names_the_default_path_when_none_is_requested() {
+        let (store, project, _folder) = store_with_project();
+        let scope = resolve_path(&store, &LocalPolicy, &project.id, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(scope.project_path_id, project.default_path_id);
+    }
+
+    #[test]
+    fn the_policy_receives_the_selected_path() {
+        let (store, project, _folder) = store_with_project();
+        let second = tempfile::tempdir().unwrap();
+        let (added, _) = store.add_path(&project.id, second.path()).unwrap();
+        let policy = Recording(Default::default());
+
+        let scope = resolve_path(&store, &policy, &project.id, Some(&added.id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(scope.project_path_id, added.id);
+        assert_eq!(scope.root, PathBuf::from(&added.root_path));
+        resolve_path(&store, &policy, &project.id, None).unwrap();
+        assert_eq!(
+            *policy.0.lock().unwrap(),
+            [added.id.clone(), project.default_path_id.clone()]
+        );
+
+        // After changing the default, an omitted id follows it.
+        store.set_default_path(&project.id, &added.id).unwrap();
+        let scope = resolve_path(&store, &policy, &project.id, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(scope.project_path_id, added.id);
+    }
+
+    #[test]
+    fn a_wrong_or_foreign_path_id_never_reaches_the_policy() {
+        let (store, project, _folder) = store_with_project();
+        let other_folder = tempfile::tempdir().unwrap();
+        let (other, _) = store.add_project(other_folder.path(), None).unwrap();
+        let policy = Recording(Default::default());
+        for path_id in ["path-nope", other.default_path_id.as_str()] {
+            let error = resolve_path(&store, &policy, &project.id, Some(path_id));
+            assert!(matches!(error, Err(AccessError::NotFound(_))), "{error:?}");
+        }
+        assert!(policy.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_missing_secondary_path_is_unusable_without_switching() {
+        let (store, project, _folder) = store_with_project();
+        let second = tempfile::tempdir().unwrap();
+        let (added, _) = store.add_path(&project.id, second.path()).unwrap();
+        drop(second);
+        let error = resolve_path(&store, &LocalPolicy, &project.id, Some(&added.id));
+        assert!(
+            matches!(error, Err(AccessError::UnusableRoot(_))),
+            "{error:?}"
+        );
+        // The default path is still fine and still the default.
+        assert!(
+            resolve_path(&store, &LocalPolicy, &project.id, None)
+                .unwrap()
+                .is_some()
         );
     }
 }

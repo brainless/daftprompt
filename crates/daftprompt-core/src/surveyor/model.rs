@@ -16,7 +16,8 @@ use rig::operation::Completion;
 
 pub use crate::scribe::{BoxFuture, ModelError};
 
-use super::prompt::SYSTEM_PROMPT;
+use super::config::ToolStrategy;
+use super::prompt::{RESTATE_SYSTEM_PROMPT, SYSTEM_PROMPT};
 use crate::project_agent::{AttemptInput, Toolset, run_rig_agent};
 use crate::project_tools::{
     ProjectFiles, ProjectToolConfig, ProjectToolbox, ToolRecorder, rig_tools,
@@ -70,9 +71,12 @@ pub trait SurveyorModel: Send + Sync {
     fn brief(&self, input: SurveyorInput) -> BoxFuture<'_, Result<BriefingExtraction, ModelError>>;
 }
 
-/// Surveyor backed by a multi-turn Rig agent with an output tool.
+/// Surveyor backed by a Rig model with an output tool. The
+/// [`ToolStrategy`] chooses between a multi-turn agent conversation and the
+/// stateless, evidence-restating loop of [`restate`](super::restate).
 pub struct RigSurveyor {
     model: DynModel<Completion>,
+    strategy: ToolStrategy,
 }
 
 impl RigSurveyor {
@@ -84,12 +88,30 @@ impl RigSurveyor {
     {
         Self {
             model: model.into(),
+            strategy: ToolStrategy::default(),
         }
+    }
+
+    /// Choose how tool results reach the model between calls.
+    pub fn with_strategy(mut self, strategy: ToolStrategy) -> Self {
+        self.strategy = strategy;
+        self
     }
 }
 
 impl SurveyorModel for RigSurveyor {
     fn brief(&self, input: SurveyorInput) -> BoxFuture<'_, Result<BriefingExtraction, ModelError>> {
-        Box::pin(run_rig_agent(&self.model, SYSTEM_PROMPT, input))
+        input.toolset.recorder().log_event(
+            "tool_strategy",
+            serde_json::json!({"strategy": self.strategy.as_str()}),
+        );
+        match self.strategy {
+            ToolStrategy::Chat => Box::pin(run_rig_agent(&self.model, SYSTEM_PROMPT, input)),
+            ToolStrategy::Restate => Box::pin(super::restate::run_restate_on(
+                &self.model,
+                RESTATE_SYSTEM_PROMPT,
+                input,
+            )),
+        }
     }
 }

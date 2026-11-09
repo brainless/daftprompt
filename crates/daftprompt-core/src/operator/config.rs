@@ -106,6 +106,23 @@ impl OperatorConfig {
         config
     }
 
+    /// Every setting that can change a response, for the cache key. Generation
+    /// options (temperature and the like) are not configurable and use the
+    /// provider defaults, so they have nothing to record yet. Credentials are
+    /// not part of the config.
+    pub(crate) fn cache_settings(&self) -> serde_json::Value {
+        serde_json::json!({
+            "max_agent_turns": self.max_agent_turns,
+            "max_attempts": self.max_attempts,
+            "timeout_ms": self.timeout.as_millis() as u64,
+            "max_citations": self.max_citations,
+            "max_summary_bytes": self.max_summary_bytes,
+            "max_prompt_bytes": self.max_prompt_bytes,
+            "max_commands": self.max_commands,
+            "tools": self.tools.cache_settings(),
+        })
+    }
+
     /// The provider and model to build with [`build_model`](crate::llm::build_model).
     pub fn model_settings(&self) -> ModelSettings {
         ModelSettings::new(

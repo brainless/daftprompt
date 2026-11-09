@@ -6,12 +6,15 @@
 //! them concurrently on worker threads and feeds each reply back through
 //! [`BriefingState::apply`]. A reply whose project, generation or per-slot
 //! sequence no longer matches is dropped, so a late answer for a previous
-//! project (or for a section that was re-run since) never shows. Nothing is
-//! cached: every `open` starts from scratch.
+//! project or path (or for a section that was re-run since) never shows. The
+//! GUI caches nothing itself: every `open` starts from scratch, and a reply may
+//! be a stored response the API verified (its [`CacheDelivery`] is kept for
+//! display).
 
-use daftprompt_types::{BriefingResult, CommandsResult};
+use daftprompt_types::{BriefingResult, CacheDelivery, CommandsResult, Delivered};
 
 use crate::api::ApiError;
+use crate::projects::Stamp;
 
 /// One section of the briefing, each backed by one agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +59,8 @@ impl<T> Slot<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Briefing {
     pub project_id: String,
+    /// The path the briefing was requested for.
+    pub path_id: Option<String>,
     /// Increases every time a project becomes current.
     pub generation: u64,
     pub history: Slot<BriefingResult>,
@@ -63,6 +68,16 @@ pub struct Briefing {
     pub commands: Slot<CommandsResult>,
     /// The latest request number per section; older replies are ignored.
     seqs: [u64; 3],
+    /// How each ready section reached the GUI; `None` while loading or when
+    /// the API sent no metadata.
+    caches: [Option<CacheDelivery>; 3],
+}
+
+impl Briefing {
+    /// The delivery metadata of a section's current result.
+    pub fn cache(&self, section: Section) -> Option<&CacheDelivery> {
+        self.caches[section.index()].as_ref()
+    }
 }
 
 /// One request to send, stamped so its reply can be matched.
@@ -70,15 +85,19 @@ pub struct Briefing {
 pub struct Request {
     pub section: Section,
     pub project_id: String,
+    pub path_id: Option<String>,
     pub generation: u64,
     pub seq: u64,
+    /// Set only by the explicit re-run controls; an ordinary open may reuse a
+    /// stored response.
+    pub refresh: bool,
 }
 
 /// A successful reply, by agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
-    Summary(BriefingResult),
-    Commands(CommandsResult),
+    Summary(Delivered<BriefingResult>),
+    Commands(Delivered<CommandsResult>),
 }
 
 /// What a worker thread reports back.
@@ -173,17 +192,19 @@ impl BriefingState {
         })
     }
 
-    /// A project became current: switch to the Project tab, discard the old
-    /// briefing, and return the three requests to send concurrently.
-    pub fn open(&mut self, project_id: &str) -> Vec<Request> {
+    /// A project or path became current: switch to the Project tab, discard
+    /// the old briefing, and return the three requests to send concurrently.
+    pub fn open(&mut self, stamp: &Stamp) -> Vec<Request> {
         self.generation += 1;
         self.briefing = Some(Briefing {
-            project_id: project_id.to_owned(),
+            project_id: stamp.project_id.clone(),
+            path_id: stamp.path_id.clone(),
             generation: self.generation,
             history: Slot::Loading,
             overview: Slot::Loading,
             commands: Slot::Loading,
             seqs: [1; 3],
+            caches: [None, None, None],
         });
         self.tab = Tab::Project;
         self.details = None;
@@ -192,9 +213,11 @@ impl BriefingState {
             .into_iter()
             .map(|section| Request {
                 section,
-                project_id: project_id.to_owned(),
+                project_id: stamp.project_id.clone(),
+                path_id: stamp.path_id.clone(),
                 generation: self.generation,
                 seq: 1,
+                refresh: false,
             })
             .collect()
     }
@@ -207,13 +230,15 @@ impl BriefingState {
         self.revision += 1;
     }
 
-    /// Follow the project selection: open a briefing when a different project
-    /// is current, clear it when none is. Nothing happens when the briefing
-    /// already belongs to `current_id`.
-    pub fn sync(&mut self, current_id: Option<&str>) -> Vec<Request> {
-        let have = self.briefing.as_ref().map(|b| b.project_id.as_str());
-        match (current_id, have) {
-            (Some(id), have) if Some(id) != have => self.open(id),
+    /// Follow the selection: open a briefing when a different project or
+    /// path is current, clear it when none is. Nothing happens when the
+    /// briefing already belongs to `current`.
+    pub fn sync(&mut self, current: Option<&Stamp>) -> Vec<Request> {
+        let have = self.briefing.as_ref().map(|b| (&b.project_id, &b.path_id));
+        match (current, have) {
+            (Some(stamp), have) if have != Some((&stamp.project_id, &stamp.path_id)) => {
+                self.open(stamp)
+            }
             (None, Some(_)) => {
                 self.clear();
                 Vec::new()
@@ -243,23 +268,28 @@ impl BriefingState {
             }
         }
         briefing.seqs[section.index()] += 1;
+        briefing.caches[section.index()] = None;
         self.revision += 1;
         Some(Request {
             section,
             project_id: briefing.project_id.clone(),
+            path_id: briefing.path_id.clone(),
             generation: briefing.generation,
             seq: briefing.seqs[section.index()],
+            refresh: true,
         })
     }
 
     /// Apply a reply. Returns whether it was current; a reply for another
-    /// project, an older generation, or a section re-run since is dropped.
+    /// project or path, an older generation, or a section re-run since is
+    /// dropped.
     pub fn apply(&mut self, message: BriefingMessage) -> bool {
         let BriefingMessage { request, outcome } = message;
         let Some(briefing) = self.briefing.as_mut() else {
             return false;
         };
         if briefing.project_id != request.project_id
+            || briefing.path_id != request.path_id
             || briefing.generation != request.generation
             || briefing.seqs[request.section.index()] != request.seq
         {
@@ -267,14 +297,17 @@ impl BriefingState {
         }
         let mismatch = || ApiError::decode("the API answered with a different kind of result");
         match (request.section, outcome) {
-            (Section::History, Ok(Reply::Summary(result))) => {
-                briefing.history = Slot::Ready(result);
+            (Section::History, Ok(Reply::Summary(delivered))) => {
+                briefing.caches[request.section.index()] = delivered.cache;
+                briefing.history = Slot::Ready(delivered.result);
             }
-            (Section::Overview, Ok(Reply::Summary(result))) => {
-                briefing.overview = Slot::Ready(result);
+            (Section::Overview, Ok(Reply::Summary(delivered))) => {
+                briefing.caches[request.section.index()] = delivered.cache;
+                briefing.overview = Slot::Ready(delivered.result);
             }
-            (Section::Commands, Ok(Reply::Commands(result))) => {
-                briefing.commands = Slot::Ready(result);
+            (Section::Commands, Ok(Reply::Commands(delivered))) => {
+                briefing.caches[request.section.index()] = delivered.cache;
+                briefing.commands = Slot::Ready(delivered.result);
             }
             (Section::History, Err(error)) => briefing.history = Slot::Failed(error),
             (Section::Overview, Err(error)) => briefing.overview = Slot::Failed(error),
@@ -333,6 +366,28 @@ pub(crate) mod tests {
         }
     }
 
+    pub(crate) fn stamp(project: &str) -> Stamp {
+        Stamp {
+            project_id: project.into(),
+            path_id: None,
+        }
+    }
+
+    fn path_stamp(project: &str, path: &str) -> Stamp {
+        Stamp {
+            project_id: project.into(),
+            path_id: Some(path.into()),
+        }
+    }
+
+    pub(crate) fn delivered<T>(result: T) -> Delivered<T> {
+        Delivered {
+            result,
+            project_path_id: None,
+            cache: None,
+        }
+    }
+
     fn reply(request: &Request, outcome: Result<Reply, ApiError>) -> BriefingMessage {
         BriefingMessage {
             request: request.clone(),
@@ -341,21 +396,21 @@ pub(crate) mod tests {
     }
 
     fn summary(project: &str) -> Result<Reply, ApiError> {
-        Ok(Reply::Summary(briefing_result(project, "text")))
+        Ok(Reply::Summary(delivered(briefing_result(project, "text"))))
     }
 
     fn commands_reply(project: &str) -> Result<Reply, ApiError> {
-        Ok(Reply::Commands(CommandsResult {
+        Ok(Reply::Commands(delivered(CommandsResult {
             briefing: briefing_result(project, "text"),
             commands: Vec::new(),
-        }))
+        })))
     }
 
     #[test]
     fn opening_a_project_starts_all_three_slots_loading() {
         let mut state = BriefingState::default();
         assert!(state.briefing().is_none());
-        let requests = state.open("p1");
+        let requests = state.open(&stamp("p1"));
         assert_eq!(requests.len(), 3);
         let sections: Vec<_> = requests.iter().map(|r| r.section).collect();
         assert_eq!(sections, Section::ALL);
@@ -368,7 +423,7 @@ pub(crate) mod tests {
     #[test]
     fn replies_fill_their_own_slots() {
         let mut state = BriefingState::default();
-        let requests = state.open("p1");
+        let requests = state.open(&stamp("p1"));
         assert!(state.apply(reply(&requests[0], summary("p1"))));
         assert!(state.apply(reply(&requests[2], commands_reply("p1"))));
         assert!(state.apply(reply(&requests[1], Err(ApiError::new("timeout", "slow")))));
@@ -382,13 +437,13 @@ pub(crate) mod tests {
     #[test]
     fn stale_replies_are_dropped() {
         let mut state = BriefingState::default();
-        let old = state.open("p1");
-        let new = state.open("p2");
+        let old = state.open(&stamp("p1"));
+        let new = state.open(&stamp("p2"));
         // Another project and an older generation.
         assert!(!state.apply(reply(&old[0], summary("p1"))));
         assert!(state.briefing().unwrap().history.is_loading());
         // The same project opened again is a new generation too.
-        let again = state.open("p2");
+        let again = state.open(&stamp("p2"));
         assert!(!state.apply(reply(&new[0], summary("p2"))));
         assert!(state.apply(reply(&again[0], summary("p2"))));
     }
@@ -396,7 +451,7 @@ pub(crate) mod tests {
     #[test]
     fn a_reply_after_clearing_is_dropped() {
         let mut state = BriefingState::default();
-        let requests = state.open("p1");
+        let requests = state.open(&stamp("p1"));
         state.clear();
         assert!(!state.apply(reply(&requests[0], summary("p1"))));
         assert!(state.briefing().is_none());
@@ -406,7 +461,7 @@ pub(crate) mod tests {
     #[test]
     fn rerun_affects_only_its_own_slot() {
         let mut state = BriefingState::default();
-        let requests = state.open("p1");
+        let requests = state.open(&stamp("p1"));
         for request in &requests {
             let outcome = match request.section {
                 Section::Commands => commands_reply("p1"),
@@ -437,7 +492,7 @@ pub(crate) mod tests {
     #[test]
     fn clearing_resets_everything() {
         let mut state = BriefingState::default();
-        state.open("p1");
+        state.open(&stamp("p1"));
         state.open_details(Details::List);
         state.clear();
         assert!(state.briefing().is_none());
@@ -449,7 +504,7 @@ pub(crate) mod tests {
     fn the_tab_follows_project_open_and_parse_submit() {
         let mut state = BriefingState::default();
         state.set_tab(Tab::Parse);
-        state.open("p1");
+        state.open(&stamp("p1"));
         assert_eq!(state.tab(), Tab::Project);
         state.parse_submitted();
         assert_eq!(state.tab(), Tab::Parse);
@@ -460,12 +515,12 @@ pub(crate) mod tests {
     #[test]
     fn opening_or_switching_closes_the_details() {
         let mut state = BriefingState::default();
-        state.open("p1");
+        state.open(&stamp("p1"));
         state.open_details(Details::Command("c1".into()));
         state.set_tab(Tab::Parse);
         assert!(state.details().is_none());
         state.open_details(Details::List);
-        state.open("p2");
+        state.open(&stamp("p2"));
         assert!(state.details().is_none());
     }
 
@@ -473,10 +528,10 @@ pub(crate) mod tests {
     fn sync_follows_the_current_project() {
         let mut state = BriefingState::default();
         assert!(state.sync(None).is_empty());
-        assert_eq!(state.sync(Some("p1")).len(), 3);
+        assert_eq!(state.sync(Some(&stamp("p1"))).len(), 3);
         // Unchanged: nothing is re-sent.
-        assert!(state.sync(Some("p1")).is_empty());
-        assert_eq!(state.sync(Some("p2")).len(), 3);
+        assert!(state.sync(Some(&stamp("p1"))).is_empty());
+        assert_eq!(state.sync(Some(&stamp("p2"))).len(), 3);
         assert!(state.sync(None).is_empty());
         assert!(state.briefing().is_none());
     }
@@ -484,11 +539,75 @@ pub(crate) mod tests {
     #[test]
     fn a_wrong_kind_of_reply_fails_the_slot() {
         let mut state = BriefingState::default();
-        let requests = state.open("p1");
+        let requests = state.open(&stamp("p1"));
         assert!(state.apply(reply(&requests[2], summary("p1"))));
         assert!(matches!(
             state.briefing().unwrap().commands,
             Slot::Failed(_)
         ));
+    }
+
+    #[test]
+    fn requests_carry_the_path_and_only_reruns_refresh() {
+        let mut state = BriefingState::default();
+        let requests = state.open(&path_stamp("p1", "w1"));
+        assert!(
+            requests
+                .iter()
+                .all(|r| r.path_id.as_deref() == Some("w1") && !r.refresh)
+        );
+        state.apply(reply(&requests[0], summary("p1")));
+        let again = state.rerun(Section::History).expect("a request");
+        assert_eq!(again.path_id.as_deref(), Some("w1"));
+        assert!(again.refresh);
+    }
+
+    #[test]
+    fn a_path_change_reopens_and_drops_late_replies_from_the_old_path() {
+        let mut state = BriefingState::default();
+        let old = state.open(&path_stamp("p1", "d"));
+        // Same project, other path: a new briefing.
+        assert!(state.sync(Some(&path_stamp("p1", "d"))).is_empty());
+        let new = state.sync(Some(&path_stamp("p1", "w")));
+        assert_eq!(new.len(), 3);
+        assert!(state.briefing().unwrap().history.is_loading());
+        assert!(!state.apply(reply(&old[0], summary("p1"))));
+        assert!(state.briefing().unwrap().history.is_loading());
+        assert!(state.apply(reply(&new[0], summary("p1"))));
+    }
+
+    #[test]
+    fn a_reply_with_the_same_generation_but_another_path_is_dropped() {
+        let mut state = BriefingState::default();
+        let requests = state.open(&path_stamp("p1", "d"));
+        let mut forged = requests[0].clone();
+        forged.path_id = Some("w".into());
+        assert!(!state.apply(reply(&forged, summary("p1"))));
+        assert!(state.apply(reply(&requests[0], summary("p1"))));
+    }
+
+    #[test]
+    fn cache_metadata_is_kept_per_section_and_cleared_on_rerun() {
+        use daftprompt_types::CacheKind;
+        let mut state = BriefingState::default();
+        let requests = state.open(&path_stamp("p1", "w"));
+        let mut reused = delivered(briefing_result("p1", "text"));
+        reused.cache = Some(CacheDelivery {
+            requested_path_id: "w".into(),
+            source_path_id: "d".into(),
+            response_id: "r1".into(),
+            captured_at: "2026-11-08T10:30:00Z".into(),
+            kind: CacheKind::OtherPath,
+        });
+        state.apply(reply(&requests[0], Ok(Reply::Summary(reused))));
+        state.apply(reply(&requests[1], summary("p1")));
+        let b = state.briefing().unwrap();
+        assert_eq!(
+            b.cache(Section::History).map(|c| c.kind),
+            Some(CacheKind::OtherPath)
+        );
+        assert!(b.cache(Section::Overview).is_none());
+        state.rerun(Section::History);
+        assert!(state.briefing().unwrap().cache(Section::History).is_none());
     }
 }

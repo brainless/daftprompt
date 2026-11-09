@@ -52,6 +52,41 @@ pub struct ProjectToolConfig {
     pub max_file_bytes: u64,
 }
 
+impl ProjectToolConfig {
+    /// Every limit, for the agent's cache key.
+    pub(crate) fn cache_settings(&self) -> serde_json::Value {
+        serde_json::json!({
+            "max_tool_calls": self.max_tool_calls,
+            "max_list_files": self.max_list_files,
+            "max_search_matches": self.max_search_matches,
+            "max_scan_files": self.max_scan_files,
+            "max_read_lines": self.max_read_lines,
+            "max_output_bytes": self.max_output_bytes,
+            "max_line_bytes": self.max_line_bytes,
+            "max_file_bytes": self.max_file_bytes,
+        })
+    }
+}
+
+impl ProjectToolConfig {
+    /// The limits [`cache_settings`](Self::cache_settings) recorded, or `None`
+    /// when any is missing or out of range.
+    pub(crate) fn from_cache_settings(settings: &serde_json::Value) -> Option<Self> {
+        let number = |key: &str| settings.get(key)?.as_u64();
+        let count = |key: &str| number(key).and_then(|n| usize::try_from(n).ok());
+        Some(Self {
+            max_tool_calls: count("max_tool_calls")?,
+            max_list_files: count("max_list_files")?,
+            max_search_matches: count("max_search_matches")?,
+            max_scan_files: count("max_scan_files")?,
+            max_read_lines: count("max_read_lines")?,
+            max_output_bytes: count("max_output_bytes")?,
+            max_line_bytes: count("max_line_bytes")?,
+            max_file_bytes: number("max_file_bytes")?,
+        })
+    }
+}
+
 impl Default for ProjectToolConfig {
     fn default() -> Self {
         Self {
@@ -92,6 +127,9 @@ pub enum ToolError {
 /// Arguments of `list_files`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ListFilesArgs {
+    /// Only immediate files in the requested directory.
+    #[serde(default)]
+    pub shallow: bool,
     #[serde(default)]
     pub directory: Option<String>,
     #[serde(default)]
@@ -123,6 +161,7 @@ pub struct ReadFileArgs {
 /// Which files a `list_files` or `search` call looks at.
 #[derive(Debug, Clone)]
 pub struct Scope {
+    pub(crate) shallow: bool,
     /// Directory relative to the root; `None` is the root.
     pub directory: Option<String>,
     glob: Option<globset::GlobMatcher>,
@@ -139,12 +178,30 @@ impl Scope {
             ),
         };
         let directory = directory.filter(|d| !d.trim().is_empty());
-        Ok(Self { directory, glob })
+        Ok(Self {
+            directory,
+            glob,
+            shallow: false,
+        })
     }
 
     /// Whether the glob (if any) accepts this root-relative path. A glob
     /// without a `/` also matches the file name alone.
     pub fn glob_matches(&self, rel_path: &str) -> bool {
+        if self.shallow {
+            let dir = self
+                .directory
+                .as_deref()
+                .map(normalize_path_text)
+                .unwrap_or_default();
+            let parent = rel_path
+                .rsplit_once('/')
+                .map(|(parent, _)| parent)
+                .unwrap_or("");
+            if parent != dir {
+                return false;
+            }
+        }
         match &self.glob {
             None => true,
             Some(g) => {
@@ -267,6 +324,7 @@ pub enum CommitLookupError {
 #[derive(Debug, Clone, Default)]
 pub struct ToolRecorder {
     calls: Arc<Mutex<Vec<RecordedCall>>>,
+    log: Arc<Mutex<crate::agent_log::AgentLog>>,
 }
 
 impl ToolRecorder {
@@ -274,9 +332,46 @@ impl ToolRecorder {
         Self::default()
     }
 
-    pub(crate) fn push(&self, mut call: RecordedCall) {
+    /// Attach agent and run correlation before invoking tools.
+    pub fn set_log(&self, log: crate::agent_log::AgentLog) {
+        *self.log.lock().unwrap_or_else(|e| e.into_inner()) = log;
+    }
+
+    pub fn set_attempt(&self, attempt: u32) {
+        let mut log = self.log.lock().unwrap_or_else(|e| e.into_inner());
+        *log = log.clone().with_attempt(attempt);
+    }
+
+    /// Record diagnostics associated with this tool attempt.
+    pub fn log_event(&self, kind: &str, payload: impl Serialize) {
+        self.log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .event(kind, payload);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn push(&self, call: RecordedCall) {
+        self.append(call, true, None);
+    }
+
+    pub(crate) fn seed(&self, call: RecordedCall) {
+        self.append(call, false, None);
+    }
+
+    pub(crate) fn push_timed(&self, call: RecordedCall, duration: std::time::Duration) {
+        self.append(call, true, Some(duration));
+    }
+
+    fn append(&self, mut call: RecordedCall, emit: bool, duration: Option<std::time::Duration>) {
         let mut calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
         call.index = calls.len();
+        if emit {
+            self.log
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .tool_call(&call, duration);
+        }
         calls.push(call);
     }
 

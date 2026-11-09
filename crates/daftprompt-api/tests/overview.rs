@@ -13,7 +13,7 @@ use daftprompt_core::{
     AccessError, AgentKind, BoxFuture, ExtractionModel, ModelError, ModelInput, Principal,
     ProjectScope, RootPolicy, Scribe, ScribeConfig, Store, Surveyor, SurveyorConfig,
 };
-use daftprompt_types::{BriefingCitation, BriefingExtraction, Extraction, Project};
+use daftprompt_types::{BriefingCitation, BriefingExtraction, Extraction, Project, ProjectPath};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -58,6 +58,7 @@ impl RootPolicy for DenyAll {
         _principal: &Principal,
         agent: AgentKind,
         project: &Project,
+        _path: &ProjectPath,
     ) -> Result<ProjectScope, AccessError> {
         Err(AccessError::Denied(format!(
             "{} may not use project {}",
@@ -76,11 +77,12 @@ impl RootPolicy for NoSurveyor {
         principal: &Principal,
         agent: AgentKind,
         project: &Project,
+        path: &ProjectPath,
     ) -> Result<ProjectScope, AccessError> {
         if agent == AgentKind::Surveyor {
             return Err(AccessError::Denied("no survey for you".to_owned()));
         }
-        daftprompt_core::LocalPolicy.grant(principal, agent, project)
+        daftprompt_core::LocalPolicy.grant(principal, agent, project, path)
     }
 }
 
@@ -213,7 +215,7 @@ async fn overview_with_an_empty_body_runs_the_default_task_and_includes_the_prof
     assert_eq!(json["project_id"], fx.project.id.as_str());
     assert_eq!(json["task"]["kind"], "default");
     assert_eq!(json["run"]["agent"], "surveyor");
-    assert_eq!(json["run"]["prompt_version"], "surveyor-v1");
+    assert_eq!(json["run"]["prompt_version"], "surveyor-v3");
     assert_eq!(json["citations"][0]["location"]["kind"], "file");
     assert_eq!(json["citations"][0]["location"]["path"], "README.md");
     assert_eq!(json["node_contexts"][1]["target"]["kind"], "file");
@@ -291,6 +293,6 @@ async fn agents_lists_the_surveyor_when_configured() {
     let agents = json.as_array().unwrap();
     let kinds: Vec<&str> = agents.iter().map(|a| a["kind"].as_str().unwrap()).collect();
     assert_eq!(kinds, ["scribe", "surveyor"]);
-    assert_eq!(agents[1]["prompt_version"], "surveyor-v1");
+    assert_eq!(agents[1]["prompt_version"], "surveyor-v3");
     assert_eq!(agents[1]["provider"], "neuralwatt");
 }

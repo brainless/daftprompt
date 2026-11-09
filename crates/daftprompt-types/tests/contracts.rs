@@ -570,6 +570,8 @@ fn briefing_contracts_have_the_documented_json_shape() {
     let blank = AgentTaskRequest {
         prompt: Some("  ".to_owned()),
         author: None,
+        project_path_id: None,
+        refresh: false,
     };
     assert_eq!(blank.prompt_text(), None);
 

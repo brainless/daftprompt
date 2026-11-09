@@ -309,3 +309,67 @@ pub(super) fn candidate(
         evidence,
     }
 }
+
+/// Rediscover manifests rather than treating folded package names as paths.
+/// All candidates exist in bounded, protected listings; no speculative reads.
+pub(super) fn context_suggestions(
+    files: &dyn ProjectFiles,
+    markers: &str,
+    entrypoints: &str,
+    source_dirs: &[&str],
+) -> Vec<super::ContextSuggestion> {
+    use super::ContextSuggestion::{List, Read};
+    let (mut manifests, _) = find(files, markers);
+    let (mut entries, _) = find(files, entrypoints);
+    manifests.sort_by_key(|p| (p.matches('/').count(), p.clone()));
+    entries.sort_by_key(|p| (p.matches('/').count(), p.clone()));
+    let result: Vec<_> = manifests.iter().cloned().map(Read).collect();
+    let mut dirs = std::collections::BTreeSet::new();
+    for manifest in manifests.iter().take(24) {
+        let base = dir_of(manifest);
+        for dir in source_dirs {
+            dirs.insert(join(&base, dir));
+        }
+    }
+    // Python package directories (and custom source layouts) are discovered
+    // from actual entrypoints, never inferred from distribution names.
+    for entry in entries.iter().take(24) {
+        dirs.insert(dir_of(entry));
+    }
+    let mut listings = Vec::new();
+    let mut dirs: Vec<_> = dirs.into_iter().collect();
+    dirs.sort_by_key(|p| (p.matches('/').count(), p.clone()));
+    for dir in dirs.into_iter().take(48) {
+        let Ok(mut scope) = Scope::new(Some(dir.clone()), None) else {
+            continue;
+        };
+        scope.shallow = true;
+        if let Ok(listing) = files.list(&scope, &ProjectToolConfig::default())
+            && !listing.paths.is_empty()
+        {
+            listings.push(List(dir));
+        }
+    }
+    let mut groups = [
+        result.into_iter(),
+        listings.into_iter(),
+        entries
+            .into_iter()
+            .map(Read)
+            .collect::<Vec<_>>()
+            .into_iter(),
+    ];
+    let mut result = Vec::new();
+    loop {
+        let before = result.len();
+        for group in &mut groups {
+            if let Some(request) = group.next() {
+                result.push(request);
+            }
+        }
+        if result.len() == before {
+            break;
+        }
+    }
+    result
+}

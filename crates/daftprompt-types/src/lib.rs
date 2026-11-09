@@ -19,6 +19,7 @@
 //! hashes, timestamps, statuses, and reference resolution; the model never
 //! produces these records directly.
 
+pub mod delivery;
 pub mod error;
 pub mod extraction;
 pub mod graph;
@@ -26,6 +27,7 @@ pub mod profile;
 pub mod project;
 pub mod request;
 
+pub use delivery::{CacheDelivery, CacheKind, Delivered};
 pub use error::ParseError;
 pub use extraction::{
     AnnotationKind, BriefingCitation, BriefingExtraction, CommandKind, CommandsExtraction,
@@ -39,7 +41,9 @@ pub use graph::{
     RunInput, RunStatus, SourceRange, SourceWindow, SpanInfo, ToolCall,
 };
 pub use profile::{LanguageDetection, LanguageId, LanguageProject, ProjectProfile};
-pub use project::{CreateProjectRequest, Project, RenameProjectRequest};
+pub use project::{
+    AddProjectPathRequest, CreateProjectRequest, Project, ProjectPath, UpdateProjectRequest,
+};
 pub use request::{
     AgentTaskRequest, ClarifyRequest, ClarifySource, ClarifyTarget, ClarifyTurn, ContentType,
     ContentTypeSource, ParseRequest, SourceKind, SourceMetadata,

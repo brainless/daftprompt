@@ -45,8 +45,8 @@ pub enum ValidatedCitation {
 }
 
 /// Check the summary, its markers, and every citation against the run's
-/// ledger. The error describes the first problem; it is never fed back to the
-/// model.
+/// ledger. The error describes the first problem and is included as diagnostic data
+/// when the runner retries the submission.
 pub fn validate_briefing(
     extraction: &BriefingExtraction,
     recorder: &ToolRecorder,
@@ -169,7 +169,7 @@ pub struct BriefingBuild<'a, S: Serialize + ?Sized = BriefingExtraction> {
     /// The accepted attempt's tool calls.
     pub calls: &'a [RecordedCall],
     /// The accepted submission, recorded as the `submit` call.
-    pub submitted: &'a S,
+    pub submitted: Option<&'a S>,
     pub notices: Vec<BriefingNotice>,
     /// The deterministic project profile the agent was given, if any.
     pub profile: Option<ProjectProfile>,
@@ -327,20 +327,23 @@ pub fn build_briefing<S: Serialize + ?Sized>(
             created_at: created_at.clone(),
         });
     }
-    let submit_input = serde_json::to_string(submitted).map_err(|error| ParseError::Internal {
-        detail: format!("could not record the accepted submit arguments: {error}"),
-    })?;
-    tool_calls.push(ToolCall {
-        id: new_id("tool"),
-        run_id: run_id.clone(),
-        seq: u32::try_from(calls.len()).map_err(|_| ParseError::Internal {
-            detail: "too many tool calls".to_owned(),
-        })?,
-        tool: "submit".to_owned(),
-        input: submit_input,
-        output_hash: None,
-        created_at: created_at.clone(),
-    });
+    if let Some(submitted) = submitted {
+        let submit_input =
+            serde_json::to_string(submitted).map_err(|error| ParseError::Internal {
+                detail: format!("could not record the accepted submit arguments: {error}"),
+            })?;
+        tool_calls.push(ToolCall {
+            id: new_id("tool"),
+            run_id: run_id.clone(),
+            seq: u32::try_from(calls.len()).map_err(|_| ParseError::Internal {
+                detail: "too many tool calls".to_owned(),
+            })?,
+            tool: "submit".to_owned(),
+            input: submit_input,
+            output_hash: None,
+            created_at: created_at.clone(),
+        });
+    }
 
     let run = Run {
         id: run_id,

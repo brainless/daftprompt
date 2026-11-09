@@ -16,7 +16,7 @@ use daftprompt_core::{
     ScribeConfig, Store,
 };
 use daftprompt_types::{
-    BriefingCitation, BriefingExtraction, ExplainerExtraction, Extraction, Project,
+    BriefingCitation, BriefingExtraction, ExplainerExtraction, Extraction, Project, ProjectPath,
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -35,6 +35,16 @@ impl ExtractionModel for ScribeStub {
 struct ChroniclerStub;
 
 impl ChroniclerModel for ChroniclerStub {
+    fn summarize(
+        &self,
+        prompt: String,
+    ) -> daftprompt_core::chronicler::BoxFuture<'_, Result<String, ModelError>> {
+        Box::pin(async move {
+            assert!(prompt.contains("Add the importer"));
+            Ok("Recent work: added the importer.".to_owned())
+        })
+    }
+
     fn brief(
         &self,
         input: ChroniclerInput,
@@ -76,6 +86,7 @@ impl RootPolicy for DenyAll {
         _principal: &Principal,
         agent: AgentKind,
         project: &Project,
+        _path: &ProjectPath,
     ) -> Result<ProjectScope, AccessError> {
         Err(AccessError::Denied(format!(
             "{} may not use project {}",
@@ -94,11 +105,12 @@ impl RootPolicy for NoChronicler {
         principal: &Principal,
         agent: AgentKind,
         project: &Project,
+        path: &ProjectPath,
     ) -> Result<ProjectScope, AccessError> {
         if agent == AgentKind::Chronicler {
             return Err(AccessError::Denied("no history for you".to_owned()));
         }
-        daftprompt_core::LocalPolicy.grant(principal, agent, project)
+        daftprompt_core::LocalPolicy.grant(principal, agent, project, path)
     }
 }
 
@@ -188,15 +200,13 @@ async fn history_with_an_empty_body_runs_the_default_task() {
     assert!(json["prompt_payload"].is_null());
     assert_eq!(json["run"]["agent"], "chronicler");
     assert_eq!(json["run"]["project_id"], fx.project.id.as_str());
-    assert_eq!(json["citations"][0]["location"]["kind"], "commit");
-    assert_eq!(json["citations"][0]["location"]["hash"], HASH);
+    assert_eq!(json["citations"], json!([]));
+    assert_eq!(json["tool_calls"].as_array().unwrap().len(), 1);
+    assert_eq!(json["tool_calls"][0]["tool"], "git_log");
     assert_eq!(
-        json["citations"][0]["location"]["subject"],
-        "Add the importer"
+        json["summary_payload"]["content"],
+        "Recent work: added the importer."
     );
-    let contexts = json["node_contexts"].as_array().unwrap();
-    assert_eq!(contexts[1]["target"]["kind"], "commit");
-    assert_eq!(contexts[1]["target"]["hash"], HASH);
     assert_eq!(json["nodes"].as_array().unwrap().len(), 1);
 }
 
@@ -282,7 +292,7 @@ async fn agents_lists_every_configured_agent_without_credentials() {
     let chronicler = &agents[2];
     assert_eq!(chronicler["provider"], "neuralwatt");
     assert_eq!(chronicler["model"], "glm-5.3-flash");
-    assert_eq!(chronicler["prompt_version"], "chronicler-v1");
+    assert_eq!(chronicler["prompt_version"], "chronicler-summary-v1");
     assert_eq!(agents[0]["prompt_version"], "scribe-v4");
 
     // Without a Chronicler it is simply not listed.

@@ -23,6 +23,10 @@ pub struct ParseRequest {
     /// a raw filesystem path is never accepted from a client.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    /// One registered path of that project. Absent means the project's
+    /// default path. Requires `project_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_path_id: Option<String>,
 }
 
 impl ParseRequest {
@@ -33,6 +37,7 @@ impl ParseRequest {
             content_type: None,
             source: None,
             project_id: None,
+            project_path_id: None,
         }
     }
 
@@ -43,6 +48,7 @@ impl ParseRequest {
             content_type: None,
             source: Some(source),
             project_id: None,
+            project_path_id: None,
         }
     }
 
@@ -117,6 +123,10 @@ pub struct ClarifyRequest {
     /// a raw filesystem path is never accepted from a client.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    /// One registered path of that project. Absent means the project's
+    /// default path. Requires `project_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_path_id: Option<String>,
 }
 
 impl ClarifyRequest {
@@ -194,6 +204,14 @@ pub struct AgentTaskRequest {
     /// means `unknown`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
+    /// One registered path of the project in the URL. Absent means the
+    /// project's default path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_path_id: Option<String>,
+    /// Skip the stored-response lookup and run the agent. The new result is
+    /// still stored.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refresh: bool,
 }
 
 impl AgentTaskRequest {

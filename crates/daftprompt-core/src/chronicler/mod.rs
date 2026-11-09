@@ -1,7 +1,8 @@
 //! Chronicler: the git-history briefing agent of
 //! [Epic 006](../../../epics/006-project-briefing.md).
 //!
-//! Chronicler reads a project's git history with two read-only tools
+//! The active path preloads recent history and requests a plain-text summary.
+//! The separate, unused `brief_with_tools` path reads history with two read-only tools
 //! (`git_log`, `git_show`) and submits a typed
 //! [`BriefingExtraction`](daftprompt_types::BriefingExtraction) through a
 //! schema-defined output tool: a Markdown summary and the commits it cites.
@@ -26,9 +27,10 @@ use std::sync::Arc;
 use daftprompt_types::{AgentInfo, AgentTaskRequest, BriefingResult, ParseError};
 
 pub use config::{
-    ChroniclerConfig, DEFAULT_MAX_AGENT_TURNS, DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_CITATIONS,
-    DEFAULT_MAX_PROMPT_BYTES, DEFAULT_MAX_SUMMARY_BYTES, DEFAULT_MODEL, DEFAULT_PROVIDER,
-    DEFAULT_TIMEOUT, MODEL_ENV, PROVIDER_ENV,
+    COMMIT_COUNT_ENV, ChroniclerConfig, DEFAULT_COMMIT_COUNT, DEFAULT_MAX_AGENT_TURNS,
+    DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_CITATIONS, DEFAULT_MAX_PROMPT_BYTES,
+    DEFAULT_MAX_SUMMARY_BYTES, DEFAULT_MODEL, DEFAULT_PROVIDER, DEFAULT_TIMEOUT, MODEL_ENV,
+    PROVIDER_ENV,
 };
 pub use model::{
     BoxFuture, ChroniclerInput, ChroniclerModel, ChroniclerTools, ModelError, RigChronicler,
@@ -36,9 +38,10 @@ pub use model::{
 pub use prompt::{PROMPT_VERSION, SYSTEM_PROMPT};
 
 use crate::access::ProjectScope;
-use crate::git_tools::{GitHistory, SubprocessGit};
+use crate::git_tools::{GitHistory, GitToolbox, SubprocessGit};
 use crate::project_agent::{Briefer, RunLimits, Toolset, run_attempts};
 use crate::scribe::support;
+use crate::store::ReuseInputsV1;
 
 /// Builds the git backend for a granted project.
 type HistoryFactory = dyn Fn(&ProjectScope) -> Arc<dyn GitHistory> + Send + Sync;
@@ -76,20 +79,20 @@ impl<M: ChroniclerModel> Chronicler<M> {
         &self.config
     }
 
-    /// Brief the project `scope` grants.
+    /// Preserved tool-based path for future use; no API route invokes it.
     ///
     /// The request is validated before any model call: an oversized prompt or
     /// author is rejected, never truncated; a blank prompt means the default
     /// task. Each attempt then runs the model with a fresh toolbox. Invalid
     /// output (a bad schema, no submission, a turn-limit overrun, an unseen or
     /// ambiguous commit citation, or a bad marker) consumes the attempt
-    /// budget, and each retry starts from scratch without feedback. A provider
+    /// budget, and each retry gets the rejection reason and fresh tools. A provider
     /// error or an attempt timeout (which covers the whole tool loop) is
     /// returned immediately. A partial result is never returned.
     ///
     /// A folder that is not a repository, or a machine without `git`, is not
     /// an error: the briefing says so and carries a notice.
-    pub async fn brief(
+    pub async fn brief_with_tools(
         &self,
         request: AgentTaskRequest,
         scope: &ProjectScope,
@@ -100,6 +103,7 @@ impl<M: ChroniclerModel> Chronicler<M> {
 
         let started_at = support::now();
         let run_id = support::new_id("run");
+        let log = crate::agent_log::AgentLog::new("chronicler", &run_id);
         let limits = RunLimits {
             max_turns: self.config.max_agent_turns,
             max_attempts: self.config.max_attempts,
@@ -109,10 +113,12 @@ impl<M: ChroniclerModel> Chronicler<M> {
             limits,
             &prompt,
             || {
-                Arc::new(ChroniclerTools::new(
+                let tools = Arc::new(ChroniclerTools::new(
                     history.clone(),
                     self.config.tools.clone(),
-                ))
+                ));
+                tools.recorder().set_log(log.clone());
+                tools
             },
             |input| self.model.brief(input),
             |extraction, tools| validate::validate(extraction, tools.recorder(), &self.config),
@@ -121,6 +127,7 @@ impl<M: ChroniclerModel> Chronicler<M> {
 
         let calls = completed.toolset.git().recorder().calls();
         graph::build(graph::Built {
+            tool_based: true,
             request: &request,
             extraction: &completed.extraction,
             citations: &completed.validated,
@@ -134,13 +141,140 @@ impl<M: ChroniclerModel> Chronicler<M> {
         })
     }
 
+    /// Active path: Rust reads history once, then the model returns plain text.
+    /// Custom prompts use the same bounded history; no tools are exposed.
+    pub async fn brief(
+        &self,
+        request: AgentTaskRequest,
+        scope: &ProjectScope,
+    ) -> Result<BriefingResult, ParseError> {
+        check_request(&request, &self.config)?;
+        let started_at = support::now();
+        let run_id = support::new_id("run");
+        let log = crate::agent_log::AgentLog::new("chronicler", &run_id);
+        let tools = Arc::new(ChroniclerTools::new(
+            (self.history)(scope),
+            self.config.tools.clone(),
+        ));
+        tools.recorder().set_log(log.clone());
+        let reader = tools.clone();
+        let count = self
+            .config
+            .commit_count
+            .max(1)
+            .min(self.config.tools.max_log_commits.max(1));
+        let history = tokio::task::spawn_blocking(move || {
+            reader
+                .git()
+                .call("git_log", serde_json::json!({"count": count}))
+                .text
+        })
+        .await
+        .map_err(|error| ParseError::Internal {
+            detail: format!("history read failed: {error}"),
+        })?;
+        let prompt = prompt::render_summary_prompt(request.prompt_text(), &history);
+        let completed = run_attempts(
+            RunLimits {
+                max_turns: 1,
+                max_attempts: self.config.max_attempts,
+                timeout: self.config.timeout,
+            },
+            &prompt,
+            || {
+                tools.recorder().set_log(log.clone());
+                tools.clone()
+            },
+            |input| {
+                Box::pin(async move {
+                    let summary = self.model.summarize(input.prompt).await?;
+                    Ok(daftprompt_types::BriefingExtraction {
+                        summary,
+                        citations: vec![],
+                    })
+                })
+            },
+            |extraction, _| {
+                if extraction.summary.trim().is_empty()
+                    || extraction.summary.len() > self.config.max_summary_bytes
+                {
+                    Err("the summary is empty or exceeds the output limit".to_owned())
+                } else {
+                    Ok(Vec::new())
+                }
+            },
+        )
+        .await?;
+        let calls = tools.recorder().calls();
+        graph::build(graph::Built {
+            tool_based: false,
+            request: &request,
+            extraction: &completed.extraction,
+            citations: &completed.validated,
+            git: tools.git(),
+            calls: &calls,
+            config: &self.config,
+            project_id: scope.project_id.clone(),
+            run_id,
+            started_at,
+            attempts: completed.attempts,
+        })
+    }
+
+    /// Repeat the recorded `git_log` call against `scope` and compare its
+    /// output hash with the stored one. This catches a different repository
+    /// view (a shallow clone, other history limits) at the same `HEAD`. The
+    /// working tree is not consulted: dirtiness does not change history.
+    pub async fn verify_reuse(
+        &self,
+        inputs: &ReuseInputsV1,
+        scope: &ProjectScope,
+    ) -> Result<(), String> {
+        let ReuseInputsV1::Chronicler {
+            git_log_args,
+            git_log_output_hash,
+        } = inputs
+        else {
+            return Err("the stored inputs are not a Chronicler's".to_owned());
+        };
+        let toolbox = GitToolbox::new((self.history)(scope), self.config.tools.clone());
+        let args = git_log_args.clone();
+        let response = tokio::task::spawn_blocking(move || toolbox.call("git_log", args))
+            .await
+            .map_err(|error| format!("the history check failed: {error}"))?;
+        if response.is_error {
+            return Err("the history could not be read for comparison".to_owned());
+        }
+        if support::content_hash(&response.text) != *git_log_output_hash {
+            return Err("the history differs from the stored response's".to_owned());
+        }
+        Ok(())
+    }
+
+    /// A hash of everything that determines this agent's output for a task:
+    /// see [`Briefer::cache_identity`]. Only the active summary prompt is
+    /// included; the preserved tool path is not reachable.
+    pub fn cache_identity(&self) -> String {
+        let settings = self.config.model_settings();
+        crate::project_agent::config_key(
+            "chronicler",
+            &settings.provider,
+            &settings.model,
+            &[(
+                prompt::SUMMARY_PROMPT_VERSION,
+                prompt::SUMMARY_SYSTEM_PROMPT,
+            )],
+            self.config.cache_settings(),
+        )
+    }
+
     /// How this agent is configured, for `GET /agents`.
     pub fn info(&self) -> AgentInfo {
         AgentInfo {
             kind: "chronicler".to_owned(),
             provider: self.config.provider.clone(),
             model: self.config.model.clone(),
-            prompt_version: PROMPT_VERSION.to_owned(),
+            prompt_version: prompt::SUMMARY_PROMPT_VERSION.to_owned(),
         }
     }
 }
@@ -187,6 +321,10 @@ where
         Chronicler::info(self)
     }
 
+    fn cache_identity(&self) -> String {
+        Chronicler::cache_identity(self)
+    }
+
     fn brief<'a>(
         &'a self,
         request: AgentTaskRequest,
@@ -194,5 +332,14 @@ where
     ) -> BoxFuture<'a, Result<BriefingResult, ParseError>> {
         let scope = scope.clone();
         Box::pin(async move { Chronicler::brief(self, request, &scope).await })
+    }
+
+    fn verify_reuse<'a>(
+        &'a self,
+        inputs: &'a ReuseInputsV1,
+        scope: &ProjectScope,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        let scope = scope.clone();
+        Box::pin(async move { Chronicler::verify_reuse(self, inputs, &scope).await })
     }
 }

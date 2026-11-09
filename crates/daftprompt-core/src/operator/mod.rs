@@ -39,9 +39,13 @@ pub use prompt::{PROMPT_VERSION, SYSTEM_PROMPT};
 
 use crate::access::ProjectScope;
 use crate::languages;
-use crate::project_agent::{CommandsBriefer, RunLimits, Toolset, run_attempts};
+use crate::project_agent::reuse::{
+    OperatorChecks, candidates_fingerprint, capture_files, verify_files,
+};
+use crate::project_agent::{Captured, CommandsBriefer, RunLimits, Toolset, run_attempts};
 use crate::project_tools::{FsProject, ProjectFiles};
 use crate::scribe::support;
+use crate::store::ReuseInputsV1;
 
 /// Builds the read-only file backend for a granted project.
 type ProjectFactory =
@@ -89,7 +93,7 @@ impl<M: OperatorModel> Operator<M> {
     /// turn-limit overrun, a commit citation, a citation of lines no
     /// `read_file` call returned, a bad marker, or a command that breaks the
     /// rules in [`validate`](self)) consumes the attempt
-    /// budget, and each retry starts from scratch without feedback. A provider
+    /// budget, and each retry gets the rejection reason and fresh tools. A provider
     /// error or an attempt timeout (which covers the whole tool loop) is
     /// returned immediately. A partial result is never returned.
     pub async fn brief(
@@ -97,19 +101,44 @@ impl<M: OperatorModel> Operator<M> {
         request: AgentTaskRequest,
         scope: &ProjectScope,
     ) -> Result<CommandsResult, ParseError> {
+        self.brief_captured(request, scope)
+            .await
+            .map(|(result, _)| result)
+    }
+
+    /// [`brief`](Self::brief), also returning the inputs a later freshness
+    /// check repeats; see [`Surveyor::brief_captured`](crate::surveyor::Surveyor::brief_captured).
+    pub async fn brief_captured(
+        &self,
+        request: AgentTaskRequest,
+        scope: &ProjectScope,
+    ) -> Result<Captured<CommandsResult>, ParseError> {
         check_request(&request, &self.config)?;
         let files = (self.project)(scope)?;
         let profile = languages::profile(files.as_ref());
         let candidates = languages::command_candidates(files.as_ref(), &profile);
-        let prompt = prompt::render_prompt(
+        let candidates_hash = candidates_fingerprint(files.as_ref(), &candidates);
+        let mut prompt = prompt::render_prompt(
             request.prompt_text(),
             &profile,
             &candidates,
             self.config.max_commands,
+            self.config.max_citations,
+            self.config.max_summary_bytes,
         );
 
         let started_at = support::now();
         let run_id = support::new_id("run");
+        let log = crate::agent_log::AgentLog::new("operator", &run_id);
+        let preloaded = crate::project_agent::preload_common_files(
+            files.clone(),
+            &profile,
+            self.config.tools.clone(),
+            Some(log.clone()),
+        )
+        .await?;
+        prompt.push_str(&preloaded.context);
+
         let limits = RunLimits {
             max_turns: self.config.max_agent_turns,
             max_attempts: self.config.max_attempts,
@@ -118,7 +147,12 @@ impl<M: OperatorModel> Operator<M> {
         let completed = run_attempts(
             limits,
             &prompt,
-            || Arc::new(OperatorTools::new(files.clone(), self.config.tools.clone())),
+            || {
+                let tools = Arc::new(OperatorTools::new(files.clone(), self.config.tools.clone()));
+                tools.recorder().set_log(log.clone());
+                preloaded.seed(tools.recorder());
+                tools
+            },
             |input| self.model.brief(input),
             |extraction, tools| {
                 validate::validate(
@@ -133,7 +167,16 @@ impl<M: OperatorModel> Operator<M> {
         .await?;
 
         let calls = completed.toolset.files().recorder().calls();
-        graph::build(graph::Built {
+        let captured = capture_files(
+            &profile,
+            &preloaded,
+            &calls,
+            &self.config.tools,
+            &scope.root,
+        )
+        .map_err(|reason| eprintln!("daftprompt: operator response not reusable: {reason}"))
+        .ok();
+        let result = graph::build(graph::Built {
             request: &request,
             extraction: &completed.extraction,
             validated: &completed.validated,
@@ -145,7 +188,60 @@ impl<M: OperatorModel> Operator<M> {
             run_id,
             started_at,
             attempts: completed.attempts,
-        })
+        })?;
+        let inputs = captured.map(|files| {
+            let mut working_dirs: Vec<String> = result
+                .commands
+                .iter()
+                .map(|command| command.working_dir.clone())
+                .filter(|dir| !dir.is_empty())
+                .collect();
+            working_dirs.sort();
+            working_dirs.dedup();
+            ReuseInputsV1::Operator {
+                files,
+                candidates_hash,
+                working_dirs,
+            }
+        });
+        Ok((result, inputs))
+    }
+
+    /// Repeat the recorded observations against `scope`; see
+    /// [`Surveyor::verify_reuse`](crate::surveyor::Surveyor::verify_reuse).
+    /// Detected commands are never run.
+    pub async fn verify_reuse(
+        &self,
+        inputs: &ReuseInputsV1,
+        scope: &ProjectScope,
+    ) -> Result<(), String> {
+        let ReuseInputsV1::Operator {
+            files: recorded,
+            candidates_hash,
+            working_dirs,
+        } = inputs
+        else {
+            return Err("the stored inputs are not an Operator's".to_owned());
+        };
+        let files = (self.project)(scope).map_err(|error| error.to_string())?;
+        let checks = OperatorChecks {
+            candidates_hash,
+            working_dirs,
+        };
+        verify_files(files, recorded, Some(checks)).await
+    }
+
+    /// A hash of everything that determines this agent's output for a task:
+    /// see [`CommandsBriefer::cache_identity`].
+    pub fn cache_identity(&self) -> String {
+        let settings = self.config.model_settings();
+        crate::project_agent::config_key(
+            "operator",
+            &settings.provider,
+            &settings.model,
+            &[(PROMPT_VERSION, SYSTEM_PROMPT)],
+            self.config.cache_settings(),
+        )
     }
 
     /// How this agent is configured, for `GET /agents`.
@@ -213,6 +309,10 @@ where
         Operator::info(self)
     }
 
+    fn cache_identity(&self) -> String {
+        Operator::cache_identity(self)
+    }
+
     fn brief<'a>(
         &'a self,
         request: AgentTaskRequest,
@@ -220,5 +320,23 @@ where
     ) -> BoxFuture<'a, Result<CommandsResult, ParseError>> {
         let scope = scope.clone();
         Box::pin(async move { Operator::brief(self, request, &scope).await })
+    }
+
+    fn brief_captured<'a>(
+        &'a self,
+        request: AgentTaskRequest,
+        scope: &ProjectScope,
+    ) -> BoxFuture<'a, Result<Captured<CommandsResult>, ParseError>> {
+        let scope = scope.clone();
+        Box::pin(async move { Operator::brief_captured(self, request, &scope).await })
+    }
+
+    fn verify_reuse<'a>(
+        &'a self,
+        inputs: &'a ReuseInputsV1,
+        scope: &ProjectScope,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        let scope = scope.clone();
+        Box::pin(async move { Operator::verify_reuse(self, inputs, &scope).await })
     }
 }

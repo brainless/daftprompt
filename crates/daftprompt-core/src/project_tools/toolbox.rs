@@ -66,7 +66,8 @@ impl ProjectToolbox {
                  ignored, binary, and environment files are never listed. Results are capped.",
                 json!({"type": "object", "properties": {
                     "directory": {"type": "string", "description": "Directory relative to the project root."},
-                    "glob": {"type": "string", "description": "Glob filter on file paths."}
+                    "glob": {"type": "string", "description": "Glob filter on file paths."},
+                    "shallow": {"type": "boolean", "description": "Only immediate files in the directory (default false)."}
                 }}),
             ),
             (
@@ -97,6 +98,7 @@ impl ProjectToolbox {
     /// Runs a tool by name with raw JSON arguments. Always returns a result
     /// for the model, records the call, and enforces the call cap.
     pub fn call(&self, name: &str, args: Value) -> ToolResponse {
+        let started = std::time::Instant::now();
         let n = self.started.fetch_add(1, Ordering::SeqCst);
         let outcome = if n >= self.config.max_tool_calls {
             Err(ToolError::CallLimit(self.config.max_tool_calls))
@@ -114,21 +116,25 @@ impl ProjectToolbox {
             Ok(out) => (out.text, false, out.truncated, out.read),
             Err(e) => (format!("error: {e}"), true, false, None),
         };
-        self.recorder.push(RecordedCall {
-            index: 0,
-            name: name.to_string(),
-            args,
-            output: text.clone(),
-            is_error,
-            truncated,
-            read,
-            commits: Vec::new(),
-        });
+        self.recorder.push_timed(
+            RecordedCall {
+                index: 0,
+                name: name.to_string(),
+                args,
+                output: text.clone(),
+                is_error,
+                truncated,
+                read,
+                commits: Vec::new(),
+            },
+            started.elapsed(),
+        );
         ToolResponse { text, is_error }
     }
 
     fn list_files(&self, args: ListFilesArgs) -> Result<Out, ToolError> {
-        let scope = Scope::new(args.directory, args.glob.as_deref())?;
+        let mut scope = Scope::new(args.directory, args.glob.as_deref())?;
+        scope.shallow = args.shallow;
         let listing = self.files.list(&scope, &self.config)?;
         let mut text = String::new();
         let mut shown = 0;

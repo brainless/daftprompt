@@ -1,11 +1,9 @@
 //! The briefing-model seam and the Rig-backed implementation.
 //!
-//! [`ChroniclerModel`] is the only interface Chronicler uses to obtain a
-//! proposed briefing. One call is one attempt: it may run a multi-turn tool
-//! loop and ends with the submitted [`BriefingExtraction`]. Tests supply a
-//! stub that drives the per-attempt [`GitToolbox`] directly; production wraps
-//! a Rig agent through the shared runner. Credentials and provider clients are
-//! supplied by the caller, never stored here.
+//! The active `summarize` method accepts preloaded history and returns plain
+//! text with no tools or output schema. `brief` preserves the original
+//! multi-turn tool implementation for future use. Both run under Chronicler's
+//! attempt budget and timeout; credentials are supplied by the caller.
 
 use std::sync::Arc;
 
@@ -60,6 +58,9 @@ pub type ChroniclerInput = AttemptInput<ChroniclerTools>;
 /// the attempt budget, timeout, and all validation, so an implementation runs
 /// exactly one attempt per call.
 pub trait ChroniclerModel: Send + Sync {
+    /// Summarize supplied history without tools or a structured output schema.
+    fn summarize(&self, prompt: String) -> BoxFuture<'_, Result<String, ModelError>>;
+
     /// Run one attempt and return the submitted briefing.
     fn brief(
         &self,
@@ -67,7 +68,7 @@ pub trait ChroniclerModel: Send + Sync {
     ) -> BoxFuture<'_, Result<BriefingExtraction, ModelError>>;
 }
 
-/// Chronicler backed by a multi-turn Rig agent with an output tool.
+/// Rig-backed plain-text summaries and the preserved tool-based path.
 pub struct RigChronicler {
     model: DynModel<Completion>,
 }
@@ -86,6 +87,19 @@ impl RigChronicler {
 }
 
 impl ChroniclerModel for RigChronicler {
+    fn summarize(&self, prompt: String) -> BoxFuture<'_, Result<String, ModelError>> {
+        Box::pin(async move {
+            let response = AgentBuilder::new(self.model.clone())
+                .preamble(super::prompt::SUMMARY_SYSTEM_PROMPT)
+                .build()
+                .prompt(prompt)
+                .max_turns(1)
+                .await
+                .map_err(crate::project_agent::prompt_error)?;
+            Ok(response.output())
+        })
+    }
+
     fn brief(
         &self,
         input: ChroniclerInput,

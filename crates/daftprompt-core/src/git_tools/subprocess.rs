@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use super::{GitCommit, GitError, GitHistory, GitLog, GitShow, GitToolConfig, LogQuery, ShowQuery};
+use super::{
+    GitCommit, GitError, GitHistory, GitLog, GitShow, GitToolConfig, LogQuery, RepoIdentity,
+    ShowQuery,
+};
 
 /// Field and record separators of the `--format` strings. A record ends at a
 /// NUL byte (git refuses NUL in commit messages) and fields at 0x1f.
@@ -58,6 +61,45 @@ impl SubprocessGit {
     pub fn with_program(mut self, program: impl Into<PathBuf>) -> Self {
         self.program = program.into();
         self
+    }
+
+    /// The full hash `HEAD` resolves to. An unborn `HEAD` (no commits yet) is
+    /// an error, never an empty identity.
+    pub fn head_commit(&self) -> Result<String, GitError> {
+        let output = self.run(&["rev-parse".into(), "--verify".into(), "HEAD".into()])?;
+        let hash = output.stdout.trim();
+        let valid = (hash.len() == 40 || hash.len() == 64)
+            && hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        if output.capped || !valid {
+            return Err(GitError::Failed("HEAD is not a commit id".to_owned()));
+        }
+        Ok(hash.to_owned())
+    }
+
+    /// The project root's path relative to the repository top, with `/`
+    /// separators and no trailing slash; empty at the top.
+    pub fn repository_subpath(&self) -> Result<String, GitError> {
+        let output = self.run(&["rev-parse".into(), "--show-prefix".into()])?;
+        if output.capped {
+            return Err(GitError::Failed("the repository prefix is too long".into()));
+        }
+        Ok(output
+            .stdout
+            .trim_end_matches('\n')
+            .trim_end_matches('/')
+            .to_owned())
+    }
+
+    /// `HEAD` and subpath together, or `None` when either cannot be learned:
+    /// not a repository, an unborn `HEAD`, no `git`, an error, or a timeout.
+    /// Such a project never gets automatic response reuse.
+    pub fn identity(&self) -> Option<RepoIdentity> {
+        Some(RepoIdentity {
+            commit_hash: self.head_commit().ok()?,
+            subpath: self.repository_subpath().ok()?,
+        })
     }
 
     fn run(&self, args: &[String]) -> Result<Output, GitError> {

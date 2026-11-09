@@ -21,6 +21,7 @@ mod config;
 mod graph;
 mod model;
 pub mod prompt;
+mod restate;
 mod validate;
 
 use std::sync::Arc;
@@ -30,16 +31,20 @@ use daftprompt_types::{AgentInfo, AgentTaskRequest, BriefingResult, ParseError};
 pub use config::{
     DEFAULT_MAX_AGENT_TURNS, DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_CITATIONS, DEFAULT_MAX_PROMPT_BYTES,
     DEFAULT_MAX_SUMMARY_BYTES, DEFAULT_MODEL, DEFAULT_PROVIDER, DEFAULT_TIMEOUT, MODEL_ENV,
-    PROVIDER_ENV, SurveyorConfig,
+    PROVIDER_ENV, STRATEGY_ENV, SurveyorConfig, ToolStrategy,
 };
 pub use model::{BoxFuture, ModelError, RigSurveyor, SurveyorInput, SurveyorModel, SurveyorTools};
-pub use prompt::{PROMPT_VERSION, SYSTEM_PROMPT};
+pub use prompt::{
+    PROMPT_VERSION, RESTATE_PROMPT_VERSION, RESTATE_SYSTEM_PROMPT, SYSTEM_PROMPT, system_prompt,
+};
 
 use crate::access::ProjectScope;
 use crate::languages;
-use crate::project_agent::{Briefer, RunLimits, Toolset, run_attempts};
+use crate::project_agent::reuse::{capture_files, verify_files};
+use crate::project_agent::{Briefer, Captured, RunLimits, Toolset, run_attempts};
 use crate::project_tools::{FsProject, ProjectFiles};
 use crate::scribe::support;
+use crate::store::ReuseInputsV1;
 
 /// Builds the read-only file backend for a granted project.
 type ProjectFactory =
@@ -86,7 +91,7 @@ impl<M: SurveyorModel> Surveyor<M> {
     /// with a fresh toolbox. Invalid output (a bad schema, no submission, a
     /// turn-limit overrun, a commit citation, a citation of lines no
     /// `read_file` call returned, or a bad marker) consumes the attempt
-    /// budget, and each retry starts from scratch without feedback. A provider
+    /// budget, and each retry gets the rejection reason and fresh tools. A provider
     /// error or an attempt timeout (which covers the whole tool loop) is
     /// returned immediately. A partial result is never returned.
     pub async fn brief(
@@ -94,13 +99,42 @@ impl<M: SurveyorModel> Surveyor<M> {
         request: AgentTaskRequest,
         scope: &ProjectScope,
     ) -> Result<BriefingResult, ParseError> {
+        self.brief_captured(request, scope)
+            .await
+            .map(|(result, _)| result)
+    }
+
+    /// [`brief`](Self::brief), also returning the inputs a later freshness
+    /// check repeats. They are `None` when the run's observations were not
+    /// completely recorded, which makes the response a miss forever.
+    pub async fn brief_captured(
+        &self,
+        request: AgentTaskRequest,
+        scope: &ProjectScope,
+    ) -> Result<Captured<BriefingResult>, ParseError> {
         check_request(&request, &self.config)?;
         let files = (self.project)(scope)?;
         let profile = languages::profile(files.as_ref());
-        let prompt = prompt::render_prompt(request.prompt_text(), &profile);
+        let mut prompt = prompt::render_prompt(
+            request.prompt_text(),
+            &profile,
+            self.config.strategy,
+            self.config.max_citations,
+            self.config.max_summary_bytes,
+        );
 
         let started_at = support::now();
         let run_id = support::new_id("run");
+        let log = crate::agent_log::AgentLog::new("surveyor", &run_id);
+        let preloaded = crate::project_agent::preload_common_files(
+            files.clone(),
+            &profile,
+            self.config.tools.clone(),
+            Some(log.clone()),
+        )
+        .await?;
+        prompt.push_str(&preloaded.context);
+
         let limits = RunLimits {
             max_turns: self.config.max_agent_turns,
             max_attempts: self.config.max_attempts,
@@ -109,14 +143,29 @@ impl<M: SurveyorModel> Surveyor<M> {
         let completed = run_attempts(
             limits,
             &prompt,
-            || Arc::new(SurveyorTools::new(files.clone(), self.config.tools.clone())),
+            || {
+                let tools = Arc::new(SurveyorTools::new(files.clone(), self.config.tools.clone()));
+                tools.recorder().set_log(log.clone());
+                preloaded.seed(tools.recorder());
+                tools
+            },
             |input| self.model.brief(input),
             |extraction, tools| validate::validate(extraction, tools.recorder(), &self.config),
         )
         .await?;
 
         let calls = completed.toolset.files().recorder().calls();
-        graph::build(graph::Built {
+        let inputs = capture_files(
+            &profile,
+            &preloaded,
+            &calls,
+            &self.config.tools,
+            &scope.root,
+        )
+        .map(ReuseInputsV1::Surveyor)
+        .map_err(|reason| eprintln!("daftprompt: surveyor response not reusable: {reason}"))
+        .ok();
+        let result = graph::build(graph::Built {
             request: &request,
             extraction: &completed.extraction,
             citations: &completed.validated,
@@ -127,7 +176,36 @@ impl<M: SurveyorModel> Surveyor<M> {
             run_id,
             started_at,
             attempts: completed.attempts,
-        })
+        })?;
+        Ok((result, inputs))
+    }
+
+    /// Repeat the recorded observations against `scope` (the requested path,
+    /// never the one that produced the response); see
+    /// [`Briefer::verify_reuse`]. Nothing is executed and no model is called.
+    pub async fn verify_reuse(
+        &self,
+        inputs: &ReuseInputsV1,
+        scope: &ProjectScope,
+    ) -> Result<(), String> {
+        let ReuseInputsV1::Surveyor(inputs) = inputs else {
+            return Err("the stored inputs are not a Surveyor's".to_owned());
+        };
+        let files = (self.project)(scope).map_err(|error| error.to_string())?;
+        verify_files(files, inputs, None).await
+    }
+
+    /// A hash of everything that determines this agent's output for a task:
+    /// see [`Briefer::cache_identity`].
+    pub fn cache_identity(&self) -> String {
+        let settings = self.config.model_settings();
+        crate::project_agent::config_key(
+            "surveyor",
+            &settings.provider,
+            &settings.model,
+            &[prompt::system_prompt(self.config.strategy)],
+            self.config.cache_settings(),
+        )
     }
 
     /// How this agent is configured, for `GET /agents`.
@@ -136,7 +214,7 @@ impl<M: SurveyorModel> Surveyor<M> {
             kind: "surveyor".to_owned(),
             provider: self.config.provider.clone(),
             model: self.config.model.clone(),
-            prompt_version: PROMPT_VERSION.to_owned(),
+            prompt_version: prompt::system_prompt(self.config.strategy).0.to_owned(),
         }
     }
 }
@@ -183,7 +261,11 @@ impl Surveyor<RigSurveyor> {
     where
         M: Into<rig::DynModel<rig::operation::Completion>>,
     {
-        Self::new(config, RigSurveyor::from_model(model))
+        let strategy = config.strategy;
+        Self::new(
+            config,
+            RigSurveyor::from_model(model).with_strategy(strategy),
+        )
     }
 }
 
@@ -195,6 +277,10 @@ where
         Surveyor::info(self)
     }
 
+    fn cache_identity(&self) -> String {
+        Surveyor::cache_identity(self)
+    }
+
     fn brief<'a>(
         &'a self,
         request: AgentTaskRequest,
@@ -202,5 +288,23 @@ where
     ) -> BoxFuture<'a, Result<BriefingResult, ParseError>> {
         let scope = scope.clone();
         Box::pin(async move { Surveyor::brief(self, request, &scope).await })
+    }
+
+    fn brief_captured<'a>(
+        &'a self,
+        request: AgentTaskRequest,
+        scope: &ProjectScope,
+    ) -> BoxFuture<'a, Result<Captured<BriefingResult>, ParseError>> {
+        let scope = scope.clone();
+        Box::pin(async move { Surveyor::brief_captured(self, request, &scope).await })
+    }
+
+    fn verify_reuse<'a>(
+        &'a self,
+        inputs: &'a ReuseInputsV1,
+        scope: &ProjectScope,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        let scope = scope.clone();
+        Box::pin(async move { Surveyor::verify_reuse(self, inputs, &scope).await })
     }
 }

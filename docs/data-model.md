@@ -111,37 +111,186 @@ A project briefing (Chronicler, Surveyor and Operator) is agent-authored text re
 | File citation | The existing file context (`path`, `content_hash` of the text the agent read, whole-line range). Surveyor and Operator cite files only; Chronicler cites commits only. |
 | Run metadata | `run` (agent `chronicler`, `surveyor` or `operator`, `project_id` set), a `run_input` for `P`, one `tool_call` per tool invocation (`git_log`/`git_show`, or `list_files`/`search`/`read_file`) with its output payload, and the accepted `submit`. |
 
-The commit hash is a reference into the project's git repository, not a copy: nothing from the commit is stored in a payload. The cited commits must have been returned by a git tool in the same run (the `ToolRecorder` ledger records the hashes each call returned). Briefing results are in memory only. A Surveyor result also carries the `ProjectProfile` (detected languages and key files, computed by Rust) as `profile`; it is not a graph record and is not persisted.
+The active Chronicler summary path is an exception to the tool-submission records above: Rust preloads recent history, the model returns plain text, and `citations` is empty. Its summary node has only the payload context. The ledger records the Rust-initiated `git_log` read and its output; no synthetic `submit` is recorded. The preserved `brief_with_tools` path retains the cited-commit record shape for future use. No persisted schema changes are needed.
+
+Surveyor and Operator also record Rust-initiated preload reads and shallow listings in the run ledger. Preloaded file excerpts carry the same hashes and exact shown line ranges as later `read_file` results; the model may cite them without rereading. Listings carry no read ranges and cannot support line citations. Retries seed a fresh ledger with the same preload snapshot, then add only that attempt's model tool calls. No new schema fields are introduced.
+
+Surveyor and Operator receive a bounded, stack-aware initial file snapshot before
+using model tools: documentation, task runner files, manifests, source entrypoints,
+and shallow listings, interleaved across languages. The snapshot is at most
+96 KiB (24 reads, 12 listings; excerpts at most 200 lines/8 KiB), trading a larger
+initial prompt for fewer discovery round trips. Existing stricter tool limits
+apply. Only visible excerpts establish citable lines; the same snapshot and
+ledger are reused for retries. This adds no storage records or schema changes.
+
+The commit hash is a reference into the project's git repository, not a copy: nothing from the commit is stored in a payload. The cited commits must have been returned by a git tool in the same run (the `ToolRecorder` ledger records the hashes each call returned). Briefing results are returned in memory; Task B of Epic 007 also appends each successful result to `project_agent_response` (below). A Surveyor result also carries the `ProjectProfile` (detected languages and key files, computed by Rust) as `profile`; it is not a graph record (it is kept only inside the stored response snapshot).
 
 The Operator's commands are structured results, not graph nodes (`CommandsResult.commands`, each `ProjectCommand` with `origin` `detected` or `documented`). Each points, through `citation_indexes`, at the summary node's file citation contexts that justify it. For a detected command Rust appends a context for the candidate's manifest lines after the model's citations (the same `path`, `content_hash` and whole-line range as any file citation). A later `project_command` table may persist commands; there is no table or schema change in this task.
 
 ### Persisted tables
 
-Only the project registry is persisted so far. The schema is created by numbered
+The project registry and agent response snapshots are persisted so far. The schema is created by numbered
 migrations tracked in SQLite's `PRAGMA user_version`; the database file lives
-at `<OS user data dir>/daftprompt/daftprompt.db`.
+at `<OS user data dir>/daftprompt/daftprompt.db`. Migration 1 created `project`
+with a unique `root_path`. Migration 2 (a Rust migration, because path ids are
+Rust-generated) moved each root into `project_path` as the project's default
+path, preserving project ids, names, and timestamps and not requiring the
+folders to exist. The current schema:
 
 ```sql
--- A named local folder. Registry only: the folder's files are never copied.
+-- A logical project. Registry only: the folders' files are never copied.
 CREATE TABLE project (
   id              TEXT PRIMARY KEY,         -- Rust-generated, e.g. project-<hex>-<hex>
   name            TEXT NOT NULL,
-  root_path       TEXT NOT NULL UNIQUE,     -- absolute, canonicalized
   created_at      TEXT NOT NULL,
   last_opened_at  TEXT NOT NULL
 );
+
+-- One registered local folder of a project.
+CREATE TABLE project_path (
+  id              TEXT PRIMARY KEY,         -- Rust-generated, e.g. path-<hex>-<hex>
+  project_id      TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+  root_path       TEXT NOT NULL UNIQUE,     -- absolute, canonicalized
+  is_default      INTEGER NOT NULL CHECK (is_default IN (0, 1)),
+  created_at      TEXT NOT NULL,
+  last_opened_at  TEXT NOT NULL,
+  UNIQUE(project_id, id)                    -- target of composite foreign keys
+);
+CREATE UNIQUE INDEX project_one_default_path
+  ON project_path(project_id) WHERE is_default = 1;
 ```
+
+The unique index allows at most one default per project; store transactions
+guarantee every project has at least one path and exactly one default. Adding
+an already registered folder to its owning project is idempotent, attaching it
+to another project is rejected, removing the default path requires a
+replacement default in the same transaction, and removing the last path is
+rejected (remove the project instead). A folder that no longer exists stays
+registered. `Project.root_path` in the shared types is computed from the default
+path; it is not a column.
 
 The graph tables above (`payload`, `node`, `label`, `run`, `tool_call`, ...) are
 not persisted yet: parse and clarify results remain in memory. When they are
 added, nodes and runs will gain a `project_id` referencing `project(id)`. Until
 then `Run.project_id` is carried in the in-memory result only.
 
+### Agent response snapshots
+
+Migration 3 (plain SQL) adds an append-only table of successful Chronicler,
+Surveyor, and Operator results ([Epic 007](../epics/007-project-paths-and-agent-storage.md),
+Task B). A row is a snapshot of one accepted result, not normalized graph
+records; deleting a path (or its project) deletes its rows.
+
+```sql
+CREATE TABLE project_agent_response (
+  id                  TEXT PRIMARY KEY,   -- a response id, not a run id
+  project_id          TEXT NOT NULL,
+  project_path_id     TEXT NOT NULL,
+  agent               TEXT NOT NULL CHECK (agent IN ('chronicler', 'surveyor', 'operator')),
+  request_key         TEXT NOT NULL,      -- hash of the normalized task (+ author for a custom prompt)
+  config_key          TEXT NOT NULL,      -- hash of the agent's effective configuration
+  commit_hash         TEXT,               -- full HEAD at capture; NULL when unknown
+  repository_subpath  TEXT,               -- root's path inside the repository ('' at the top); NULL when unknown
+  reusable            INTEGER NOT NULL CHECK (reusable IN (0, 1)),  -- eligible for reuse at capture
+  response_version    INTEGER NOT NULL,   -- 1: StoredAgentResponseV1
+  summary_text        TEXT NOT NULL,      -- summary_payload.content, Markdown unchanged
+  details_json        TEXT NOT NULL CHECK (json_valid(details_json)),
+  created_at          TEXT NOT NULL,      -- snapshot storage time
+  FOREIGN KEY (project_id, project_path_id)
+    REFERENCES project_path(project_id, id) ON DELETE CASCADE
+);
+CREATE INDEX agent_response_path_lookup ON project_agent_response
+  (project_id, project_path_id, agent, request_key, config_key, created_at DESC);
+CREATE INDEX agent_response_commit_lookup ON project_agent_response
+  (project_id, agent, request_key, config_key, commit_hash, repository_subpath);
+```
+
+`details_json` holds everything of the result except the summary body: the
+summary payload's hash and time, task, prompt payload, nodes, contexts,
+citations, notices, profile, run metadata, run inputs, tool calls and tool output
+payloads, and (Operator) the commands with their citation indexes and working
+directories. Original run, node, and context ids and timestamps are kept.
+`reuse_inputs` holds what an agent's freshness check repeats, tagged by `kind`.
+For Chronicler it is the recorded `git_log` arguments and the SHA-256 of that
+call's output text. For Surveyor (`kind: surveyor`) and Operator
+(`kind: operator`, Task C2) it holds the SHA-256 of the canonical profile; a
+preload fingerprint (the SHA-256 of the complete preload ledger: each call's
+tool, arguments, output text, error and truncation flags, and read hash, with no
+IDs, timestamps, or absolute roots); the effective tool limits; and the
+model-initiated `list_files`, `search`, and `read_file` calls in order, each as
+its arguments and a hash of what it showed the model (output text including
+errors and truncation markers, the flags, and a read's whole-file hash). The
+preload-seeded calls are not repeated there; the fingerprint covers them.
+Operator adds a hash of the command candidates and of the manifests their
+evidence cites, and the distinct non-root working directories of its commands.
+`reuse_inputs` is absent for rows written before it existed and when a call kind
+was not fully recorded (an unreplayable tool or an output showing an absolute
+root); a response without it is never reused. Typing this previously reserved
+field changed no written byte, and the file-agent variants are additive, so
+`response_version` stays 1 and older rows still decode.
+
+Three versions are independent: the SQL schema (`PRAGMA user_version`, now 3),
+`response_version` (1, decoded into the frozen `StoredAgentResponseV1` in
+`daftprompt_core::store` and converted explicitly to `BriefingResult` /
+`CommandsResult`), and each agent's prompt and cache-policy versions (inside
+`config_key`). A row with an unsupported version, JSON of the wrong shape, an
+Operator row without commands (or another agent's row with commands), or a
+summary whose hash does not match the stored text is reported as an *unusable
+row* with a reason and left in place. That is distinct from a SQLite failure
+(`StoreError::Storage`).
+
+`request_key` is the SHA-256 of a canonical JSON encoding of the task:
+`default` for no or a blank prompt, otherwise the trimmed prompt text and its
+author. `config_key` hashes (canonical JSON, sorted keys) the agent kind,
+provider, model, endpoint base URL (userinfo and query removed), each system
+prompt's version and content hash, the agent's limits (turns, attempts,
+timeout, citation/summary/prompt sizes, tool caps, Chronicler commit count,
+Operator command cap), and a cache-policy version. Credentials are never part
+of it. Each agent exposes it as `cache_identity()` on `Briefer` /
+`CommandsBriefer`.
+
+Each successful run through a registered path writes a row (custom prompts
+included; failed runs and the unregistered `DAFTPROMPT_PROJECT_ROOT` fallback
+write nothing). A write failure after a completed run is an `internal_error`
+response and is logged with the run id.
+
+Task C1 records the repository identity: `commit_hash` is the full resolved
+`HEAD` hash and `repository_subpath` the project root's repository-relative path
+(from `git rev-parse` through the hardened, bounded Git helper; no shell). Both
+are NULL for a folder that is not a repository, an unborn `HEAD`, a missing
+`git`, an error or timeout, or a scope narrowed below the path's root; a NULL
+commit never matches another. `reusable = 1` requires all of: the default task,
+a scope equal to the path's `root_path`, a known identity, recorded
+`reuse_inputs`, and the same identity before and after the run. Surveyor and
+Operator (Task C2) have no clean-checkout requirement: a run on a dirty tree is
+stored reusable, because reuse is decided by replaying the recorded observations
+against the requested path. Rows are never rewritten: a checkout that changes later leaves
+old rows as they were.
+
+Lookup (`Store::reuse_candidates`) uses `agent_response_commit_lookup`: rows with
+`reusable = 1` and equal project, agent, keys, commit, and subpath, ordered by
+the requested path first, then `(created_at DESC, id DESC)`, at most three. The
+rows are read under one short store lock; verification and the reload of the
+chosen row happen after it is released. Candidates are only candidates: the
+agent's own check must also pass: the `git_log` output hash for Chronicler, the
+shared file-agent verifier for Surveyor and Operator (see
+[API](api.md#agents-and-project-briefings-epic-006-tasks-a-to-c)).
+
+How a stored response reached the caller is not stored. The API wraps the result
+in `Delivered<T>` (`daftprompt_types::delivery`): the result's own fields plus
+`project_path_id` and `cache { requested_path_id, source_path_id, response_id,
+captured_at, kind: fresh | same_path | other_path }`. A reused response stays
+owned by its generating path (its row is neither copied nor rewritten) and keeps
+its original run ids, so `source_path_id` and `response_id` name the row and a
+client can tell a reuse from a new model run. The GUI reads this metadata to
+label reused sections and otherwise ignores it.
+
 ### Access control (not implemented)
 
 The registry has no owner or user columns: there is one local user, and
 `daftprompt_core::access` (`Principal`, `AgentKind`, `RootPolicy`,
-`ProjectScope`) is the only seam. A hosted server would extend the schema, with
+`ProjectScope`) is the only seam. A `RootPolicy` receives the project and the
+selected `ProjectPath`; `ProjectScope` carries the `project_path_id`. A hosted server would extend the schema, with
 a new numbered migration, along these lines:
 
 - `project.owner_id` (a user or principal id), so listing and lookup filter by

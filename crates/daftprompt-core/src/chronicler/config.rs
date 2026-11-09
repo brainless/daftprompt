@@ -14,6 +14,9 @@ pub const PROVIDER_ENV: &str = "DAFTPROMPT_CHRONICLER_PROVIDER";
 /// Environment variable overriding the model.
 pub const MODEL_ENV: &str = "DAFTPROMPT_CHRONICLER_MODEL";
 
+pub const DEFAULT_COMMIT_COUNT: usize = 10;
+pub const COMMIT_COUNT_ENV: &str = "DAFTPROMPT_CHRONICLER_COMMIT_COUNT";
+
 /// Default model-call budget of one attempt (tool rounds plus the final call).
 pub const DEFAULT_MAX_AGENT_TURNS: usize = 12;
 /// Default total attempts, including invalid ones.
@@ -35,6 +38,8 @@ pub const MAX_AUTHOR_BYTES: usize = 200;
 /// supplied by the caller, so credentials never pass through this crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChroniclerConfig {
+    /// Recent commits supplied to the plain-text summarizer (clamped to git limits).
+    pub commit_count: usize,
     /// Provider identifier recorded on the run.
     pub provider: Option<String>,
     /// Model identifier recorded on the run.
@@ -58,6 +63,7 @@ pub struct ChroniclerConfig {
 impl Default for ChroniclerConfig {
     fn default() -> Self {
         Self {
+            commit_count: DEFAULT_COMMIT_COUNT,
             provider: Some(DEFAULT_PROVIDER.to_owned()),
             model: Some(DEFAULT_MODEL.to_owned()),
             max_agent_turns: DEFAULT_MAX_AGENT_TURNS,
@@ -98,7 +104,30 @@ impl ChroniclerConfig {
         if let Some(model) = get(MODEL_ENV) {
             config.model = Some(model);
         }
+        if let Some(count) = get(COMMIT_COUNT_ENV)
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+        {
+            config.commit_count = count;
+        }
         config
+    }
+
+    /// Every setting that can change a response, for the cache key. Generation
+    /// options (temperature and the like) are not configurable and use the
+    /// provider defaults, so they have nothing to record yet. Credentials are
+    /// not part of the config.
+    pub(crate) fn cache_settings(&self) -> serde_json::Value {
+        serde_json::json!({
+            "max_agent_turns": self.max_agent_turns,
+            "max_attempts": self.max_attempts,
+            "timeout_ms": self.timeout.as_millis() as u64,
+            "max_citations": self.max_citations,
+            "max_summary_bytes": self.max_summary_bytes,
+            "max_prompt_bytes": self.max_prompt_bytes,
+            "commit_count": self.commit_count,
+            "tools": self.tools.cache_settings(),
+        })
     }
 
     /// The provider and model to build with [`build_model`](crate::llm::build_model).
@@ -166,6 +195,17 @@ impl ChroniclerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commit_count_defaults_and_environment() {
+        assert_eq!(ChroniclerConfig::default().commit_count, 10);
+        for (value, expected) in [("25", 25), ("0", 10), ("bad", 10), ("", 10)] {
+            let config = ChroniclerConfig::from_lookup(|name| {
+                (name == COMMIT_COUNT_ENV).then(|| value.to_owned())
+            });
+            assert_eq!(config.commit_count, expected);
+        }
+    }
 
     #[test]
     fn defaults_match_the_explainers() {

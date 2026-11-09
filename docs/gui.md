@@ -146,10 +146,12 @@ one result and restart on the next parse. A result with no spans remains valid.
 
 The top of the left sidebar is a project picker. It shows the current project's
 name, or "No project", and every new `/parse` and `/clarify` request carries that
-project's id as `project_id`, so the agents use the project's folder as their
-root (see [api.md](api.md#projects-and-storage)). The GUI never sends a path to
-those endpoints, and it keeps no project state of its own: the registry lives in
-the API's SQLite database.
+project's id as `project_id` and the selected path's id as `project_path_id`, so
+the agents use that path's folder as their root (see
+[api.md](api.md#projects-and-storage)). The GUI never sends a folder path to those
+endpoints, and it keeps no project state of its own: the registry lives in the
+API's SQLite database. Registering extra paths stays API-only
+(`POST /projects/{id}/paths`); the GUI only chooses among registered ones.
 
 - **Picker.** Clicking the button replaces the sidebar body with a list: "No
   project", the eight most recently opened registered projects (name, with the
@@ -181,11 +183,23 @@ the API's SQLite database.
   project." winit 0.30 reports one `DroppedFile` per path and no pointer position;
   akar-winit queues them as unpositioned window-level drops, which the render loop
   drains each frame.
-- **Requests.** The project id is read at the moment a request is built (Parse
-  text, Ask) and moved into the worker thread, so changing the project affects only
-  later requests and in-flight ones keep the project they were sent with. A
-  follow-up in an existing branch uses whichever project is current when it is
-  asked.
+- **Path selector.** When the current project has two or more registered paths,
+  the meta line under the title on the Project tab becomes a row of buttons, one
+  per path (folder name, `(default)` on the default path), with the current path
+  highlighted. The default is preselected whenever a project becomes current.
+  Clicking another button selects it and re-requests the three briefings for that
+  path; a project with one path shows its folder as plain text. The API reports no
+  availability for a registered folder, so a missing one appears only as that
+  path's `project_unavailable` error in the briefing. If the buttons do not fit,
+  the current one always stays visible and the rest are cut. The selection is not
+  stored: choosing another project resets it to that project's default, and a
+  path that disappears from the registry falls back to the default.
+- **Requests.** The project id and path id (together, the selection stamp) are
+  read when a request is built (Parse text, Ask, each briefing section) and moved
+  into the worker thread. A reply is shown only if its stamp still equals the
+  current selection; otherwise it is dropped: a parse goes back to idle, a clarify
+  branch frees its pending question, and a briefing slot is never filled. A
+  follow-up in an existing branch uses the selection current when it is asked.
 - **Errors.** Project action failures (`not_found`, `forbidden`,
   `project_unavailable`, `invalid_request`, or a network error) appear in red in
   the hint's place at the top of the sidebar and clear on the next project action;
@@ -211,28 +225,36 @@ drop, or the launch preselection) switches to **Project**; submitting a parse
 switches to **Parse**; the user can click either tab at any time. The app opens
 on Project.
 
-When a project becomes current the GUI sends `POST /projects/{id}/history`,
-`/overview` and `/commands` (empty `{}` body, default tasks) concurrently, each on
-its own worker thread (`ParseClient::history`, `overview`, `commands`, 420 s
-timeout), and polls a fourth channel. Nothing is cached: the briefing re-runs
-every time a project becomes current, including on launch and when the already
-current project is chosen again. "No project" clears it.
+When a project becomes current, or the selected path changes, the GUI sends
+`POST /projects/{id}/history`, `/overview` and `/commands` concurrently (default
+tasks, body `{"project_path_id": ...}` with `refresh` left false), each on its own
+worker thread (`ParseClient::history`, `overview`, `commands`, 420 s timeout), and
+polls a fourth channel. The GUI caches nothing itself, but these ordinary opens
+let the API answer with a verified stored response instead of running the model.
+"No project" clears the briefing.
 
-`briefing.rs` is the pure state: `Briefing { project_id, generation, history,
-overview, commands }` with each slot `Idle | Loading | Ready | Failed`. Every
-request is stamped with the project id, the generation and a per-section
-sequence number; a reply that no longer matches (another project, an older
-generation, or a section re-run since) is dropped. A section's **Re-run** button
-re-sends only that request and is disabled (`Running…`) while it loads.
+`briefing.rs` is the pure state: `Briefing { project_id, path_id, generation,
+history, overview, commands }` with each slot `Idle | Loading | Ready | Failed`.
+Every request is stamped with the project id, the path id, the generation and a
+per-section sequence number; a reply that no longer matches (another project or
+path, an older generation, or a section re-run since) is dropped. A section's
+**Re-run** button re-sends only that request with `"refresh": true`, which skips
+reuse and runs the agent again; it is disabled (`Running…`) while it loads.
+Replies are `Delivered<T>` bodies; the `cache` metadata is kept per section.
 `briefing_view.rs` is the pure view model (blocks, Markdown subset, citations,
 footer overflow math, command details); `briefing_ui.rs` lays out and paints it.
 
-- **Project tab.** The title is the project name and the meta line its folder.
+- **Project tab.** The title is the project name and the meta line the selected
+  path's folder (or the path selector above).
   Two stacked sections follow: "Recent work" (Chronicler) and "Project overview"
   (Surveyor). Each shows a loading line, its error in the error colour, or the
   result: notices first (for example "Not a git repository"), then the summary,
   then citations as `[n] path:L3–L9` or `[n] commit abc1234 subject` (the line
-  format of the clarify panel). The stack scrolls and is clipped to its viewport
+  format of the clarify panel). When the API reused a stored response
+  (`cache.kind` `same_path` or `other_path`), a muted line under the section title
+  says `Reused from <folder> · captured 2026-11-08 10:30 UTC`; a fresh result shows
+  nothing extra. The commands' reuse note is the first line of the "+N more"
+  list. The stack scrolls and is clipped to its viewport
   like the source view. With no project the tab shows a hint to choose or drop a
   folder.
 - **Markdown level.** A deliberately small subset: `#` headings (one heading
@@ -369,10 +391,14 @@ The GUI's deterministic tests cover:
 - content layout stacking and viewport clipping for scrolled blocks;
 - projects: selection, stale and superseded replies, startup preselection of the
   most recent project, picker entries, dropped file vs directory vs several
-  items, `project_id` on built parse and clarify requests, and project error
-  kinds decoded from `{kind, detail}` bodies;
-- briefing: three slots loading on open, stale and superseded replies dropped,
-  per-section re-run, clearing, tab switching on project open and parse submit,
+  items, `project_id` and `project_path_id` on built parse and clarify requests,
+  default and chosen path, path chips, and project error kinds decoded from
+  `{kind, detail}` bodies;
+- briefing: three slots loading on open, stale and superseded replies dropped
+  (including a late reply for another path of the same project), `refresh` only on
+  per-section re-run, path and refresh in the agent request body, `Delivered`
+  decoding with and without metadata, the reuse note text, cancelled parse and
+  clarify requests, clearing, tab switching on project open and parse submit,
   the Markdown subset, citation and notice text, footer overflow math, command
   details text, block layout stacking and viewport clipping, and the briefing URLs;
 - clarification: request construction from a parse result (first turn, follow-up

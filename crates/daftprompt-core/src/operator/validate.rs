@@ -44,7 +44,7 @@ pub(crate) struct ValidatedCommands {
 /// Check the summary, markers and citations against the run's ledger, then
 /// every command against the candidates, the project folder and each other.
 /// Only file citations are valid. The error describes the first problem; it is
-/// never fed back to the model.
+/// included as diagnostic data on a retry.
 pub(crate) fn validate(
     extraction: &CommandsExtraction,
     recorder: &ToolRecorder,

@@ -12,7 +12,9 @@ use daftprompt_core::{
     AccessError, AgentKind, BoxFuture, ExtractionModel, ModelError, ModelInput, Operator,
     OperatorConfig, Principal, ProjectScope, RootPolicy, Scribe, ScribeConfig, Store,
 };
-use daftprompt_types::{CommandKind, CommandsExtraction, ExtractedCommand, Extraction, Project};
+use daftprompt_types::{
+    CommandKind, CommandsExtraction, ExtractedCommand, Extraction, Project, ProjectPath,
+};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -75,6 +77,7 @@ impl RootPolicy for DenyAll {
         _principal: &Principal,
         agent: AgentKind,
         project: &Project,
+        _path: &ProjectPath,
     ) -> Result<ProjectScope, AccessError> {
         Err(AccessError::Denied(format!(
             "{} may not use project {}",
@@ -93,11 +96,12 @@ impl RootPolicy for NoOperator {
         principal: &Principal,
         agent: AgentKind,
         project: &Project,
+        path: &ProjectPath,
     ) -> Result<ProjectScope, AccessError> {
         if agent == AgentKind::Operator {
             return Err(AccessError::Denied("no commands for you".to_owned()));
         }
-        daftprompt_core::LocalPolicy.grant(principal, agent, project)
+        daftprompt_core::LocalPolicy.grant(principal, agent, project, path)
     }
 }
 
@@ -170,7 +174,7 @@ async fn commands_with_an_empty_body_returns_commands_and_briefing_records() {
     assert_eq!(json["project_id"], fx.project.id.as_str());
     assert_eq!(json["task"]["kind"], "default");
     assert_eq!(json["run"]["agent"], "operator");
-    assert_eq!(json["run"]["prompt_version"], "operator-v1");
+    assert_eq!(json["run"]["prompt_version"], "operator-v3");
     assert_eq!(json["profile"]["languages"][0]["language"], "rust");
 
     let commands = json["commands"].as_array().unwrap();
@@ -272,6 +276,6 @@ async fn agents_lists_the_operator_when_configured() {
     let agents = json.as_array().unwrap();
     let kinds: Vec<&str> = agents.iter().map(|a| a["kind"].as_str().unwrap()).collect();
     assert_eq!(kinds, ["scribe", "operator"]);
-    assert_eq!(agents[1]["prompt_version"], "operator-v1");
+    assert_eq!(agents[1]["prompt_version"], "operator-v3");
     assert_eq!(agents[1]["provider"], "neuralwatt");
 }

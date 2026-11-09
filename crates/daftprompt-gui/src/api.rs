@@ -10,8 +10,8 @@ use std::fmt;
 use std::time::Duration;
 
 use daftprompt_types::{
-    BriefingResult, ClarifyRequest, ClarifyResult, CommandsResult, CreateProjectRequest,
-    ParseError, ParseRequest, ParseResult, Project,
+    AgentTaskRequest, BriefingResult, ClarifyRequest, ClarifyResult, CommandsResult,
+    CreateProjectRequest, Delivered, ParseError, ParseRequest, ParseResult, Project,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -58,11 +58,28 @@ fn sibling_url(parse_url: &str, route: &str) -> String {
     }
 }
 
-/// The request for `text`, carrying the selected project when there is one.
-pub fn build_parse_request(text: &str, project_id: Option<&str>) -> ParseRequest {
+/// The request for `text`, carrying the selected project and path when there
+/// are any.
+pub fn build_parse_request(
+    text: &str,
+    project_id: Option<&str>,
+    path_id: Option<&str>,
+) -> ParseRequest {
     ParseRequest {
         project_id: project_id.map(str::to_owned),
+        project_path_id: project_id.and(path_id).map(str::to_owned),
         ..ParseRequest::new(text)
+    }
+}
+
+/// The body of a default-task agent request for one path. `refresh` is set
+/// only by the explicit re-run controls; an ordinary open may reuse a stored
+/// response.
+pub fn build_agent_request(path_id: Option<&str>, refresh: bool) -> AgentTaskRequest {
+    AgentTaskRequest {
+        project_path_id: path_id.map(str::to_owned),
+        refresh,
+        ..AgentTaskRequest::default()
     }
 }
 
@@ -273,31 +290,48 @@ impl ParseClient {
         exchange(&url, Some(&[]), self.project_timeout, "Project")
     }
 
-    /// `POST /projects/{id}/history`: Chronicler's default task (empty JSON body).
-    pub fn history(&self, project_id: &str) -> Result<BriefingResult, ApiError> {
-        self.briefing(project_id, "history", "BriefingResult")
+    /// `POST /projects/{id}/history`: Chronicler's default task.
+    pub fn history(
+        &self,
+        project_id: &str,
+        path_id: Option<&str>,
+        refresh: bool,
+    ) -> Result<Delivered<BriefingResult>, ApiError> {
+        self.briefing(project_id, "history", path_id, refresh, "BriefingResult")
     }
 
     /// `POST /projects/{id}/overview`: Surveyor's default task.
-    pub fn overview(&self, project_id: &str) -> Result<BriefingResult, ApiError> {
-        self.briefing(project_id, "overview", "BriefingResult")
+    pub fn overview(
+        &self,
+        project_id: &str,
+        path_id: Option<&str>,
+        refresh: bool,
+    ) -> Result<Delivered<BriefingResult>, ApiError> {
+        self.briefing(project_id, "overview", path_id, refresh, "BriefingResult")
     }
 
     /// `POST /projects/{id}/commands`: Operator's default task.
-    pub fn commands(&self, project_id: &str) -> Result<CommandsResult, ApiError> {
-        self.briefing(project_id, "commands", "CommandsResult")
+    pub fn commands(
+        &self,
+        project_id: &str,
+        path_id: Option<&str>,
+        refresh: bool,
+    ) -> Result<Delivered<CommandsResult>, ApiError> {
+        self.briefing(project_id, "commands", path_id, refresh, "CommandsResult")
     }
 
     fn briefing<T: DeserializeOwned>(
         &self,
         project_id: &str,
         route: &str,
+        path_id: Option<&str>,
+        refresh: bool,
         what: &str,
-    ) -> Result<T, ApiError> {
-        exchange(
+    ) -> Result<Delivered<T>, ApiError> {
+        post_json(
             &briefing_url(&self.url, project_id, route),
-            Some(b"{}"),
             BRIEFING_TIMEOUT,
+            &build_agent_request(path_id, refresh),
             what,
         )
     }
@@ -383,6 +417,54 @@ mod tests {
     }
     use std::net::TcpListener;
     use std::thread;
+
+    #[test]
+    fn parse_requests_follow_the_selected_path() {
+        let request = build_parse_request("text", Some("p1"), Some("w1"));
+        assert_eq!(request.project_id.as_deref(), Some("p1"));
+        assert_eq!(request.project_path_id.as_deref(), Some("w1"));
+        // A path means nothing without a project.
+        let request = build_parse_request("text", None, Some("w1"));
+        assert_eq!(request.project_path_id, None);
+        let request = build_parse_request("text", Some("p1"), None);
+        assert_eq!(request.project_path_id, None);
+    }
+
+    #[test]
+    fn agent_requests_carry_the_path_and_only_explicit_refresh() {
+        let open = serde_json::to_value(build_agent_request(Some("w1"), false)).unwrap();
+        assert_eq!(open, serde_json::json!({ "project_path_id": "w1" }));
+        let rerun = serde_json::to_value(build_agent_request(Some("w1"), true)).unwrap();
+        assert_eq!(
+            rerun,
+            serde_json::json!({ "project_path_id": "w1", "refresh": true })
+        );
+        let legacy = serde_json::to_value(build_agent_request(None, false)).unwrap();
+        assert_eq!(legacy, serde_json::json!({}));
+    }
+
+    #[test]
+    fn delivered_briefings_decode_with_and_without_metadata() {
+        let mut body =
+            serde_json::to_value(crate::briefing::tests::briefing_result("p1", "x")).unwrap();
+        // An older API answers the bare result.
+        let bare: Delivered<BriefingResult> = serde_json::from_value(body.clone()).unwrap();
+        assert!(bare.cache.is_none() && bare.project_path_id.is_none());
+        body["project_path_id"] = "w1".into();
+        body["cache"] = serde_json::json!({
+            "requested_path_id": "w1",
+            "source_path_id": "d",
+            "response_id": "r1",
+            "captured_at": "2026-11-08T10:30:00Z",
+            "kind": "other_path",
+        });
+        let reused: Delivered<BriefingResult> = serde_json::from_value(body).unwrap();
+        assert_eq!(reused.project_path_id.as_deref(), Some("w1"));
+        assert_eq!(
+            reused.cache.map(|cache| cache.kind),
+            Some(daftprompt_types::CacheKind::OtherPath)
+        );
+    }
 
     fn canned_result_json() -> String {
         serde_json::json!({
@@ -477,7 +559,11 @@ mod tests {
 
         let client = ParseClient::new(format!("http://{address}/parse"), Duration::from_secs(5));
         let result = client
-            .parse(&build_parse_request("Plan\nQ?\nA\n", Some("project-1")))
+            .parse(&build_parse_request(
+                "Plan\nQ?\nA\n",
+                Some("project-1"),
+                None,
+            ))
             .expect("parse the stub result");
         assert_eq!(result.payload.content, "Plan\nQ?\nA\n");
         assert_eq!(result.run.model.as_deref(), Some("gpt-4o-mini"));
@@ -513,8 +599,8 @@ mod tests {
 
     #[test]
     fn parse_requests_carry_the_selected_project() {
-        assert_eq!(build_parse_request("Q?", None).project_id, None);
-        let request = build_parse_request("Q?", Some("p1"));
+        assert_eq!(build_parse_request("Q?", None, None).project_id, None);
+        let request = build_parse_request("Q?", Some("p1"), None);
         assert_eq!(request.project_id.as_deref(), Some("p1"));
         assert_eq!(request.text, "Q?");
     }
@@ -575,6 +661,7 @@ mod tests {
             question: "Why?".to_owned(),
             author: None,
             project_id: None,
+            project_path_id: None,
         };
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind a stub API");
         let address = listener.local_addr().expect("stub address");
